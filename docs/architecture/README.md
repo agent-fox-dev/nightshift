@@ -1,0 +1,108 @@
+# Architecture Guide
+
+This guide describes the internal architecture of agent-fox. It is written for
+engineers who want to understand how the system works before reading the source
+code. The documents stay at the conceptual level — no code snippets, no method
+signatures, no class hierarchies. For API details, consult the source under
+`agent_fox/`. For configuration specifics, see the
+[configuration reference](../config-reference.md). For archetype details,
+see [Part 3](03-execution-and-archetypes.md#agent-archetypes).
+
+## Architectural Principles
+
+Several design principles run through the entire system:
+
+**Specs are contracts, not suggestions.** All work traces back to structured
+specifications. Agents that deviate from specs are caught by review agents
+before their code lands. This front-loads the human judgment and lets the
+machine execute without improvisation.
+
+**Planning is deterministic.** Given the same specs and configuration, the
+planner produces the same task graph. There is no LLM inference in the
+planning phase. The human can inspect the plan, predict what will happen,
+and trust the execution order.
+
+**The orchestrator is deterministic.** The orchestrator itself makes zero LLM
+calls. Every dispatch, retry, and escalation decision is based on rules and
+thresholds. LLM work happens inside sessions; the orchestrator only manages
+them.
+
+**Isolation by default.** Each coding session runs in its own git worktree on
+its own feature branch. Multiple agents work simultaneously without stepping
+on each other. Integration happens through a serializing merge lock.
+
+**Separation of concerns through archetypes.** Six archetype entries (Coder,
+Reviewer, Curator, Verifier, Gate, Maintainer) with a mode system divide
+labor. The Reviewer archetype covers three distinct review roles (pre-review,
+drift-review, audit-review) through modes that override injection points and
+tool allowlists. Review modes cannot modify code. The Curator and Verifier
+chain as sequential post-implementation quality gates. The Gate archetype
+handles lightweight checkpoint verification. Implementation agents cannot
+skip quality checks.
+
+**Graceful degradation everywhere.** Every component handles failure
+non-fatally. If knowledge retrieval fails, the session proceeds without
+knowledge context. If knowledge ingestion fails, the session outcome is
+unaffected. The knowledge system never blocks the coding session lifecycle.
+
+## Document Map
+
+The architecture is documented in six parts that follow the user's workflow.
+
+### [Part 1: Spec Authoring and Spec Structure](01-spec-authoring.md)
+
+How human intent enters the system. Covers the spec artifact model
+(PRD, requirements, test spec, tasks, optional architecture), the traceability
+chain between them, task groups and dependency declarations, spec discovery,
+the validation pipeline, severity model, auto-fixers, and the lint command.
+
+### [Part 2: Planning — From Specs to Task Graphs](02-planning.md)
+
+How specs become an executable plan. Covers the four-phase graph construction
+(base nodes, archetype injection, tag overrides, cross-spec edges),
+topological sort with deterministic tie-breaking, fast mode, file impact
+analysis, ready task ordering, graph persistence, runtime patching, and
+hot-load discovery.
+
+### [Part 3: Execution, Session Lifecycle, and Agent Archetypes](03-execution-and-archetypes.md)
+
+How the plan is carried out. Covers the orchestrator's dispatch loop, the
+four-phase session lifecycle (prepare, execute, harvest, assess), context
+assembly with three knowledge retrieval categories, the six-entry archetype
+registry with mode system (coder, reviewer, curator, verifier, gate,
+maintainer), multi-instance convergence strategies, retry handling, workspace
+isolation, merge integration, sync barriers, and reset.
+
+### [Part 4: Night-Shift Mode](04-night-shift.md)
+
+How the system maintains itself. Covers the fix-only daemon, batch triage
+with dependency and supersession detection, the three-stage fix pipeline,
+in-memory spec construction, drain behavior, cost limits, and staleness
+detection.
+
+### [Part 5: Knowledge System Architecture](05-knowledge-system-architecture.md)
+
+How the system remembers. Covers the `KnowledgeProvider` protocol, the
+three-category retrieval pipeline (review findings, cross-group findings,
+same-spec summaries), the closed-loop finding lifecycle
+(create → inject → supersede), session summary storage, the DuckDB-backed
+knowledge store, the quality assurance layer (review findings, drift findings,
+multi-instance convergence), and the audit trail.
+
+### [Part 6: Spec Format v1.3](06-spec-format-v13.md)
+
+The JSON-based spec format. Covers the v1.3 file structure (JSON artifacts
+validated by `afspec`), PRD frontmatter and lifecycle states, the parsing
+pipeline that maps `afspec` models to agent-fox types, context assembly and
+rendering, validation, and the verification checklist.
+
+## See Also
+
+For a single-document overview that covers the coding session and knowledge
+system end-to-end, see [Coding Session Architecture](../architecture.md).
+
+## Reading Order
+
+Read in order for a complete picture, or jump to any part for a specific
+topic. Each document is self-contained but cross-references the others where
+concepts connect.

@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# Test artifacts
+.hypothesis/
+
+# hacking
+prompts.md
+todo.md
+hack.md
+stuff.md
+stuff.json
+hack/** 
+
+# other
+**/.env
+
+# agent-fox
+.agent-fox/*
+!.agent-fox/config.toml
+!.agent-fox/steering.md
+!.agent-fox/specs/
+!.agent-fox/profiles/
+!.agent-fox/profiles/*
+.claude/worktrees/
+
+# test artifacts
+docs/errata/spec_a_auto_errata.md
+docs/errata/test_spec_auto_errata.md
+MagicMock/**
