@@ -31,12 +31,9 @@ class TestConfigDefaultsCompleteness:
         config = load_config(path=config_file)
 
         assert isinstance(config, AgentFoxConfig)
-        assert config.orchestrator.parallel == 4
-        assert config.orchestrator.sync_interval is None
         assert config.orchestrator.max_retries == 2
         assert config.orchestrator.session_timeout == 45
-        assert config.orchestrator.hot_load is True
-        assert config.orchestrator.inter_session_delay == 3
+        assert config.orchestrator.max_budget_usd == 20.0
         assert config.orchestrator.max_cost is None
         assert config.orchestrator.max_sessions is None
         assert config.theme.playful is True
@@ -55,30 +52,6 @@ class TestConfigNumericClamping:
     Property 8: For any numeric configuration value outside its valid range,
     load_config() clamps it to the nearest valid bound rather than rejecting.
     """
-
-    @given(n=st.integers(min_value=-1000, max_value=1000))
-    @settings(max_examples=50)
-    def test_parallel_clamped_to_valid_range(self, tmp_path_factory: pytest.TempPathFactory, n: int) -> None:
-        """orchestrator.parallel is always clamped to [1, 8]."""
-        tmp_dir = tmp_path_factory.mktemp("config")
-        config_file = tmp_dir / "config.toml"
-        config_file.write_text(f"[orchestrator]\nparallel = {n}\n")
-
-        config = load_config(path=config_file)
-
-        assert 1 <= config.orchestrator.parallel <= 8
-
-    @given(n=st.integers(min_value=-1000, max_value=1000))
-    @settings(max_examples=50)
-    def test_sync_interval_clamped_to_valid_range(self, tmp_path_factory: pytest.TempPathFactory, n: int) -> None:
-        """orchestrator.sync_interval is always clamped to >= 0."""
-        tmp_dir = tmp_path_factory.mktemp("config")
-        config_file = tmp_dir / "config.toml"
-        config_file.write_text(f"[orchestrator]\nsync_interval = {n}\n")
-
-        config = load_config(path=config_file)
-
-        assert config.orchestrator.sync_interval >= 0
 
     @given(n=st.integers(min_value=-1000, max_value=1000))
     @settings(max_examples=50)

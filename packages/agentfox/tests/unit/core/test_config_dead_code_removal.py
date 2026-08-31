@@ -99,24 +99,19 @@ class TestConfigGenMetadata:
         assert ("RoutingConfig", "accuracy_threshold") not in _BOUNDS_MAP_OVERRIDES
         assert ("RoutingConfig", "retrain_interval") not in _BOUNDS_MAP_OVERRIDES
 
-    def test_phantom_routing_descriptions_absent(self) -> None:
-        """TS-130-8: No phantom RoutingConfig fields exist in the model.
+    def test_phantom_routing_class_absent(self) -> None:
+        """TS-130-8: RoutingConfig class no longer exists.
 
         Requirement: 130-REQ-4.2
         """
-        from agentfox.core.config import RoutingConfig
+        assert not hasattr(config_mod, "RoutingConfig")
 
-        assert "training_threshold" not in RoutingConfig.model_fields
-        assert "accuracy_threshold" not in RoutingConfig.model_fields
-        assert "retrain_interval" not in RoutingConfig.model_fields
-
-    def test_drift_bounds_include_none(self) -> None:
-        """TS-130-9: pre_flight_drift_block_threshold bounds include None.
+    def test_bounds_map_overrides_empty(self) -> None:
+        """TS-130-9: _BOUNDS_MAP_OVERRIDES is empty after cleanup.
 
         Requirement: 130-REQ-5.1
         """
-        bounds = _BOUNDS_MAP_OVERRIDES[("ReviewerConfig", "pre_flight_drift_block_threshold")]
-        assert "None" in bounds
+        assert _BOUNDS_MAP_OVERRIDES == {}
 
     def test_no_model_config_in_bounds(self) -> None:
         """TS-130-11: No _BOUNDS_MAP_OVERRIDES key starts with 'ModelConfig'.
@@ -204,7 +199,7 @@ class TestOldConfigSilentIgnore:
         """
         raw = tomllib.loads('[orchestrator]\nquality_gate = "make check"\nquality_gate_timeout = 120')
         config = AgentFoxConfig.model_validate(raw)
-        assert config.orchestrator.parallel == 4
+        assert config.orchestrator.max_retries == 2
 
     def test_old_models_section_silently_ignored(self) -> None:
         """TS-130-E2: TOML with [models] section parses silently.
@@ -222,7 +217,7 @@ class TestOldConfigSilentIgnore:
         """
         raw = tomllib.loads("[archetypes]\nskeptic = true")
         config = AgentFoxConfig.model_validate(raw)
-        assert config.archetypes.reviewer is True
+        assert config.archetypes.overrides == {}
 
     def test_old_triage_silently_ignored(self) -> None:
         """TS-130-E4: TOML with archetypes.triage parses without warning.
@@ -233,7 +228,7 @@ class TestOldConfigSilentIgnore:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             config = AgentFoxConfig.model_validate(raw)
-        assert config.archetypes.reviewer is True
+        assert config.archetypes.overrides == {}
 
     def test_old_multiple_archetype_keys_silently_ignored(self) -> None:
         """All obsolete archetype keys parse without error.
@@ -242,7 +237,7 @@ class TestOldConfigSilentIgnore:
         """
         raw = tomllib.loads("[archetypes]\noracle = true\nauditor = true\n")
         config = AgentFoxConfig.model_validate(raw)
-        assert config.archetypes.reviewer is True
+        assert config.archetypes.overrides == {}
 
     def test_old_archetype_config_keys_silently_ignored(self) -> None:
         """Obsolete archetype config keys (skeptic_config, etc.) are silently ignored.
@@ -251,7 +246,7 @@ class TestOldConfigSilentIgnore:
         """
         raw = tomllib.loads('[archetypes]\nskeptic_settings = "old"\noracle_settings = "old"\nauditor_config = "old"\n')
         config = AgentFoxConfig.model_validate(raw)
-        assert config.archetypes.reviewer is True
+        assert config.archetypes.overrides == {}
 
     def test_old_fix_archetype_keys_silently_ignored(self) -> None:
         """Obsolete fix_reviewer and fix_coder keys are silently ignored.
@@ -260,7 +255,7 @@ class TestOldConfigSilentIgnore:
         """
         raw = tomllib.loads("[archetypes]\nfix_reviewer = true\nfix_coder = true\n")
         config = AgentFoxConfig.model_validate(raw)
-        assert config.archetypes.reviewer is True
+        assert config.archetypes.overrides == {}
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +289,7 @@ class TestSmoke:
         config = load_config(config_toml)
         assert not hasattr(config, "models") or "models" not in AgentFoxConfig.model_fields
         assert "quality_gate" not in OrchestratorConfig.model_fields
-        assert config.orchestrator.parallel == 4
+        assert config.orchestrator.max_retries == 2
 
     def test_template_generation_after_removal(self) -> None:
         """TS-130-SMOKE-2: Generated template excludes all removed items.
@@ -306,5 +301,4 @@ class TestSmoke:
         assert "quality_gate" not in template
         assert "[models]" not in template
         assert "memory_extraction" not in template
-        assert "parallel" in template
         assert "max_budget_usd" in template

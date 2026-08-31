@@ -44,13 +44,13 @@ class TestWorktreePathUniqueness:
 
         repo = Path("/repo")
         ws_a = WorkspaceInfo(
-            path=repo / ".agent-fox" / "worktrees" / spec_a / str(group_a),
+            path=repo / ".nightshift" / "worktrees" / spec_a / str(group_a),
             branch=f"feature/{spec_a}/{group_a}",
             spec_name=spec_a,
             task_group=group_a,
         )
         ws_b = WorkspaceInfo(
-            path=repo / ".agent-fox" / "worktrees" / spec_b / str(group_b),
+            path=repo / ".nightshift" / "worktrees" / spec_b / str(group_b),
             branch=f"feature/{spec_b}/{group_b}",
             spec_name=spec_b,
             task_group=group_b,

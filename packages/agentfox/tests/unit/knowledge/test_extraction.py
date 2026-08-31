@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import inspect
 import json
-from unittest.mock import patch
 
 import pytest
 from agentfox.knowledge.extraction import extract_session_summary

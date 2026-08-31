@@ -34,7 +34,7 @@ class TestLockAcquisition:
         lock_repo.mkdir(parents=True)
         lock = MergeLock(lock_repo)
         await lock.acquire()
-        lock_file = lock_repo / ".agent-fox" / "merge.lock"
+        lock_file = lock_repo / ".nightshift" / "merge.lock"
         assert lock_file.exists()
         await lock.release()
 
@@ -44,7 +44,7 @@ class TestLockAcquisition:
         lock_repo.mkdir(parents=True)
         lock = MergeLock(lock_repo)
         await lock.acquire()
-        lock_file = lock_repo / ".agent-fox" / "merge.lock"
+        lock_file = lock_repo / ".nightshift" / "merge.lock"
         content = json.loads(lock_file.read_text())
         assert "pid" in content
         assert "hostname" in content
@@ -86,7 +86,7 @@ class TestLockTimeout:
         """Exceeding the timeout raises IntegrationError."""
         lock_repo.mkdir(parents=True)
         # Create the lock file manually to simulate another holder
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
         lock_file.write_text(
@@ -118,7 +118,7 @@ class TestStaleLockBroken:
     async def test_stale_lock_broken(self, lock_repo: Path) -> None:
         """A stale lock file is broken and a fresh lock is acquired."""
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
         lock_file.write_text(
@@ -145,13 +145,13 @@ class TestStaleLockBroken:
 
 
 class TestMissingAgentFoxDir:
-    """TS-45-E2: Lock creates .agent-fox/ directory if missing."""
+    """TS-45-E2: Lock creates .nightshift/ directory if missing."""
 
     @pytest.mark.asyncio
     async def test_creates_directory(self, lock_repo: Path) -> None:
-        """Lock creates .agent-fox/ if it doesn't exist."""
+        """Lock creates .nightshift/ if it doesn't exist."""
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         assert not agent_fox_dir.exists()
 
         lock = MergeLock(lock_repo)
@@ -167,7 +167,7 @@ class TestConcurrentStaleLockBreak:
     async def test_concurrent_stale_break(self, lock_repo: Path) -> None:
         """Two concurrent acquires on a stale lock both eventually succeed."""
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
         lock_file.write_text(
@@ -219,7 +219,7 @@ class TestReleaseMissingLockFile:
         lock_repo.mkdir(parents=True)
         lock = MergeLock(lock_repo)
         await lock.acquire()
-        lock_file = lock_repo / ".agent-fox" / "merge.lock"
+        lock_file = lock_repo / ".nightshift" / "merge.lock"
         assert lock_file.exists()
 
         # Externally remove the lock file
@@ -241,7 +241,7 @@ class TestStaleLockAtomicBreak:
         """If the lock file is replaced between stat and unlink, the fresh lock
         survives."""
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
 
@@ -276,7 +276,7 @@ class TestLockAsContextManager:
         """Lock can be used as async context manager."""
         lock_repo.mkdir(parents=True)
         lock = MergeLock(lock_repo)
-        lock_file = lock_repo / ".agent-fox" / "merge.lock"
+        lock_file = lock_repo / ".nightshift" / "merge.lock"
 
         async with lock:
             assert lock_file.exists()
@@ -288,7 +288,7 @@ class TestLockAsContextManager:
         """Lock is released even when an exception occurs inside."""
         lock_repo.mkdir(parents=True)
         lock = MergeLock(lock_repo)
-        lock_file = lock_repo / ".agent-fox" / "merge.lock"
+        lock_file = lock_repo / ".nightshift" / "merge.lock"
 
         with pytest.raises(ValueError, match="boom"):
             async with lock:
@@ -320,7 +320,7 @@ class TestDefaultStaletimeoutLargeEnough:
     async def test_lock_300s_old_not_broken_by_default(self, lock_repo: Path) -> None:
         """A lock file with mtime 300 s ago is NOT broken with the default stale_timeout."""
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
         lock_file.write_text(json.dumps({"pid": 999999, "hostname": "other", "acquired_at": "2026-01-01T00:00:00Z"}))
@@ -358,7 +358,7 @@ class TestHeartbeat:
 
         acquire_time = time.time()
         await lock.acquire()
-        lock_file = lock_repo / ".agent-fox" / "merge.lock"
+        lock_file = lock_repo / ".nightshift" / "merge.lock"
 
         # Manually backdate the mtime to simulate passage of time
         old_mtime = acquire_time - 1
@@ -389,7 +389,7 @@ class TestHeartbeat:
             poll_interval=0.05,
         )
         await holder.acquire()
-        lock_file = lock_repo / ".agent-fox" / "merge.lock"
+        lock_file = lock_repo / ".nightshift" / "merge.lock"
 
         # Let the heartbeat fire once
         await asyncio.sleep(0.25)
@@ -529,7 +529,7 @@ class TestDeadProcessLockBroken:
         import socket
 
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
 
@@ -568,7 +568,7 @@ class TestLiveProcessLockNotBroken:
         import socket
 
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
 
@@ -601,7 +601,7 @@ class TestDifferentHostnameFallsToAge:
         """A lock from a different host with a dead local PID is NOT
         broken by the PID check (hostname mismatch)."""
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
 
@@ -632,7 +632,7 @@ class TestCleanupStaleMergeLock:
 
     def test_no_lock_file_returns_false(self, lock_repo: Path) -> None:
         lock_repo.mkdir(parents=True)
-        (lock_repo / ".agent-fox").mkdir(parents=True, exist_ok=True)
+        (lock_repo / ".nightshift").mkdir(parents=True, exist_ok=True)
         from agentfox.workspace.merge_lock import cleanup_stale_merge_lock
 
         assert cleanup_stale_merge_lock(lock_repo) is False
@@ -641,7 +641,7 @@ class TestCleanupStaleMergeLock:
         import socket
 
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
         lock_file.write_text(
@@ -663,7 +663,7 @@ class TestCleanupStaleMergeLock:
         import socket
 
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
         lock_file.write_text(
@@ -683,7 +683,7 @@ class TestCleanupStaleMergeLock:
 
     def test_different_hostname_preserves_lock(self, lock_repo: Path) -> None:
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
         lock_file.write_text(
@@ -703,7 +703,7 @@ class TestCleanupStaleMergeLock:
 
     def test_malformed_json_preserves_lock(self, lock_repo: Path) -> None:
         lock_repo.mkdir(parents=True)
-        agent_fox_dir = lock_repo / ".agent-fox"
+        agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
         lock_file.write_text("not json")

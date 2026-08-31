@@ -31,14 +31,14 @@ class TestPromptWithProjectProfile:
 
         Verifies the full path:
           NodeSessionRunner._build_prompts -> build_system_prompt -> load_profile
-          -> reads project .agent-fox/profiles/coder.md -> returns custom content
+          -> reads project .nightshift/profiles/coder.md -> returns custom content
           -> concatenated into prompt in layer order.
         """
         from agentfox.session.prompt import build_system_prompt
 
         profile_content = "CUSTOM CODER IDENTITY FOR SMOKE TEST"
 
-        profiles_dir = tmp_path / ".agent-fox" / "profiles"
+        profiles_dir = tmp_path / ".nightshift" / "profiles"
         profiles_dir.mkdir(parents=True)
         (profiles_dir / "coder.md").write_text(profile_content, encoding="utf-8")
 
@@ -65,7 +65,7 @@ class TestPromptWithProjectProfile:
         from agentfox.session.prompt import build_system_prompt
 
         profile_content = "CODER IDENTITY CUSTOM"
-        profiles_dir = tmp_path / ".agent-fox" / "profiles"
+        profiles_dir = tmp_path / ".nightshift" / "profiles"
         profiles_dir.mkdir(parents=True)
         (profiles_dir / "coder.md").write_text(profile_content, encoding="utf-8")
 
@@ -111,7 +111,7 @@ class TestCustomArchetypeSession:
         from agentfox.archetypes import ARCHETYPE_REGISTRY, get_archetype
         from agentfox.core.config import AgentFoxConfig
 
-        profiles_dir = tmp_path / ".agent-fox" / "profiles"
+        profiles_dir = tmp_path / ".nightshift" / "profiles"
         profiles_dir.mkdir(parents=True)
         (profiles_dir / "deployer.md").write_text("# Deployer Profile", encoding="utf-8")
 
@@ -140,7 +140,7 @@ class TestCustomArchetypeSession:
         """
         from agentfox.session.prompt import build_system_prompt
 
-        profiles_dir = tmp_path / ".agent-fox" / "profiles"
+        profiles_dir = tmp_path / ".nightshift" / "profiles"
         profiles_dir.mkdir(parents=True)
         deployer_content = "# Deployer Profile\nDeploy all the things."
         (profiles_dir / "deployer.md").write_text(deployer_content, encoding="utf-8")

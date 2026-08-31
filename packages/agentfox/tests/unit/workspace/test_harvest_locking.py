@@ -52,7 +52,7 @@ class TestLockReleaseOnSuccess:
     @pytest.mark.asyncio
     async def test_lock_file_removed_after_harvest(self, repo_root: Path, fake_workspace: WorkspaceInfo) -> None:
         """After a successful harvest, the lock file does not exist."""
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
 
         with (
             patch(
@@ -93,7 +93,7 @@ class TestLockReleaseOnFailure:
     @pytest.mark.asyncio
     async def test_lock_file_removed_on_failure(self, repo_root: Path, fake_workspace: WorkspaceInfo) -> None:
         """Lock file is removed even when harvest raises IntegrationError."""
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
 
         with (
             patch(
@@ -140,7 +140,7 @@ class TestLockCoversPostHarvest:
     @pytest.mark.asyncio
     async def test_post_harvest_runs_inside_lock(self, repo_root: Path, fake_workspace: WorkspaceInfo) -> None:
         """post_harvest_integrate runs while the lock is still held."""
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
         lock_held_during_post_harvest = []
 
         original_post_harvest = AsyncMock()
@@ -198,7 +198,7 @@ class TestDevelopSyncUsesLock:
         The lock must be held during actual sync operations (not during the
         read-only rev-list divergence checks).
         """
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
         lock_was_held: list[bool] = []
 
         async def tracking_run_git(args, cwd, check=True):  # type: ignore[no-untyped-def]
@@ -230,7 +230,7 @@ class TestDevelopSyncUsesLock:
 
         Issue #458 fix: lockless readiness check avoids chatty acquire/release.
         """
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
 
         async def tracking_run_git(args, cwd, check=True):  # type: ignore[no-untyped-def]
             # Remote is not ahead — no sync needed

@@ -10,8 +10,6 @@ file-footprint overlap between the current task group and prior groups.
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
-from unittest.mock import patch
 
 import duckdb
 import pytest

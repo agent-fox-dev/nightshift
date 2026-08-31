@@ -75,7 +75,7 @@ class TestLockAlwaysReleased:
         """After async with block exits, lock file does not exist."""
         repo_root = tmp_path_factory.mktemp("release")
         lock = MergeLock(repo_root)
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
 
         try:
             async with lock:
@@ -111,7 +111,7 @@ class TestStaleLockRecovery:
         poll_interval = 0.02
 
         # Create stale lock
-        agent_fox_dir = repo_root / ".agent-fox"
+        agent_fox_dir = repo_root / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
         lock_file = agent_fox_dir / "merge.lock"
         lock_content = json.dumps(

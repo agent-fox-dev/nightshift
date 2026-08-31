@@ -238,20 +238,12 @@ def resolve_effective_config(
 
 def _resolve_custom_preset(
     name: str,
-    config: AgentFoxConfig | None,
+    config: AgentFoxConfig | None,  # noqa: ARG001
 ) -> str:
     """Resolve the permission preset name for a custom archetype.
 
-    Returns the preset name (a built-in archetype name).  Defaults to
-    ``'coder'`` if no preset is configured and logs a warning.
-
-    Requirements: 99-REQ-4.E1
+    Returns ``'coder'`` — custom permission presets are not supported.
     """
-    if config is not None:
-        custom_cfg = config.archetypes.custom.get(name)
-        if custom_cfg is not None:
-            return custom_cfg.permissions
-
     logger.warning(
         "Custom archetype '%s' has no permission preset in config; defaulting to 'coder' permissions",
         name,
@@ -270,7 +262,7 @@ def get_archetype(
     Resolution order:
     1. ``ARCHETYPE_REGISTRY[name]`` — built-in archetypes.
     2. Custom archetype — profile exists at
-       ``<project_dir>/.agent-fox/profiles/<name>.md`` and a permission
+       ``<project_dir>/.nightshift/profiles/<name>.md`` and a permission
        preset is resolved from *config*.
     3. Fallback to ``'coder'`` with a warning.
 

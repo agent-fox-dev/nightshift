@@ -20,13 +20,20 @@ hack/**
 # other
 **/.env
 
-# agent-fox
+# agent-fox (legacy)
 .agent-fox/*
-!.agent-fox/config.toml
 !.agent-fox/steering.md
 !.agent-fox/specs/
 !.agent-fox/profiles/
 !.agent-fox/profiles/*
+
+# nightshift
+.nightshift/*
+!.nightshift/config.toml
+!.nightshift/steering.md
+!.nightshift/specs/
+!.nightshift/profiles/
+!.nightshift/profiles/*
 .claude/worktrees/
 
 # test artifacts

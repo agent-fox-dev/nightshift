@@ -1299,7 +1299,7 @@ class TestExceptionSanitizationInFailureComment:
         pipeline._setup_workspace = AsyncMock(return_value=_mock_workspace())  # type: ignore[method-assign]
         pipeline._cleanup_workspace = AsyncMock()  # type: ignore[method-assign]
 
-        sensitive_path = "/home/runner/.agent-fox/db/runs.duckdb is locked"
+        sensitive_path = "/home/runner/.nightshift/db/runs.duckdb is locked"
         pipeline._run_session = AsyncMock(  # type: ignore[method-assign]
             side_effect=RuntimeError(sensitive_path)
         )

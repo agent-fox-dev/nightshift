@@ -9,7 +9,6 @@ from __future__ import annotations
 import re
 import tomllib
 
-from agentfox.core.config import ArchetypeInstancesConfig
 from agentfox.core.config_gen import (
     generate_default_config,
     merge_existing_config,
@@ -21,25 +20,20 @@ _EXPECTED_VISIBLE_SECTIONS = frozenset(
     {
         "backend",
         "orchestrator",
-        "models",
-        "archetypes",
-        "archetypes.instances",
         "platform",
         "workspace",
+        "night_shift",
     }
 )
 
 _EXPECTED_HIDDEN_SECTIONS = frozenset(
     {
-        "routing",
         "theme",
         "security",
         "knowledge",
         "pricing",
-        "planning",
-        "blocking",
-        "hooks",
-        "night_shift",
+        "archetypes",
+        "caching",
     }
 )
 
@@ -104,24 +98,19 @@ class TestPropMergePreservesValues:
     """TS-68-P3: Property 6 — merge preserves every active key=value from input."""
 
     @given(
-        parallel=st.integers(1, 8),
         max_budget=st.floats(0.1, 100.0, allow_nan=False, allow_infinity=False).map(lambda x: round(x, 2)),
-        reviewer=st.booleans(),
+        max_retries=st.integers(1, 10),
     )
     @settings(max_examples=20)
-    def test_merge_preserves_active_values(self, parallel, max_budget, reviewer):
-        """User values for parallel, max_budget_usd, and reviewer survive merge."""
-        reviewer_str = "true" if reviewer else "false"
+    def test_merge_preserves_active_values(self, max_budget, max_retries):
+        """User values for max_budget_usd and max_retries survive merge."""
         existing = (
             f"[orchestrator]\n"
-            f"parallel = {parallel}\n"
+            f"max_retries = {max_retries}\n"
             f"max_budget_usd = {max_budget}\n"
-            f"\n[archetypes]\n"
-            f"reviewer = {reviewer_str}\n"
         )
         result = merge_existing_config(existing)
-        assert f"parallel = {parallel}" in result, f"parallel = {parallel} not preserved in merge result"
-        assert f"reviewer = {reviewer_str}" in result, f"reviewer = {reviewer_str} not preserved in merge result"
+        assert f"max_retries = {max_retries}" in result, f"max_retries = {max_retries} not preserved in merge result"
 
 
 # ---------------------------------------------------------------------------
@@ -134,28 +123,24 @@ class TestPropNoHiddenInjection:
 
     @given(
         include_orchestrator=st.booleans(),
-        include_models=st.booleans(),
-        include_archetypes=st.booleans(),
+        include_workspace=st.booleans(),
         include_platform=st.booleans(),
     )
     @settings(max_examples=20)
     def test_no_hidden_section_injection(
         self,
         include_orchestrator,
-        include_models,
-        include_archetypes,
+        include_workspace,
         include_platform,
     ):
         """Merging a visible-only config never adds hidden sections."""
         lines: list[str] = []
         if include_orchestrator:
             lines.append("[orchestrator]")
-            lines.append("parallel = 2")
-        if include_models:
-            lines.append("[models]")
-        if include_archetypes:
-            lines.append("[archetypes]")
-            lines.append("reviewer = true")
+            lines.append("max_retries = 2")
+        if include_workspace:
+            lines.append("[workspace]")
+            lines.append('merge_strategy = "merge"')
         if include_platform:
             lines.append("[platform]")
             lines.append('type = "none"')
@@ -187,15 +172,3 @@ class TestPropFooterNonDuplication:
         assert count == 1, f"After {n} merges, footer appears {count} times, expected exactly 1"
 
 
-# ---------------------------------------------------------------------------
-# TS-68-P6: Default verifier instances is 2
-# ---------------------------------------------------------------------------
-
-
-class TestPropVerifierDefault:
-    """TS-68-P6: Property 10 — ArchetypeInstancesConfig().verifier == 1."""
-
-    def test_verifier_default_is_1(self):
-        """Default-constructed ArchetypeInstancesConfig always has verifier=1."""
-        config = ArchetypeInstancesConfig()
-        assert config.verifier == 1, f"ArchetypeInstancesConfig().verifier is {config.verifier}, expected 1"

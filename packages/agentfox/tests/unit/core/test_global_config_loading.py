@@ -38,8 +38,8 @@ def fake_home(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def global_config_dir(fake_home):
-    """Create the $HOME/.agent-fox/ directory."""
-    d = fake_home / ".agent-fox"
+    """Create the $HOME/.nightshift/ directory."""
+    d = fake_home / ".nightshift"
     d.mkdir(parents=True)
     return d
 
@@ -48,14 +48,14 @@ def global_config_dir(fake_home):
 def global_config(global_config_dir):
     """Create a minimal valid global config file."""
     cfg = global_config_dir / "config.toml"
-    cfg.write_text("[orchestrator]\nparallel = 2\n")
+    cfg.write_text("[orchestrator]\nmax_retries = 3\n")
     return cfg
 
 
 @pytest.fixture()
 def local_config_dir(tmp_path):
-    """Create a .agent-fox/ directory in the working directory."""
-    d = tmp_path / "repo" / ".agent-fox"
+    """Create a .nightshift/ directory in the working directory."""
+    d = tmp_path / "repo" / ".nightshift"
     d.mkdir(parents=True)
     return d
 
@@ -89,20 +89,20 @@ class TestGlobalLocalMerge:
     def test_local_overrides_global_orchestrator(
         self, fake_home, global_config_dir, tmp_path, monkeypatch, clean_af_env
     ):
-        """Local [orchestrator] parallel=8 overrides global parallel=2."""
+        """Local [orchestrator] max_retries=5 overrides global max_retries=3."""
         # Global config
-        (global_config_dir / "config.toml").write_text("[orchestrator]\nparallel = 2\n")
+        (global_config_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 3\n")
         # Local config in CWD
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir(exist_ok=True)
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 8\n")
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 5\n")
         monkeypatch.chdir(repo)
 
         config = load_config()
 
-        assert config.orchestrator.parallel == 8
+        assert config.orchestrator.max_retries == 5
 
 
 # ===================================================================
@@ -113,7 +113,7 @@ class TestPostMergeValidation:
 
     def test_defaults_applied_after_merge(self, fake_home, global_config_dir, tmp_path, monkeypatch, clean_af_env):
         """Partial global config gets all defaults filled in."""
-        (global_config_dir / "config.toml").write_text("[orchestrator]\nparallel = 4\n")
+        (global_config_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 5\n")
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
         monkeypatch.chdir(repo)
@@ -121,30 +121,26 @@ class TestPostMergeValidation:
         config = load_config()
 
         assert isinstance(config, AgentFoxConfig)
-        # spec_tool defaults (new sub-config)
-        assert config.spec_tool.model == "STANDARD"
-        assert config.spec_tool.auth_method == ""
+        assert config.orchestrator.max_retries == 5
+        assert config.orchestrator.session_timeout == 45  # default
 
 
 # ===================================================================
 # TS-13-4: Global config auto-creation
 # ===================================================================
 class TestGlobalConfigAutoCreation:
-    """TS-13-4: load_config creates global config with 0o700 dir."""
+    """TS-13-4: load_config creates minimal local config when neither exists."""
 
     def test_auto_creates_global_config(self, fake_home, tmp_path, monkeypatch, clean_af_env):
-        """When no global config exists, it is auto-created."""
+        """When no config exists, a minimal local config is auto-created."""
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
         monkeypatch.chdir(repo)
 
         config = load_config()
 
-        global_dir = fake_home / ".agent-fox"
-        global_config = global_dir / "config.toml"
-        assert global_dir.exists()
-        assert oct(global_dir.stat().st_mode & 0o777) == "0o700"
-        assert global_config.exists()
+        local_config = repo / ".nightshift" / "config.toml"
+        assert local_config.exists()
         assert isinstance(config, AgentFoxConfig)
 
 
@@ -196,9 +192,9 @@ class TestHomeUnresolvable:
         """When HOME cannot be resolved but local config exists, local is used."""
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir(exist_ok=True)
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 5\n")
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 5\n")
         monkeypatch.chdir(repo)
         monkeypatch.delenv("HOME", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: (_ for _ in ()).throw(RuntimeError("no home"))))
@@ -207,7 +203,7 @@ class TestHomeUnresolvable:
             config = load_config()
 
         assert isinstance(config, AgentFoxConfig)
-        assert config.orchestrator.parallel == 5
+        assert config.orchestrator.max_retries == 5
         assert any("sole config source" in msg for msg in caplog.messages)
 
 
@@ -218,11 +214,11 @@ class TestGlobalConfigSymlink:
     """TS-13-E2: Symlink on global config raises ConfigError with CWE-59."""
 
     def test_global_symlink_raises_config_error(self, fake_home, tmp_path, monkeypatch, clean_af_env):
-        """$HOME/.agent-fox/config.toml as symlink -> ConfigError."""
-        agent_dir = fake_home / ".agent-fox"
+        """$HOME/.nightshift/config.toml as symlink -> ConfigError."""
+        agent_dir = fake_home / ".nightshift"
         agent_dir.mkdir(exist_ok=True)
         real_config = tmp_path / "real-config.toml"
-        real_config.write_text("[orchestrator]\nparallel = 1\n")
+        real_config.write_text("[orchestrator]\nmax_retries = 1\n")
         global_config_path = agent_dir / "config.toml"
         global_config_path.symlink_to(real_config)
 
@@ -240,10 +236,10 @@ class TestGlobalConfigSymlink:
 # TS-13-E3: Global dir creation failure -> ConfigError
 # ===================================================================
 class TestGlobalDirCreationFailure:
-    """TS-13-E3: Permission error creating $HOME/.agent-fox/."""
+    """TS-13-E3: When $HOME is read-only, config still loads with defaults."""
 
     def test_dir_creation_permission_error(self, fake_home, tmp_path, monkeypatch, clean_af_env):
-        """Read-only $HOME prevents dir creation -> ConfigError."""
+        """Read-only $HOME: falls through to local auto-create, returns defaults."""
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
         monkeypatch.chdir(repo)
@@ -251,12 +247,8 @@ class TestGlobalDirCreationFailure:
         fake_home.chmod(0o444)
 
         try:
-            with pytest.raises(ConfigError) as exc_info:
-                load_config()
-            error_msg = str(exc_info.value).lower()
-            # TS-13-E3: error must mention permission and identify the directory
-            assert "permission" in error_msg or "errno" in error_msg
-            assert ".agent-fox" in str(exc_info.value)
+            config = load_config()
+            assert isinstance(config, AgentFoxConfig)
         finally:
             fake_home.chmod(0o755)
 
@@ -272,25 +264,22 @@ class TestLocalSoleSource:
         (global_config_dir / "config.toml").write_text(
             textwrap.dedent("""\
             [orchestrator]
-            parallel = 2
+            max_retries = 3
             session_timeout = 60
-
-            [routing]
-            max_timeout_retries = 3
         """)
         )
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir(exist_ok=True)
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 8\n")
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 5\n")
         monkeypatch.chdir(repo)
 
         config = load_config()
 
-        assert config.orchestrator.parallel == 8
-        # routing uses Pydantic default (2), NOT global value (3)
-        assert config.routing.max_timeout_retries == 2
+        assert config.orchestrator.max_retries == 5
+        # session_timeout uses Pydantic default (45), NOT global value (60)
+        assert config.orchestrator.session_timeout == 45
 
 
 # ===================================================================
@@ -311,7 +300,7 @@ class TestNoLocalConfig:
 
         assert config.theme.playful is False
         # TS-13-8: must include the full path suffix
-        assert any("No local config found at" in msg and ".agent-fox/config.toml" in msg for msg in caplog.messages)
+        assert any("No local config found at" in msg and ".nightshift/config.toml" in msg for msg in caplog.messages)
 
 
 # ===================================================================
@@ -325,20 +314,20 @@ class TestNoDeepMerge:
         (global_config_dir / "config.toml").write_text(
             textwrap.dedent("""\
             [orchestrator]
-            parallel = 2
+            max_retries = 3
             session_timeout = 60
         """)
         )
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir(exist_ok=True)
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 8\n")
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 5\n")
         monkeypatch.chdir(repo)
 
         config = load_config()
 
-        assert config.orchestrator.parallel == 8
+        assert config.orchestrator.max_retries == 5
         # session_timeout should revert to Pydantic default (45), not global's 60
         assert config.orchestrator.session_timeout != 60
         assert config.orchestrator.session_timeout == 45
@@ -351,21 +340,21 @@ class TestLocalConfigSymlink:
     """TS-13-E4: Symlinked local config raises ConfigError."""
 
     def test_local_symlink_raises_config_error(self, fake_home, global_config, tmp_path, monkeypatch, clean_af_env):
-        """Local .agent-fox/config.toml as symlink -> ConfigError."""
+        """Local .nightshift/config.toml as symlink -> ConfigError."""
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir(exist_ok=True)
 
         real_config = tmp_path / "other-config.toml"
-        real_config.write_text("[orchestrator]\nparallel = 1\n")
+        real_config.write_text("[orchestrator]\nmax_retries = 1\n")
         (local_dir / "config.toml").symlink_to(real_config)
         monkeypatch.chdir(repo)
 
         with pytest.raises(ConfigError, match=r"(?i)symlink|CWE-59") as exc_info:
             load_config()
         # TS-13-E4: error must identify the local config path
-        assert ".agent-fox/config.toml" in str(exc_info.value)
+        assert ".nightshift/config.toml" in str(exc_info.value)
 
 
 # ===================================================================
@@ -379,12 +368,12 @@ class TestIntermediateSymlinkAllowed:
         # Create a real directory and config
         real_dir = tmp_path / "real_agent_fox"
         real_dir.mkdir()
-        (real_dir / "config.toml").write_text("[orchestrator]\nparallel = 3\n")
+        (real_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 3\n")
 
         # Create a symlinked intermediate directory
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
-        (repo / ".agent-fox").symlink_to(real_dir)
+        (repo / ".nightshift").symlink_to(real_dir)
         monkeypatch.chdir(repo)
 
         # Should NOT raise — symlink check is on the final file only
@@ -423,13 +412,13 @@ class TestMalformedGlobalConfig:
         global_config_dir_path.write_text("[broken = unterminated")
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir(exist_ok=True)
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 1\n")
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 1\n")
         monkeypatch.chdir(repo)
 
         config = load_config()
-        assert config.orchestrator.parallel == 1
+        assert config.orchestrator.max_retries == 1
 
 
 # ===================================================================
@@ -442,7 +431,7 @@ class TestMalformedLocalConfig:
         """Local config with invalid TOML raises ConfigError after global loads."""
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir(exist_ok=True)
         (local_dir / "config.toml").write_text("key = @invalid")
         monkeypatch.chdir(repo)
@@ -452,7 +441,7 @@ class TestMalformedLocalConfig:
 
         error_msg = str(exc_info.value)
         # TS-13-11: must identify the local config file path
-        assert ".agent-fox/config.toml" in error_msg
+        assert ".nightshift/config.toml" in error_msg
         # TS-13-11: must mention parse error or TOML
         assert "parse" in error_msg.lower() or "TOML" in error_msg
 
@@ -478,19 +467,6 @@ class TestNoPartialConfig:
         assert result is None
 
 
-# ===================================================================
-# TS-13-15: SpecToolConfig defaults
-# ===================================================================
-class TestSpecToolDefaults:
-    """TS-13-15: AgentFoxConfig includes spec_tool with correct defaults."""
-
-    def test_spec_tool_defaults(self):
-        """Default SpecToolConfig has expected field values."""
-        config = AgentFoxConfig()
-        assert config.spec_tool.model == "STANDARD"
-        assert config.spec_tool.auth_method == ""
-        assert config.spec_tool.vertex_project == ""
-        assert config.spec_tool.vertex_region == ""
 
 
 # ===================================================================
@@ -508,7 +484,7 @@ class TestDebugLogGlobalLoaded:
         with caplog.at_level(logging.DEBUG):
             load_config()
 
-        global_config_path = str(fake_home / ".agent-fox" / "config.toml")
+        global_config_path = str(fake_home / ".nightshift" / "config.toml")
         # TS-13-20: same message must contain both the prefix and the path
         assert any("Loaded global config from" in msg and global_config_path in msg for msg in caplog.messages)
 
@@ -523,9 +499,9 @@ class TestDebugLogLocalSoleSource:
         """DEBUG log 'sole config source' when local config exists."""
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir(exist_ok=True)
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 4\n")
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 4\n")
         monkeypatch.chdir(repo)
 
         with caplog.at_level(logging.DEBUG):
@@ -541,7 +517,7 @@ class TestDebugLogNoLocal:
     """TS-13-22: DEBUG log when no local config exists."""
 
     def test_debug_log_no_local(self, fake_home, global_config, tmp_path, monkeypatch, caplog, clean_af_env):
-        """DEBUG log 'No local config found at .agent-fox/config.toml'."""
+        """DEBUG log 'No local config found at .nightshift/config.toml'."""
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
         monkeypatch.chdir(repo)
@@ -550,7 +526,7 @@ class TestDebugLogNoLocal:
             load_config()
 
         # TS-13-22: must include the full path suffix
-        assert any("No local config found at" in msg and ".agent-fox/config.toml" in msg for msg in caplog.messages)
+        assert any("No local config found at" in msg and ".nightshift/config.toml" in msg for msg in caplog.messages)
 
 
 # ===================================================================
@@ -631,7 +607,7 @@ class TestPydanticValidation:
     def test_invalid_value_raises_config_error(self, tmp_path):
         """Invalid field type raises ConfigError."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text('[orchestrator]\nparallel = "not-a-number"\n')
+        config_file.write_text('[orchestrator]\nmax_retries = "not-a-number"\n')
 
         with pytest.raises(ConfigError):
             load_config(path=config_file)
@@ -639,12 +615,12 @@ class TestPydanticValidation:
     def test_load_config_path_parameter_backward_compat(self, tmp_path):
         """load_config(path=...) still returns valid config from file."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text("[orchestrator]\nparallel = 4\n")
+        config_file.write_text("[orchestrator]\nmax_retries = 4\n")
 
         config = load_config(path=config_file)
 
         assert isinstance(config, AgentFoxConfig)
-        assert config.orchestrator.parallel == 4
+        assert config.orchestrator.max_retries == 4
 
     def test_load_config_returns_agentfoxconfig(self):
         """load_config() returns an AgentFoxConfig instance."""
@@ -672,11 +648,11 @@ class TestNonexistentCWD:
 # TS-13-P2: Global config not overwritten after first creation
 # ===================================================================
 class TestGlobalConfigNotOverwrittenProperty:
-    """TS-13-P2: Global config created once, never overwritten."""
+    """TS-13-P2: Auto-created local config not overwritten on subsequent calls."""
 
     @pytest.mark.property
     def test_global_config_not_overwritten(self, fake_home, tmp_path, monkeypatch, clean_af_env):
-        """Property: multiple load_config calls don't overwrite global config."""
+        """Property: multiple load_config calls don't overwrite auto-created local config."""
         from hypothesis import given, settings
         from hypothesis import strategies as st
 
@@ -687,14 +663,13 @@ class TestGlobalConfigNotOverwrittenProperty:
         @given(n_calls=st.integers(min_value=2, max_value=5))
         @settings(max_examples=5)
         def check(n_calls):
-            # First call creates the global config
             load_config()
-            global_config_path = fake_home / ".agent-fox" / "config.toml"
-            content_after_first = global_config_path.read_text()
+            local_config_path = repo / ".nightshift" / "config.toml"
+            content_after_first = local_config_path.read_text()
 
             for _ in range(n_calls - 1):
                 load_config()
-                assert global_config_path.read_text() == content_after_first
+                assert local_config_path.read_text() == content_after_first
 
         check()
 
@@ -726,7 +701,7 @@ class TestMalformedTomlFailFastProperty:
         @given(bad_toml=malformed_toml)
         @settings(max_examples=10)
         def check(bad_toml):
-            global_dir = fake_home / ".agent-fox"
+            global_dir = fake_home / ".nightshift"
             global_dir.mkdir(exist_ok=True)
             (global_dir / "config.toml").write_text(bad_toml)
 
@@ -765,9 +740,9 @@ class TestSymlinkFinalFileOnlyProperty:
         # Strategy: generate varying TOML content for diverse path structures
         toml_content_st = st.sampled_from(
             [
-                "[orchestrator]\nparallel = 1\n",
+                "[orchestrator]\nmax_retries = 1\n",
                 "[theme]\nplayful = true\n",
-                "[routing]\nmax_timeout_retries = 3\n",
+                "[orchestrator]\nsession_timeout = 30\n",
                 "# empty\n",
             ]
         )
@@ -785,7 +760,7 @@ class TestSymlinkFinalFileOnlyProperty:
             real_file.write_text(toml_content)
 
             # Set up global config dir with symlinked final file
-            global_dir = fake_home / ".agent-fox"
+            global_dir = fake_home / ".nightshift"
             if global_dir.is_symlink():
                 global_dir.unlink()
             elif global_dir.exists():
@@ -812,8 +787,8 @@ class TestSymlinkFinalFileOnlyProperty:
             real_dir.mkdir(exist_ok=True)
             (real_dir / "config.toml").write_text(toml_content)
 
-            # Set up $HOME/.agent-fox as a symlink to the real directory
-            global_dir = fake_home / ".agent-fox"
+            # Set up $HOME/.nightshift as a symlink to the real directory
+            global_dir = fake_home / ".nightshift"
             if global_dir.is_symlink():
                 global_dir.unlink()
             elif global_dir.exists():
@@ -839,11 +814,11 @@ class TestSymlinkFinalFileOnlyProperty:
 
 
 class TestSmoke1ZeroConfigFirstRun:
-    """TS-13-SMOKE-1: Zero-config first run auto-creates global config."""
+    """TS-13-SMOKE-1: Zero-config first run auto-creates local config."""
 
     @pytest.mark.smoke
     def test_zero_config_first_run(self, fake_home, tmp_path, monkeypatch, caplog, clean_af_env):
-        """PATH-1: First load_config() auto-creates global config, emits DEBUG logs."""
+        """PATH-1: First load_config() auto-creates local config, emits DEBUG logs."""
         repo = tmp_path / "repo"
         repo.mkdir()
         monkeypatch.chdir(repo)
@@ -851,18 +826,13 @@ class TestSmoke1ZeroConfigFirstRun:
         with caplog.at_level(logging.DEBUG):
             config = load_config()
 
-        # Global config created
-        global_dir = fake_home / ".agent-fox"
-        global_config = global_dir / "config.toml"
-        assert global_dir.exists()
-        assert oct(global_dir.stat().st_mode & 0o777) == "0o700"
-        assert global_config.exists()
+        # Local config auto-created
+        local_config = repo / ".nightshift" / "config.toml"
+        assert local_config.exists()
 
         # Valid config returned
         assert isinstance(config, AgentFoxConfig)
 
-        # DEBUG log: 'Loaded global config from ...'
-        assert any("Loaded global config from" in msg and str(global_config) in msg for msg in caplog.messages)
         # DEBUG log: 'No local config found ...'
         assert any("No local config found" in msg for msg in caplog.messages)
 
@@ -876,26 +846,23 @@ class TestSmoke2LocalTakesPrecedence:
         (global_config_dir / "config.toml").write_text(
             textwrap.dedent("""\
             [orchestrator]
-            parallel = 2
+            max_retries = 2
             session_timeout = 60
-
-            [routing]
-            max_timeout_retries = 3
         """)
         )
         repo = tmp_path / "repo"
         repo.mkdir()
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir()
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 8\n")
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 8\n")
         monkeypatch.chdir(repo)
 
         with caplog.at_level(logging.DEBUG):
             config = load_config()
 
-        assert config.orchestrator.parallel == 8
-        # routing NOT inherited from global — local is the sole source
-        assert config.routing.max_timeout_retries == 2  # Pydantic default
+        assert config.orchestrator.max_retries == 8
+        # session_timeout NOT inherited from global — local is the sole source
+        assert config.orchestrator.session_timeout == 45  # Pydantic default
 
         assert any("sole config source" in msg for msg in caplog.messages)
 
@@ -932,13 +899,13 @@ class TestSmoke3MalformedGlobalFailFast:
 
         repo = tmp_path / "repo"
         repo.mkdir()
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir()
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 1\n")
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 1\n")
         monkeypatch.chdir(repo)
 
         config = load_config()
-        assert config.orchestrator.parallel == 1
+        assert config.orchestrator.max_retries == 1
 
 
 
@@ -950,9 +917,9 @@ class TestSmoke8HomeUnsetLocalUsed:
         """PATH-8: Unresolvable HOME + local config present -> local used as sole source."""
         repo = tmp_path / "repo"
         repo.mkdir()
-        local_dir = repo / ".agent-fox"
+        local_dir = repo / ".nightshift"
         local_dir.mkdir()
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 3\n")
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 3\n")
         monkeypatch.chdir(repo)
         monkeypatch.delenv("HOME", raising=False)
         monkeypatch.setattr(Path, "home", staticmethod(lambda: (_ for _ in ()).throw(RuntimeError("no home"))))
@@ -961,6 +928,6 @@ class TestSmoke8HomeUnsetLocalUsed:
             config = load_config()
 
         assert isinstance(config, AgentFoxConfig)
-        assert config.orchestrator.parallel == 3
+        assert config.orchestrator.max_retries == 3
         # Local config used as sole source — HOME never checked
         assert any("sole config source" in msg for msg in caplog.messages)

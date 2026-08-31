@@ -38,7 +38,7 @@ def persist_auditor_results(
     conn: Any = None,
     task_group: str = "0",
 ) -> None:
-    """Write audit findings to .agent-fox/audit/audit_{spec_name}.md.
+    """Write audit findings to .nightshift/audit/audit_{spec_name}.md.
 
     For PASS verdicts, deletes any existing audit report and writes nothing.
     For non-PASS verdicts, creates the audit directory if needed and writes
@@ -55,7 +55,7 @@ def persist_auditor_results(
         result: The audit result to persist.
         attempt: The attempt number for the audit report header.
         project_root: Root directory of the project (parent of
-            ``.agent-fox/``).  Falls back to ``spec_dir.parent.parent``
+            ``.nightshift/``).  Falls back to ``spec_dir.parent.parent``
             when not supplied, for backward compatibility.
         conn: Optional DuckDB connection for persisting findings to
             review_findings table (113-REQ-4.1).
@@ -72,7 +72,7 @@ def persist_auditor_results(
     """
     spec_name = spec_dir.name
     root = project_root if project_root is not None else spec_dir.parent.parent
-    audit_dir = root / ".agent-fox" / "audit"
+    audit_dir = root / ".nightshift" / "audit"
     audit_path = audit_dir / f"audit_{spec_name}.md"
 
     # PASS verdict: delete existing report and return (do not write).
@@ -237,18 +237,18 @@ def cleanup_completed_spec_audits(
     """Delete audit report files for fully-completed specs.
 
     Iterates the given spec names and deletes each matching audit file
-    from ``.agent-fox/audit/``.  Per-spec OSErrors are logged as warnings
+    from ``.nightshift/audit/``.  Per-spec OSErrors are logged as warnings
     and do not stop processing of the remaining specs.
 
     Args:
         project_root: Root directory of the project (parent of
-            ``.agent-fox/``).
+            ``.nightshift/``).
         completed_specs: Set of spec folder names (e.g. ``"05_foo"``)
             whose audit reports should be removed.
 
     Requirements: 92-REQ-4.2, 92-REQ-4.E1, 92-REQ-4.E2
     """
-    audit_dir = project_root / ".agent-fox" / "audit"
+    audit_dir = project_root / ".nightshift" / "audit"
     for spec in completed_specs:
         audit_path = audit_dir / f"audit_{spec}.md"
         try:

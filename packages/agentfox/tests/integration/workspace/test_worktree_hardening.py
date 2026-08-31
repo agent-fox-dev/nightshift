@@ -147,7 +147,7 @@ class TestCreateWorktreeCleansOrphans:
         """TS-80-8: create_worktree succeeds even with stale empty ancestor dirs."""
         repo = _make_repo(tmp_path)
         # Pre-create an empty stale directory
-        stale_dir = repo / ".agent-fox" / "worktrees" / "spec" / "99"
+        stale_dir = repo / ".nightshift" / "worktrees" / "spec" / "99"
         stale_dir.mkdir(parents=True)
 
         # Create a worktree for group 0 under the same spec
@@ -159,7 +159,7 @@ class TestCreateWorktreeCleansOrphans:
     async def test_orphan_dir_removed_after_create(self, tmp_path: Path) -> None:
         """TS-80-8: After create_worktree, the stale empty 99/ dir is gone."""
         repo = _make_repo(tmp_path)
-        stale_dir = repo / ".agent-fox" / "worktrees" / "spec" / "99"
+        stale_dir = repo / ".nightshift" / "worktrees" / "spec" / "99"
         stale_dir.mkdir(parents=True)
 
         ws = await create_worktree(repo, "spec", 0, base_branch="develop")
@@ -222,7 +222,7 @@ class TestSmokeDestroyWorktreeWithStaleState:
 
         await destroy_worktree(repo, ws)
 
-        worktrees_root = repo / ".agent-fox" / "worktrees"
+        worktrees_root = repo / ".nightshift" / "worktrees"
         if worktrees_root.exists():
             leftover = [d for d in worktrees_root.glob("spec/*") if d.exists()]
             assert not leftover, f"Empty worktree dirs remain after destroy: {leftover}"

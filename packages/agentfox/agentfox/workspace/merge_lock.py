@@ -76,7 +76,7 @@ class MergeLock:
         self._stale_timeout = stale_timeout
         self._poll_interval = poll_interval
         self._async_lock = asyncio.Lock()
-        self._lock_dir = repo_root / ".agent-fox"
+        self._lock_dir = repo_root / ".nightshift"
         self._lock_file = self._lock_dir / "merge.lock"
         self._heartbeat_task: asyncio.Task[None] | None = None
 
@@ -109,7 +109,7 @@ class MergeLock:
 
     async def _acquire_file_lock(self) -> None:
         """Acquire the file-based lock, handling stale detection."""
-        # Ensure .agent-fox/ directory exists (45-REQ-1.E2)
+        # Ensure .nightshift/ directory exists (45-REQ-1.E2)
         self._lock_dir.mkdir(parents=True, exist_ok=True)
 
         deadline = time.monotonic() + self._timeout
@@ -319,7 +319,7 @@ def cleanup_stale_merge_lock(repo_root: Path) -> bool:
 
     Returns True if a stale lock was cleaned up.
     """
-    lock_file = repo_root / ".agent-fox" / "merge.lock"
+    lock_file = repo_root / ".nightshift" / "merge.lock"
     if not lock_file.exists():
         return False
 

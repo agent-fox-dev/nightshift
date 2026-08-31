@@ -30,7 +30,7 @@ class TestBranchUsedByWorktree:
         "HEAD abc123\n"
         "branch refs/heads/develop\n"
         "\n"
-        "worktree /repo/.agent-fox/worktrees/spec/0\n"
+        "worktree /repo/.nightshift/worktrees/spec/0\n"
         "HEAD def456\n"
         "branch refs/heads/feature/spec/0\n"
         "\n"
@@ -91,7 +91,7 @@ class TestBranchUsedByWorktree:
             "HEAD abc123\n"
             "branch refs/heads/develop\n"
             "\n"
-            "worktree /repo/.agent-fox/worktrees/spec/0\n"
+            "worktree /repo/.nightshift/worktrees/spec/0\n"
             "HEAD def456\n"
             "detached\n"
             "\n"
@@ -375,7 +375,7 @@ class TestDestroyWorktreePostPruneRetry:
         from agentfox.workspace.worktree import destroy_worktree
 
         workspace = WorkspaceInfo(
-            path=tmp_path / ".agent-fox" / "worktrees" / "spec" / "0",
+            path=tmp_path / ".nightshift" / "worktrees" / "spec" / "0",
             branch="feature/spec/0",
             spec_name="spec",
             task_group=0,
@@ -417,7 +417,7 @@ class TestDestroyWorktreePostPruneRetry:
         from agentfox.workspace.worktree import destroy_worktree
 
         workspace = WorkspaceInfo(
-            path=tmp_path / ".agent-fox" / "worktrees" / "spec" / "0",
+            path=tmp_path / ".nightshift" / "worktrees" / "spec" / "0",
             branch="feature/spec/0",
             spec_name="spec",
             task_group=0,

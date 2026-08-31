@@ -2,7 +2,7 @@
 
 Centralizes parsing of the ``{spec_name}:{group_number}[:{role}]`` format
 used throughout the codebase for task graph node identifiers, and all
-``.agent-fox/`` path constants.
+``.nightshift/`` path constants.
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import NamedTuple
 
-AGENT_FOX_DIR = ".agent-fox"
-DEFAULT_DB_PATH = Path(".agent-fox/knowledge.duckdb")
+NIGHTSHIFT_DIR = ".nightshift"
+DEFAULT_DB_PATH = Path(".nightshift/knowledge.duckdb")
 SESSION_SUMMARY_FILENAME = "session-summary.json"
 
 

@@ -156,9 +156,9 @@ async def create_worktree(
 ) -> WorkspaceInfo:
     """Create an isolated git worktree for a coding session.
 
-    Creates a worktree at ``.agent-fox/worktrees/{spec_name}/{task_group}``
+    Creates a worktree at ``.nightshift/worktrees/{spec_name}/{task_group}``
     (2-level path) when *mode* is absent, or at
-    ``.agent-fox/worktrees/{spec_name}/{task_group}/{role}/{mode}``
+    ``.nightshift/worktrees/{spec_name}/{task_group}/{role}/{mode}``
     (4-level path) when *mode* is present.  The branch name follows the
     same pattern: ``feature/{spec_name}/{task_group}`` or
     ``feature/{spec_name}/{task_group}/{role}/{mode}``.
@@ -188,7 +188,7 @@ async def create_worktree(
     effective_mode = mode or None
     effective_role = role or None
 
-    worktrees_root = repo_root / ".agent-fox" / "worktrees"
+    worktrees_root = repo_root / ".nightshift" / "worktrees"
 
     # Path and branch derivation (09-REQ-2)
     if effective_mode is None:
@@ -340,7 +340,7 @@ async def destroy_worktree(
 
     Requirements: 80-REQ-1.1, 80-REQ-1.E1, 80-REQ-3.1, 09-REQ-6.1
     """
-    worktrees_root = repo_root / ".agent-fox" / "worktrees"
+    worktrees_root = repo_root / ".nightshift" / "worktrees"
 
     # 03-REQ-2.E1: If worktree path does not exist, treat removal as no-op
     if workspace.path.exists():

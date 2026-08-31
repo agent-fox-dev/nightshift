@@ -142,7 +142,7 @@ class TestPushExecutesInsideMergeLock:
         fake_workspace: WorkspaceInfo,
     ) -> None:
         """git push is called while the merge lock is still held."""
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
         lock_held_during_push = []
 
         async def tracking_push(*args, **kwargs):
@@ -278,7 +278,7 @@ class TestLockReleasedAfterSuccessfulPush:
         fake_workspace: WorkspaceInfo,
     ) -> None:
         """After a successful push, the lock file is removed and files returned."""
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
 
         mocks = _standard_harvest_mocks()
         with (
@@ -576,7 +576,7 @@ class TestRetriesHappenUnderMergeLock:
         fake_workspace: WorkspaceInfo,
     ) -> None:
         """Lock file exists during both push attempts."""
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
         lock_states: list[bool] = []
 
         async def tracking_push(*args, **kwargs):
@@ -1339,7 +1339,7 @@ class TestExternalCallerSyncAcquiresLock:
         """Lock file is created and released during the call."""
         from agentfox.workspace.integration import _sync_integration_with_remote
 
-        lock_file = repo_root / ".agent-fox" / "merge.lock"
+        lock_file = repo_root / ".nightshift" / "merge.lock"
         lock_observed = False
 
         async def tracking_run_git(args, cwd, check=True, **kwargs):

@@ -111,7 +111,7 @@ def _run_daemon(ctx, om, config):  # noqa: C901
         platform=platform,
         streams=build_streams(config, engine=engine, budget=budget),
         budget=budget,
-        pid_path=root / ".agent-fox" / "daemon.pid",
+        pid_path=root / ".nightshift" / "daemon.pid",
         idle_callback=progress.update_spinner_text,
     )
 

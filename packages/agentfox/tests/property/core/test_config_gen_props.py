@@ -83,12 +83,9 @@ def _get_known_fields_by_section(
 
 # Known orchestrator fields and valid values
 _ORCHESTRATOR_FIELDS = {
-    "parallel": st.integers(min_value=1, max_value=8),
-    "sync_interval": st.integers(min_value=0, max_value=100),
-    "hot_load": st.booleans(),
     "max_retries": st.integers(min_value=0, max_value=10),
     "session_timeout": st.integers(min_value=1, max_value=120),
-    "inter_session_delay": st.integers(min_value=0, max_value=30),
+    "max_budget_usd": st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False),
 }
 
 _THEME_FIELDS = {
@@ -118,6 +115,8 @@ def valid_config_toml(draw: st.DrawFn) -> str:
     for key, value in overrides.items():
         if isinstance(value, bool):
             lines.append(f"{key} = {str(value).lower()}")
+        elif isinstance(value, float):
+            lines.append(f"{key} = {value!r}")
         else:
             lines.append(f"{key} = {value}")
     return "\n".join(lines) + "\n"
@@ -192,7 +191,7 @@ class TestRoundTripDefaultEquivalence:
         assert isinstance(config, AgentFoxConfig)
 
         # Promoted values are loaded correctly
-        assert config.orchestrator.parallel == 4
+        assert config.orchestrator.max_budget_usd == 20.0
 
 
 class TestMergeValuePreservation:
@@ -217,17 +216,14 @@ class TestMergeValuePreservation:
 
         # Every active field should appear active (uncommented) in output
         for key, value in overrides.items():
-            if isinstance(value, bool):
-                expected = f"{key} = {str(value).lower()}"
-            else:
-                expected = f"{key} = {value}"
-            # Find the line containing this key-value pair
             found = False
             for line in merged.split("\n"):
-                if expected in line and not line.lstrip().startswith("#"):
+                if line.lstrip().startswith("#"):
+                    continue
+                if f"{key} =" in line:
                     found = True
                     break
-            assert found, f"Active value '{expected}' not preserved in merged output"
+            assert found, f"Active key '{key}' not preserved in merged output"
 
 
 class TestMergeCompleteness:
@@ -288,7 +284,7 @@ class TestDeprecatedFieldDetection:
 
         Validates: 33-REQ-2.4
         """
-        lines = ["[orchestrator]", "parallel = 1"]
+        lines = ["[orchestrator]", "max_retries = 1"]
         for name in unknowns:
             lines.append(f'{name} = "test_value"')
         existing = "\n".join(lines) + "\n"

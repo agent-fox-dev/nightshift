@@ -2,9 +2,9 @@
 
 Profiles are markdown files that define archetype behavioral guidance
 (identity, rules, focus areas, output format). They are loaded from:
-  1. Project-level: <project_dir>/.agent-fox/profiles/<archetype>_<mode>.md
+  1. Project-level: <project_dir>/.nightshift/profiles/<archetype>_<mode>.md
   2. Package default: agent_fox/_templates/profiles/<archetype>_<mode>.md
-  3. Project-level: <project_dir>/.agent-fox/profiles/<archetype>.md
+  3. Project-level: <project_dir>/.nightshift/profiles/<archetype>.md
   4. Package default: agent_fox/_templates/profiles/<archetype>.md
 
 Requirements: 99-REQ-5.1, 99-REQ-5.2, 99-REQ-5.3, 99-REQ-5.E1,
@@ -66,9 +66,9 @@ def load_profile(
     """Load an archetype profile, with mode-aware resolution.
 
     Resolution order (first match wins):
-    1. ``<project_dir>/.agent-fox/profiles/<archetype>_<mode>.md``
+    1. ``<project_dir>/.nightshift/profiles/<archetype>_<mode>.md``
     2. ``_templates/profiles/<archetype>_<mode>.md``
-    3. ``<project_dir>/.agent-fox/profiles/<archetype>.md``
+    3. ``<project_dir>/.nightshift/profiles/<archetype>.md``
     4. ``_templates/profiles/<archetype>.md``
 
     Steps 1-2 are skipped when *mode* is ``None``.
@@ -102,14 +102,14 @@ def load_profile(
         mode_filename = f"{archetype}_{mode}.md"
         # Priority 1: project-level mode-specific profile
         if project_dir is not None:
-            candidates.append(project_dir / ".agent-fox" / "profiles" / mode_filename)
+            candidates.append(project_dir / ".nightshift" / "profiles" / mode_filename)
         # Priority 2: package-embedded mode-specific profile
         candidates.append(_DEFAULT_PROFILES_DIR / mode_filename)
 
     base_filename = f"{archetype}.md"
     # Priority 3: project-level base profile
     if project_dir is not None:
-        candidates.append(project_dir / ".agent-fox" / "profiles" / base_filename)
+        candidates.append(project_dir / ".nightshift" / "profiles" / base_filename)
     # Priority 4: package-embedded base profile
     candidates.append(_DEFAULT_PROFILES_DIR / base_filename)
 
@@ -141,12 +141,12 @@ def has_custom_profile(name: str, project_dir: Path) -> bool:
     """Return True if a custom profile exists in the project for *name*.
 
     A custom profile is any file at
-    ``<project_dir>/.agent-fox/profiles/<name>.md``, regardless of whether
+    ``<project_dir>/.nightshift/profiles/<name>.md``, regardless of whether
     *name* is a built-in archetype.
 
     Requirement: 99-REQ-4.1
     """
     # Validate before constructing any filesystem path (CWE-22).
     _validate_profile_name(name, "name")
-    profile_path = project_dir / ".agent-fox" / "profiles" / f"{name}.md"
+    profile_path = project_dir / ".nightshift" / "profiles" / f"{name}.md"
     return profile_path.exists()

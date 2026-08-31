@@ -32,7 +32,7 @@ class TestWorktreeCreation:
     ) -> None:
         """Creating a worktree produces the expected directory."""
         ws = await create_worktree(tmp_worktree_repo, "test_spec", 1, base_branch="develop")
-        expected_path = tmp_worktree_repo / ".agent-fox" / "worktrees" / "test_spec" / "1"
+        expected_path = tmp_worktree_repo / ".nightshift" / "worktrees" / "test_spec" / "1"
         assert ws.path == expected_path
         assert ws.path.is_dir()
 
@@ -109,7 +109,7 @@ class TestWorktreeDestruction:
         """Destroying the only worktree in a spec removes the spec dir."""
         ws = await create_worktree(tmp_worktree_repo, "test_spec", 1, base_branch="develop")
         await destroy_worktree(tmp_worktree_repo, ws)
-        spec_dir = tmp_worktree_repo / ".agent-fox" / "worktrees" / "test_spec"
+        spec_dir = tmp_worktree_repo / ".nightshift" / "worktrees" / "test_spec"
         assert not spec_dir.exists()
 
 

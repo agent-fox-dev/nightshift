@@ -308,23 +308,23 @@ class TestReviewerUnknownVerdict:
 
 
 # ---------------------------------------------------------------------------
-# Verbose dump: parse failures write to .agent-fox/ when --verbose is active
+# Verbose dump: parse failures write to .nightshift/ when --verbose is active
 # ---------------------------------------------------------------------------
 
 
 class TestParseTriageVerboseDump:
-    """Verify raw triage response is written to .agent-fox/ on parse failure in verbose mode."""
+    """Verify raw triage response is written to .nightshift/ on parse failure in verbose mode."""
 
     def test_dump_written_when_debug_logging_enabled(self, tmp_path, monkeypatch, caplog) -> None:
-        """A file is created in .agent-fox/ when the logger is at DEBUG level."""
+        """A file is created in .nightshift/ when the logger is at DEBUG level."""
         from agentfox.session.review_parser import parse_triage_output
 
         monkeypatch.chdir(tmp_path)
         with caplog.at_level(logging.DEBUG, logger="agentfox.session.review_parser"):
             parse_triage_output("not json at all", "fix-issue-1", "fix-issue-1:0:triage")
 
-        dump_dir = tmp_path / ".agent-fox"
-        assert dump_dir.is_dir(), "Expected .agent-fox/ directory to be created"
+        dump_dir = tmp_path / ".nightshift"
+        assert dump_dir.is_dir(), "Expected .nightshift/ directory to be created"
         files = list(dump_dir.glob("parse_failure_triage_*.txt"))
         assert len(files) == 1, f"Expected exactly one dump file, got {files}"
         assert files[0].read_text(encoding="utf-8") == "not json at all"
@@ -337,8 +337,8 @@ class TestParseTriageVerboseDump:
         # caplog.at_level is NOT used — the logger stays at WARNING/NOTSET
         parse_triage_output("not json at all", "fix-issue-1", "fix-issue-1:0:triage")
 
-        dump_dir = tmp_path / ".agent-fox"
-        assert not dump_dir.exists(), "Expected no .agent-fox/ directory when not in verbose mode"
+        dump_dir = tmp_path / ".nightshift"
+        assert not dump_dir.exists(), "Expected no .nightshift/ directory when not in verbose mode"
 
     def test_session_id_sanitised_in_filename(self, tmp_path, monkeypatch, caplog) -> None:
         """Colons in session_id are replaced so the filename is safe."""
@@ -348,24 +348,24 @@ class TestParseTriageVerboseDump:
         with caplog.at_level(logging.DEBUG, logger="agentfox.session.review_parser"):
             parse_triage_output("bad", "fix-issue-99", "fix-issue-99:0:triage")
 
-        files = list((tmp_path / ".agent-fox").glob("parse_failure_triage_*.txt"))
+        files = list((tmp_path / ".nightshift").glob("parse_failure_triage_*.txt"))
         assert len(files) == 1
         assert ":" not in files[0].name
 
 
 class TestParseFixReviewVerboseDump:
-    """Verify raw reviewer response is written to .agent-fox/ on parse failure in verbose mode."""
+    """Verify raw reviewer response is written to .nightshift/ on parse failure in verbose mode."""
 
     def test_dump_written_when_debug_logging_enabled(self, tmp_path, monkeypatch, caplog) -> None:
-        """A file is created in .agent-fox/ when the logger is at DEBUG level."""
+        """A file is created in .nightshift/ when the logger is at DEBUG level."""
         from agentfox.session.review_parser import parse_fix_review_output
 
         monkeypatch.chdir(tmp_path)
         with caplog.at_level(logging.DEBUG, logger="agentfox.session.review_parser"):
             parse_fix_review_output("not json at all", "fix-issue-1", "fix-issue-1:0:reviewer")
 
-        dump_dir = tmp_path / ".agent-fox"
-        assert dump_dir.is_dir(), "Expected .agent-fox/ directory to be created"
+        dump_dir = tmp_path / ".nightshift"
+        assert dump_dir.is_dir(), "Expected .nightshift/ directory to be created"
         files = list(dump_dir.glob("parse_failure_fix_review_*.txt"))
         assert len(files) == 1, f"Expected exactly one dump file, got {files}"
         assert files[0].read_text(encoding="utf-8") == "not json at all"
@@ -377,8 +377,8 @@ class TestParseFixReviewVerboseDump:
         monkeypatch.chdir(tmp_path)
         parse_fix_review_output("not json at all", "fix-issue-1", "fix-issue-1:0:reviewer")
 
-        dump_dir = tmp_path / ".agent-fox"
-        assert not dump_dir.exists(), "Expected no .agent-fox/ directory when not in verbose mode"
+        dump_dir = tmp_path / ".nightshift"
+        assert not dump_dir.exists(), "Expected no .nightshift/ directory when not in verbose mode"
 
     def test_result_still_returned_as_parse_failure(self, tmp_path, monkeypatch, caplog) -> None:
         """Even when verbose dump runs, the result is still FixReviewResult(is_parse_failure=True)."""

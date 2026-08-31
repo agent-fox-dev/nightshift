@@ -42,7 +42,7 @@ _non_pass_verdict_strategy = st.sampled_from(["FAIL", "WEAK"])
 
 
 class TestOutputLocationInvariant:
-    """For any valid spec name and non-PASS verdict, report at .agent-fox/audit/."""
+    """For any valid spec name and non-PASS verdict, report at .nightshift/audit/."""
 
     @pytest.mark.skipif(not HAS_HYPOTHESIS, reason="hypothesis not installed")
     @given(
@@ -68,7 +68,7 @@ class TestOutputLocationInvariant:
             )
             persist_auditor_results(spec_dir, result)
 
-            audit_path = project_root / ".agent-fox" / "audit" / f"audit_{spec_name}.md"
+            audit_path = project_root / ".nightshift" / "audit" / f"audit_{spec_name}.md"
             assert audit_path.exists(), f"Expected audit file at {audit_path} for spec_name={spec_name!r}"
             assert not (spec_dir / "audit.md").exists(), f"Expected NO audit.md in spec_dir for spec_name={spec_name!r}"
 
@@ -100,7 +100,7 @@ class TestPassAlwaysDeletes:
             spec_dir = project_root / ".specs" / spec_name
             spec_dir.mkdir(parents=True, exist_ok=True)
 
-            audit_dir = project_root / ".agent-fox" / "audit"
+            audit_dir = project_root / ".nightshift" / "audit"
             audit_dir.mkdir(parents=True, exist_ok=True)
             audit_path = audit_dir / f"audit_{spec_name}.md"
 
@@ -146,7 +146,7 @@ class TestCleanupOnlyDeletesMatching:
 
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp)
-            audit_dir = project_root / ".agent-fox" / "audit"
+            audit_dir = project_root / ".nightshift" / "audit"
             audit_dir.mkdir(parents=True)
 
             for spec in all_specs:
@@ -198,7 +198,7 @@ class TestOverwriteIdempotency:
             for i in range(1, n + 1):
                 persist_auditor_results(spec_dir, result, attempt=i)
 
-            audit_dir = project_root / ".agent-fox" / "audit"
+            audit_dir = project_root / ".nightshift" / "audit"
             files = list(audit_dir.glob(f"audit_{spec_name}*.md"))
             assert len(files) == 1, f"Expected 1 audit file after {n} writes, got {len(files)}"
             assert f"**Attempt:** {n}" in files[0].read_text(), f"Expected attempt {n} in file content"

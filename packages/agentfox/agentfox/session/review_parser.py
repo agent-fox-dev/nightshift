@@ -760,19 +760,19 @@ _TRIAGE_REQUIRED_KEYS = ("id", "description", "preconditions", "expected", "asse
 
 
 def _dump_parse_failure(response: str, session_id: str, parser_type: str) -> None:
-    """Write raw agent response to .agent-fox/ for debugging.
+    """Write raw agent response to .nightshift/ for debugging.
 
     Only call this when verbose mode is active (DEBUG logging enabled).
     Best-effort: I/O errors are logged at DEBUG level and swallowed so the
     caller is never interrupted by file-system issues.
 
     The file is named ``parse_failure_{parser_type}_{safe_session_id}_{ts}.txt``
-    and written into the ``.agent-fox/`` directory in the current working tree.
+    and written into the ``.nightshift/`` directory in the current working tree.
     """
     safe_id = re.sub(r"[:/\\]", "_", session_id)
     ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%S")
     filename = f"parse_failure_{parser_type}_{safe_id}_{ts}.txt"
-    path = Path(".agent-fox") / filename
+    path = Path(".nightshift") / filename
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(response, encoding="utf-8")
