@@ -10,10 +10,10 @@ Before making any changes, orient yourself:
 1. **Read `README.md`** for project overview and quick-start.
 2. **Read `.agent-fox/steering.md`** if it exists — project-level directives that
    apply to all agents and skills. Follow any instructions found there.
-3. **Read relevant specs** in `{{SPEC_ROOT}}/` for the area you're working on.
+3. **Read relevant specs** in `.agent-fox/specs/` for the area you're working on.
 4. **Read ADRs** in `docs/adr/` for architectural context.
-5. **Explore the codebase:** `<main_package>/` is the main package, `<test_directory>/` has
-   unit, property, and integration tests. Their location is language dependent.
+5. **Explore the codebase:** the main packages are under `packages/`. Tests
+   live alongside each package in `packages/<name>/tests/`.
 6. **Check git state:** `git log --oneline -20`, `git status --short --branch`.
 
 **Important:** Read all documents and code in depth — don't skim.
@@ -26,17 +26,19 @@ Do not implement anything before completing these steps.
 ## Project Structure
 
 ```
-<main_package>/         # Main package
-<test_directory>/       # Tests directory
+packages/nightshift/    # CLI entry point (nightshift command)
+packages/agentfox/      # Core library (sessions, knowledge, archetypes)
+packages/afissues/      # Platform abstraction (GitHub, GitLab, Gitea)
+packages/afaudit/       # Audit infrastructure (events, sinks, traces)
 docs/                   # Documentation
-{{SPEC_ROOT}}/                 # Specs to be implemented
-{{SPEC_ROOT}}/archive/         # Old specs. Ignore for coding tasks, except for reference
+.agent-fox/specs/       # Specs to be implemented
+.agent-fox/specs/archive/ # Old specs. Ignore for coding tasks, except for reference
 ```
 
 ## Spec-Driven Workflow
 
 This project uses spec-driven development. Specifications live in
-`{{SPEC_ROOT}}/NN_name/` (numbered by creation order) and contain five artifacts:
+`.agent-fox/specs/NN_name/` (numbered by creation order) and contain five artifacts:
 
 - `prd.md` — product requirements document (source of truth)
 - `requirements.md` — EARS-syntax acceptance criteria
@@ -56,8 +58,6 @@ Run the full quality suite before committing:
 ```
 make check
 ```
-
-**Important:** If `make check` or `make test` are not present, look for language specific test suites.
 
 ## Git Workflow
 

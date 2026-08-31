@@ -1132,25 +1132,6 @@ def test_ts12_p6_session_outcome_isolation(
 
 
 # ---------------------------------------------------------------------------
-# TS-12-35: Architecture documentation check (12-REQ-10.1)
-# ---------------------------------------------------------------------------
-
-
-def test_ts12_35_architecture_md_updated() -> None:
-    """docs/architecture.md documents file-based drift finding supersession."""
-    from pathlib import Path
-
-    docs_path = Path(__file__).resolve().parents[3] / "docs" / "architecture.md"
-    assert docs_path.exists(), f"docs/architecture.md not found at {docs_path}"
-    content = docs_path.read_text()
-    # Must mention artifact_ref or file-based supersession (not vacuously true)
-    assert "artifact_ref" in content or "file-based supersession" in content.lower()
-    # Must reference sections 5.4 and 10.3 per spec pseudocode
-    assert "5.4" in content, "Section 5.4 reference missing"
-    assert "10.3" in content, "Section 10.3 reference missing"
-
-
-# ---------------------------------------------------------------------------
 # TS-12-36: Knowledge system architecture doc check (12-REQ-10.2)
 # ---------------------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 [project]
 name = "agentfox"
 version = "4.3.6"
-description = "Core library for the agent-fox autonomous coding-agent orchestrator"
+description = "Core library for the Night Shift autonomous fix daemon"
 requires-python = ">=3.12"
 dependencies = [
     "afaudit>=4.3.6",

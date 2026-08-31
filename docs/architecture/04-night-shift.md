@@ -1,21 +1,15 @@
 # Night-Shift Mode
 
-## Purpose and Placement
+## Purpose
 
-Night-shift is a fix-only maintenance daemon that runs continuously,
+Night Shift is a fix-only maintenance daemon that runs continuously,
 processing `af:fix`-labelled issues without human intervention. It works with
-any configured platform — GitHub, GitLab, or Gitea. While the spec-driven
-pipeline ([Parts 1–3](01-spec-authoring.md)) implements features from authored
-specifications, night-shift operates in the opposite direction: it picks up
-issues filed against the codebase and generates the fixes needed to resolve
-them.
+any configured platform — GitHub, GitLab, or Gitea. It picks up issues filed
+against the codebase and generates the fixes needed to resolve them.
 
-The two modes are complementary. The spec pipeline builds new capabilities
-by executing a human-authored plan. Night-shift maintains the codebase by
-fixing issues that have been triaged and labelled for automatic repair. The
-fix pipeline reuses the same session infrastructure — agents in isolated
-workspaces — but with automatically generated specs rather than human-authored
-ones.
+The fix pipeline reuses the session infrastructure from the `agentfox`
+library — agents in isolated workspaces — but with automatically generated
+specs rather than human-authored ones.
 
 ---
 
@@ -279,8 +273,8 @@ Night-shift uses platform labels to manage its fix workflow lifecycle:
 | `priority:medium` | User | Default priority (same as unlabelled) |
 | `priority:low` | User | Process after other issues in topological sort |
 
-All labels are automatically created on the GitHub repository by
-`agent-fox init` when a `[platform]` section is configured.
+Labels should be created on the platform repository before running
+Night Shift.
 
 ---
 
@@ -331,28 +325,6 @@ with labels) and the repository (code changes on the integration branch).
 
 ---
 
-## Interaction with the Spec Pipeline
-
-Night-shift and the spec pipeline are designed to coexist but not to run
-simultaneously. Night-shift operates on the integration branch and creates
-fix branches that merge back into it. The spec pipeline also targets the
-integration branch. Running both concurrently would create merge contention.
-
-The intended workflow is:
-
-- During active development: run the spec pipeline (`agent-fox code`) to
-  implement features.
-- During off-hours: run the standalone `nightshift` CLI to process
-  fix issues.
-- The merge lock ensures that if both do run concurrently, they serialize
-  their merge operations rather than corrupting the branch.
-
-Night-shift issues are visible on the platform alongside human-filed issues.
-A human reviewing the repository sees a unified view of both feature work
-(from specs) and maintenance work (from night-shift), with clear labels
-(`af:fix` for approved repairs) distinguishing the two.
-
 ---
 
-*Previous: [Execution and Archetypes](03-execution-and-archetypes.md)*
 *Next: [Knowledge System Architecture](05-knowledge-system-architecture.md)*
