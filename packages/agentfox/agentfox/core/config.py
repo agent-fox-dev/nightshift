@@ -4,24 +4,15 @@ Loads project configuration from a TOML file, validates all fields using
 pydantic models, and merges with documented defaults. Out-of-range numeric
 values are clamped to the nearest valid bound rather than rejected.
 
-The ``load_config()`` function is the single shared entry point used by
-``af``, ``nightshift``, and ``spec`` CLIs.  When called without arguments
-it resolves, merges, and validates a global config
-(``$HOME/.agent-fox/config.toml``) with a local config
-(``.agent-fox/config.toml``) using shallow section replacement semantics.
-
-Requirements: 01-REQ-2.1, 01-REQ-2.2, 01-REQ-2.3, 01-REQ-2.4, 01-REQ-2.5,
-              01-REQ-2.6, 01-REQ-2.E1, 01-REQ-2.E2, 01-REQ-2.E3,
-              13-REQ-1.1, 13-REQ-1.2, 13-REQ-1.3, 13-REQ-2.1, 13-REQ-2.2,
-              13-REQ-2.3, 13-REQ-3.1, 13-REQ-3.2, 13-REQ-3.3, 13-REQ-4.1,
-              13-REQ-4.2, 13-REQ-4.3, 13-REQ-5.1, 13-REQ-5.2, 13-REQ-7.1,
-              13-REQ-7.2, 13-REQ-7.3, 13-REQ-7.4
+The ``load_config()`` function is the single entry point. When called
+without arguments it resolves a local config (``.nightshift/config.toml``)
+with fallback to a global config (``$HOME/.nightshift/config.toml``).
+Local config takes precedence over global config.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import tomllib
 from enum import StrEnum
 from pathlib import Path
@@ -102,33 +93,8 @@ def _auto_clamp_validator() -> Any:
     return _validate
 
 
-class RoutingConfig(BaseModel):
-    """Timeout retry configuration."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    max_timeout_retries: Annotated[int, Clamped(ge=0, cast=int)] = Field(
-        default=2,
-        description="Maximum timeout retries before falling through to failure handler",
-    )
-    timeout_multiplier: Annotated[float, Clamped(ge=1.0)] = Field(
-        default=1.5,
-        description="Factor by which max_turns and session_timeout are extended on timeout retry",
-    )
-    timeout_ceiling_factor: Annotated[float, Clamped(ge=1.0)] = Field(
-        default=2.0,
-        description="Maximum session_timeout as a factor of the original configured value",
-    )
-
-    _auto_clamp = _auto_clamp_validator()
-
-
 class BackendConfig(BaseModel):
-    """Backend provider configuration.
-
-    Determines which AI backend is used for agent sessions across all
-    entry points (``af``, ``nightshift``, ``spec``).
-    """
+    """Backend provider configuration."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -141,82 +107,17 @@ class BackendConfig(BaseModel):
 class OrchestratorConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    parallel: Annotated[int, Clamped(ge=1, le=8)] = Field(default=4, description="Maximum parallel sessions")
-    sync_interval: int | None = Field(
-        default=None,
-        description="Sync barrier interval. None = auto (parallel * 5), 0 = disabled, positive = explicit override.",
-    )
-
-    @field_validator("sync_interval")
-    @classmethod
-    def clamp_sync_interval(cls, v: int | None) -> int | None:
-        """Clamp explicit sync_interval to >= 0; None passes through."""
-        if v is None:
-            return v
-        if v < 0:
-            logger.warning(
-                "Config field 'sync_interval' value %d out of range, clamped to 0",
-                v,
-            )
-            return 0
-        return v
-    hot_load: bool = Field(default=True, description="Hot-load specs between sessions")
     max_retries: Annotated[int, Clamped(ge=0)] = Field(default=2, description="Maximum retries per task group")
     session_timeout: Annotated[int, Clamped(ge=1)] = Field(default=45, description="Session timeout in minutes")
-    inter_session_delay: Annotated[int, Clamped(ge=0)] = Field(
-        default=3, description="Delay between sessions in seconds"
-    )
     max_cost: float | None = Field(default=None, description="Maximum cost limit")
     max_sessions: int | None = Field(default=None, description="Maximum number of sessions")
-    audit_retention_runs: Annotated[int, Clamped(ge=1, cast=int)] = Field(
-        default=20,
-        description="Maximum number of runs to retain in the audit log",
-    )
-    max_blocked_fraction: float | None = Field(
-        default=None,
-        description=("Stop the run when this fraction of nodes are blocked (0.0-1.0). None = disabled."),
-    )
-    max_review_fraction: float = Field(
-        default=0.34,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Maximum fraction of parallel slots that may be occupied by "
-            "review archetype sessions (0.0-1.0). auto_pre (group 0) nodes "
-            "are exempt. Default 0.34 means at most ~1/3 of slots for reviews."
-        ),
-    )
     max_budget_usd: float = Field(
         default=20.0,
         ge=0.0,
         description="Maximum USD spend per session, 0 = unlimited",
     )
 
-    watch_interval: Annotated[int, Clamped(ge=10, cast=int)] = Field(
-        default=60,
-        description=("Seconds between watch polls when --watch is active. Values below 10 are clamped to 10."),
-    )
-
     _auto_clamp = _auto_clamp_validator()
-
-    @property
-    def effective_sync_interval(self) -> int:
-        """Resolve the effective barrier interval.
-
-        - ``None`` (default): auto-compute as ``parallel * 5``.
-        - ``0``: barriers disabled.
-        - Positive int: used verbatim as a user override.
-        """
-        if self.sync_interval is None:
-            return self.parallel * 5
-        return self.sync_interval
-
-    @field_validator("max_blocked_fraction")
-    @classmethod
-    def clamp_max_blocked_fraction(cls, v: float | None) -> float | None:
-        if v is None:
-            return v
-        return _clamp(v, ge=0.0, le=1.0, field_name="max_blocked_fraction")
 
 
 class SecurityConfig(BaseModel):
@@ -281,7 +182,7 @@ class KnowledgeConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    store_path: str = Field(default=".agent-fox/knowledge.duckdb", description="Path to knowledge store")
+    store_path: str = Field(default=".nightshift/knowledge.duckdb", description="Path to knowledge store")
     provider: KnowledgeProviderConfig = Field(
         default_factory=KnowledgeProviderConfig,
         description="Pluggable knowledge provider configuration (gotcha TTL, retrieval caps, etc.)",
@@ -352,110 +253,14 @@ class PerArchetypeConfig(BaseModel):
 PerArchetypeConfig.model_rebuild()
 
 
-class ArchetypeInstancesConfig(BaseModel):
-    """Per-archetype instance count configuration.
-
-    Requirements: 26-REQ-6.2, 46-REQ-2.2, 98-REQ-8.3
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    reviewer: Annotated[int, Clamped(ge=1, le=5)] = Field(default=1, description="Number of reviewer instances")
-    verifier: int = Field(default=1, description="Number of verifier instances (max clamped to 1)")
-
-    _auto_clamp = _auto_clamp_validator()
-
-    @field_validator("verifier")
-    @classmethod
-    def clamp_verifier_to_one(cls, v: int) -> int:
-        """Verifier is always single-instance (98-REQ-6.2)."""
-        if v != 1:
-            logger.warning(
-                "verifier instances clamped from %d to 1 (maximum is 1)",
-                v,
-            )
-        return 1
-
-
-class ReviewerConfig(BaseModel):
-    """Reviewer-specific configuration.
-
-    Contains mode-specific settings keyed by mode name concept, stored as flat fields.
-
-    Requirements: 98-REQ-8.2
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    pre_flight_block_threshold: Annotated[int, Clamped(ge=0)] = Field(
-        default=1,
-        description="Finding count to block for pre-flight review findings",
-    )
-    pre_flight_drift_block_threshold: int | None = Field(
-        default=1,
-        description="Drift finding count to block for pre-flight drift findings (None = advisory only)",
-    )
-    audit_min_ts_entries: Annotated[int, Clamped(ge=1, cast=int)] = Field(
-        default=5,
-        description="Minimum TS entries to trigger audit-review injection",
-    )
-    audit_max_retries: Annotated[int, Clamped(ge=0, cast=int)] = Field(
-        default=1,
-        description="Maximum audit-review/coder retry iterations",
-    )
-
-    _auto_clamp = _auto_clamp_validator()
-
-
-class CustomArchetypeConfig(BaseModel):
-    """Configuration for a custom (project-defined) archetype.
-
-    Specifies which built-in archetype's permission profile the custom
-    archetype should inherit. Validated semantically at runtime by
-    ``get_archetype()`` — the config layer only validates types/syntax.
-
-    Requirements: 99-REQ-4.2
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    permissions: str = Field(
-        default="coder",
-        description="Built-in archetype name whose permissions to inherit",
-    )
-
-
 class ArchetypesConfig(BaseModel):
-    """Archetype enable/disable toggles and per-archetype configuration.
-
-    Requirements: 26-REQ-6.1 through 26-REQ-6.5, 26-REQ-6.E1, 46-REQ-2.1,
-                  98-REQ-8.1, 98-REQ-8.2, 98-REQ-8.3, 98-REQ-8.E1
-    """
+    """Per-archetype configuration overrides."""
 
     model_config = ConfigDict(extra="ignore")
 
-    reviewer: bool = Field(default=True, description="Enable reviewer archetype")
-    verifier: bool = Field(default=True, description="Enable verifier archetype")
-
-    instances: ArchetypeInstancesConfig = Field(
-        default_factory=ArchetypeInstancesConfig,
-        description="Per-archetype instance counts",
-    )
-    reviewer_config: ReviewerConfig = Field(
-        default_factory=ReviewerConfig,
-        description="Reviewer-specific configuration",
-    )
     overrides: dict[str, PerArchetypeConfig] = Field(
         default_factory=dict,
         description=("Unified per-archetype configuration tables. TOML: [archetypes.overrides.<name>]."),
-    )
-    custom: dict[str, CustomArchetypeConfig] = Field(
-        default_factory=dict,
-        description=(
-            "Custom archetype configurations keyed by archetype name. "
-            "TOML: [archetypes.custom.<name>]. "
-            "Requirements: 99-REQ-4.2"
-        ),
     )
 
 
@@ -536,22 +341,6 @@ class PricingConfig(BaseModel):
         default_factory=_default_pricing_models,
         description="Per-model pricing configuration",
     )
-
-
-class PlanningConfig(BaseModel):
-    """Planning and dispatch configuration.
-
-    Requirements: 39-REQ-1.E1, 39-REQ-2.1, 39-REQ-9.3
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    file_conflict_detection: bool = Field(
-        default=False,
-        description="Detect file conflicts between parallel tasks",
-    )
-
-    _auto_clamp = _auto_clamp_validator()
 
 
 class CachePolicy(StrEnum):
@@ -683,39 +472,11 @@ class NightShiftConfig(BaseModel):
         return v
 
 
-class PathsConfig(BaseModel):
-    """Path configuration for project directories.
-
-    Allows overriding the spec root directory location.
-    The default was changed from ``.specs`` to ``.agent-fox/specs``
-    to consolidate project artifacts under ``.agent-fox/``.
-
-    Requirements: 371-REQ-1.1
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    spec_root: str = Field(
-        default=".agent-fox/specs",
-        description="Spec root directory relative to project root",
-    )
-
-
 class WorkspaceConfig(BaseModel):
-    """Workspace health and cleanup configuration.
-
-    Requirements: 118-REQ-2.2, 02-REQ-1.1, 02-REQ-1.2, 02-REQ-1.3,
-                  02-REQ-1.E1, 02-REQ-1.E2
-    """
+    """Workspace configuration."""
 
     model_config = ConfigDict(extra="ignore")
 
-    force_clean: bool = Field(
-        default=False,
-        description=(
-            "Automatically remove untracked files and reset dirty index before session dispatch instead of aborting."
-        ),
-    )
     integration_branch: str = Field(
         default="main",
         description="Git branch used as the integration target for all merges.",
@@ -729,66 +490,21 @@ class WorkspaceConfig(BaseModel):
     )
 
 
-class SpecToolConfig(BaseModel):
-    """Configuration for the agentspec tool.
-
-    Holds model and authentication settings previously stored in
-    ``~/.af/settings.yaml``.
-
-    Requirements: 13-REQ-6.1
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    model: str = Field(
-        default="STANDARD",
-        description="Model tier name (e.g. 'STANDARD') or direct model ID for spec generation",
-    )
-    auth_method: str = Field(
-        default="",
-        description="Authentication method (empty string = default API key)",
-    )
-    vertex_project: str = Field(
-        default="",
-        description="Google Cloud Vertex AI project ID",
-    )
-    vertex_region: str = Field(
-        default="",
-        description="Google Cloud Vertex AI region",
-    )
-
-
 class AgentFoxConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    paths: PathsConfig = Field(default_factory=PathsConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
-    routing: RoutingConfig = Field(default_factory=RoutingConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     theme: ThemeConfig = Field(default_factory=ThemeConfig)
     platform: PlatformConfig = Field(default_factory=PlatformConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     archetypes: ArchetypesConfig = Field(default_factory=ArchetypesConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
-    planning: PlanningConfig = Field(default_factory=PlanningConfig)
     caching: CachingConfig = Field(default_factory=CachingConfig)
     night_shift: NightShiftConfig = Field(default_factory=NightShiftConfig)
-    spec_tool: SpecToolConfig = Field(default_factory=SpecToolConfig)
 
-    # Private attribute to track whether [spec_tool] was explicitly present
-    # in the raw merged config dict before Pydantic validation.  Set by
-    # _load_config_global_local().  Used by agentspec to decide whether
-    # to fall back to ~/.af/settings.yaml migration path.
-    # Requirements: 13-REQ-6.3
-    _spec_tool_explicit: bool = PrivateAttr(default=False)
-
-    # Private attribute to track whether [caching] was explicitly present
-    # in the raw merged config dict before Pydantic validation.  Set by
-    # _load_config_global_local().  Used by the orchestrator to decide
-    # whether to auto-upgrade cache policy to EXTENDED for multi-session
-    # runs (issue #743).
     _caching_explicit: bool = PrivateAttr(default=False)
 
 
@@ -913,14 +629,13 @@ def _load_config_single_file(path: Path) -> AgentFoxConfig:
 def _load_config_global_local() -> AgentFoxConfig:
     """Load config from local or global source.
 
-    If a local config (``.agent-fox/config.toml``) exists in CWD, it is
+    If a local config (``.nightshift/config.toml``) exists in CWD, it is
     used as the **sole** config source — the global config is not read.
 
-    Otherwise, the global config (``~/.agent-fox/config.toml``) is loaded,
-    auto-created if absent.
+    Otherwise, the global config (``~/.nightshift/config.toml``) is loaded.
+    If neither exists, a minimal local config is auto-created for reference.
     """
-    # --- Check for local config first ---
-    local_path = Path.cwd() / ".agent-fox" / "config.toml"
+    local_path = Path.cwd() / ".nightshift" / "config.toml"
 
     if local_path.exists():
         _check_symlink(local_path)
@@ -933,14 +648,11 @@ def _load_config_global_local() -> AgentFoxConfig:
 
         config = _validate_config_dict(local_dict, source=str(local_path))
 
-        if "spec_tool" in local_dict:
-            config._spec_tool_explicit = True
         if "caching" in local_dict:
             config._caching_explicit = True
 
         return config
 
-    # --- No local config — fall through to global ---
     logger.debug("No local config found at %s", local_path)
 
     global_dict: dict = {}
@@ -952,52 +664,42 @@ def _load_config_global_local() -> AgentFoxConfig:
         logger.debug("$HOME could not be resolved; global config loading skipped")
 
     if home is not None:
-        global_config_path = home / ".agent-fox" / "config.toml"
-        global_dir = home / ".agent-fox"
+        global_config_path = home / ".nightshift" / "config.toml"
 
         try:
             config_exists = global_config_path.exists()
-        except OSError as exc:
-            raise ConfigError(
-                f"Failed to create directory {global_dir}: {exc}",
-                path=str(global_dir),
-            ) from exc
+        except OSError:
+            config_exists = False
 
-        if not config_exists:
-            try:
-                os.makedirs(str(global_dir), mode=0o700, exist_ok=True)
-            except OSError as exc:
-                raise ConfigError(
-                    f"Failed to create directory {global_dir}: {exc}",
-                    path=str(global_dir),
-                ) from exc
+        if config_exists:
+            _check_symlink(global_config_path)
+            global_dict = _parse_toml_file(global_config_path)
+            logger.debug("Loaded global config from %s", global_config_path)
 
-            from agentfox.core.config_gen import generate_default_config
-
-            global_config_path.write_text(generate_default_config(), encoding="utf-8")
-
-        _check_symlink(global_config_path)
-        global_dict = _parse_toml_file(global_config_path)
-        logger.debug("Loaded global config from %s", global_config_path)
+    if not global_dict:
+        _create_minimal_local_config(local_path)
 
     config = _validate_config_dict(global_dict, source="global config")
 
-    if "spec_tool" in global_dict:
-        config._spec_tool_explicit = True
     if "caching" in global_dict:
         config._caching_explicit = True
 
     return config
 
 
+def _create_minimal_local_config(path: Path) -> None:
+    """Create a minimal local config with default values for reference."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        from agentfox.core.config_gen import generate_default_config
+
+        path.write_text(generate_default_config(), encoding="utf-8")
+        logger.info("Created minimal config at %s", path)
+    except OSError:
+        logger.debug("Could not create minimal config at %s", path)
+
+
 def resolve_spec_root(config: AgentFoxConfig, project_root: Path) -> Path:
-    """Resolve the spec root directory from config.
-
-    Args:
-        config: Loaded AgentFoxConfig.
-        project_root: Project root directory.
-
-    Returns:
-        Resolved Path to the spec root directory.
-    """
-    return project_root / config.paths.spec_root
+    """Resolve the spec root directory from config."""
+    return project_root / ".nightshift" / "specs"

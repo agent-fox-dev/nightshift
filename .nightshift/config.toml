@@ -8,18 +8,10 @@ merge_strategy = "direct"
 provider = "claude"
 
 [orchestrator]
-parallel = 4
 max_budget_usd = 20.0
 
 [platform]
 type = "github"
-
-[archetypes]
-reviewer = true
-verifier = true
-
-[archetypes.instances]
-verifier = 1
 
 [archetypes.overrides.coder]
 model_tier = "ADVANCED"

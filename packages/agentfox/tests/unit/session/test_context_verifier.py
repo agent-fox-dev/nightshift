@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import duckdb
 from agentfox.knowledge.migrations import run_migrations
-from agentfox.session.context import assemble_context
 
 
 def _make_conn() -> duckdb.DuckDBPyConnection:

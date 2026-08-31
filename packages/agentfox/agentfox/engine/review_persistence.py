@@ -23,7 +23,7 @@ from afaudit.sink import SessionSink, SinkDispatcher
 from agentfox.core.json_extraction import extract_json_array
 
 if TYPE_CHECKING:
-    from agentfox.knowledge.review_store import ReviewFinding
+    pass
 
 logger = logging.getLogger(__name__)
 

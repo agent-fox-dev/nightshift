@@ -237,7 +237,7 @@ async def _clean_conflicting_untracked(
             # AC-2: Backup divergent files before removal so committed coder
             # work is not silently destroyed.
             branch_slug = feature_branch.replace("/", "-")
-            conflicts_dir = repo_root / ".agent-fox" / "conflicts" / branch_slug
+            conflicts_dir = repo_root / ".nightshift" / "conflicts" / branch_slug
             conflicts_dir.mkdir(parents=True, exist_ok=True)
             logger.warning(
                 "Force-clean: backing up %d divergent untracked file(s) to '%s' for feature branch '%s': %s",
@@ -460,11 +460,11 @@ async def _harvest_under_lock(
     finally:
         # Always clean up the working tree, even on failure (issue #724).
         # These commands are idempotent and use check=False so they never
-        # raise.  --exclude .agent-fox protects active worktrees.
+        # raise.  --exclude .nightshift protects active worktrees.
         await run_git(["reset", "HEAD"], cwd=repo_root, check=False)
         await run_git(["checkout", "--", "."], cwd=repo_root, check=False)
         await run_git(
-            ["clean", "-fd", "--exclude", ".agent-fox"],
+            ["clean", "-fd", "--exclude", ".nightshift"],
             cwd=repo_root,
             check=False,
         )

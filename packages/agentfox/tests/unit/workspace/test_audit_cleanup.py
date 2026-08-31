@@ -17,7 +17,7 @@ from afaudit.cleanup import purge_stale_audit_files
 @pytest.fixture()
 def audit_dir(tmp_path: Path) -> Path:
     """Return a fresh temporary audit directory."""
-    d = tmp_path / ".agent-fox" / "audit"
+    d = tmp_path / ".nightshift" / "audit"
     d.mkdir(parents=True)
     return d
 

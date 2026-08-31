@@ -1,7 +1,7 @@
 """Unit tests for agentfox.schemas.session_summary module.
 
 Tests the ``SessionSummary`` Pydantic model that defines the canonical
-schema for ``.agent-fox/session-summary.json``.  Validates that the
+schema for ``.nightshift/session-summary.json``.  Validates that the
 model matches the inline JSON example in the coder profile template,
 round-trips correctly, and provides diagnostic validation errors.
 

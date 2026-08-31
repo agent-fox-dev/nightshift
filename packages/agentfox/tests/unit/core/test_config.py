@@ -26,10 +26,9 @@ class TestConfigDefaults:
         config = load_config(path=config_file)
 
         assert isinstance(config, AgentFoxConfig)
-        assert config.orchestrator.parallel == 4
-        assert config.orchestrator.sync_interval is None
         assert config.orchestrator.max_retries == 2
         assert config.orchestrator.session_timeout == 45
+        assert config.orchestrator.max_budget_usd == 20.0
         assert config.theme.playful is True
 
     def test_whitespace_only_toml_returns_defaults(self, tmp_path: Path) -> None:
@@ -39,7 +38,7 @@ class TestConfigDefaults:
 
         config = load_config(path=config_file)
 
-        assert config.orchestrator.parallel == 4
+        assert config.orchestrator.max_retries == 2
 
 
 class TestConfigOverrides:
@@ -48,23 +47,23 @@ class TestConfigOverrides:
     def test_toml_override_applied(self, tmp_path: Path) -> None:
         """Values in TOML override defaults."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text("[orchestrator]\nparallel = 4\n")
+        config_file.write_text("[orchestrator]\nmax_retries = 5\n")
 
         config = load_config(path=config_file)
 
-        assert config.orchestrator.parallel == 4
+        assert config.orchestrator.max_retries == 5
         # Other fields remain at defaults
-        assert config.orchestrator.sync_interval is None
+        assert config.orchestrator.session_timeout == 45
 
     def test_multiple_overrides(self, tmp_path: Path) -> None:
         """Multiple overrides are all applied."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text("[orchestrator]\nparallel = 4\nsync_interval = 10\n\n[theme]\nplayful = false\n")
+        config_file.write_text("[orchestrator]\nmax_retries = 5\nsession_timeout = 60\n\n[theme]\nplayful = false\n")
 
         config = load_config(path=config_file)
 
-        assert config.orchestrator.parallel == 4
-        assert config.orchestrator.sync_interval == 10
+        assert config.orchestrator.max_retries == 5
+        assert config.orchestrator.session_timeout == 60
         assert config.theme.playful is False
 
 
@@ -74,12 +73,12 @@ class TestConfigInvalidType:
     def test_string_for_int_raises_config_error(self, tmp_path: Path) -> None:
         """A string where an int is expected raises ConfigError."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text('[orchestrator]\nparallel = "not_a_number"\n')
+        config_file.write_text('[orchestrator]\nmax_retries = "not_a_number"\n')
 
         with pytest.raises(ConfigError) as exc_info:
             load_config(path=config_file)
 
-        assert "parallel" in str(exc_info.value).lower()
+        assert "max_retries" in str(exc_info.value).lower()
 
 
 class TestConfigMissingFile:
@@ -90,7 +89,7 @@ class TestConfigMissingFile:
         config = load_config(path=Path("/tmp/nonexistent_config_12345.toml"))
 
         assert isinstance(config, AgentFoxConfig)
-        assert config.orchestrator.parallel == 4
+        assert config.orchestrator.max_retries == 2
 
 
 class TestConfigInvalidTOML:
@@ -116,16 +115,16 @@ class TestConfigUnrecognizedKeys:
         config = load_config(path=config_file)
 
         assert isinstance(config, AgentFoxConfig)
-        assert config.orchestrator.parallel == 4  # defaults applied
+        assert config.orchestrator.max_retries == 2  # defaults applied
 
     def test_unknown_field_in_known_section_ignored(self, tmp_path: Path) -> None:
         """Unknown fields within known sections are silently ignored."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text("[orchestrator]\nparallel = 2\ntotally_unknown_field = 42\n")
+        config_file.write_text("[orchestrator]\nmax_retries = 3\ntotally_unknown_field = 42\n")
 
         config = load_config(path=config_file)
 
-        assert config.orchestrator.parallel == 2
+        assert config.orchestrator.max_retries == 3
 
 
 class TestBackendConfig:
@@ -187,12 +186,12 @@ class TestBackendConfig:
         The new config.backend.provider stays at its default 'claude'.
         """
         config_file = tmp_path / "config.toml"
-        config_file.write_text('[orchestrator]\nbackend = "deepagents"\nparallel = 4\n')
+        config_file.write_text('[orchestrator]\nbackend = "deepagents"\nmax_retries = 5\n')
 
         config = load_config(path=config_file)
 
         assert config.backend.provider == "claude"  # default, old key ignored
-        assert config.orchestrator.parallel == 4  # other fields still work
+        assert config.orchestrator.max_retries == 5  # other fields still work
 
 
 class TestConfigSymlinkRejection:
@@ -206,7 +205,7 @@ class TestConfigSymlinkRejection:
         from agentfox.core.errors import ConfigError
 
         target = tmp_path / "sensitive.toml"
-        target.write_text("[orchestrator]\nparallel = 99\n")
+        target.write_text("[orchestrator]\nmax_retries = 99\n")
         symlink = tmp_path / "config.toml"
         symlink.symlink_to(target)
 
@@ -236,8 +235,8 @@ class TestConfigSymlinkRejection:
     def test_non_symlink_config_loads_normally(self, tmp_path: Path) -> None:
         """A regular (non-symlink) config file still loads correctly."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text("[orchestrator]\nparallel = 4\n")
+        config_file.write_text("[orchestrator]\nmax_retries = 5\n")
 
         config = load_config(path=config_file)
 
-        assert config.orchestrator.parallel == 4
+        assert config.orchestrator.max_retries == 5

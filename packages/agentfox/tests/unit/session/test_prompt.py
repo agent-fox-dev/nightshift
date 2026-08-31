@@ -269,7 +269,7 @@ class TestAssemblyWithProjectDir:
 
     def test_project_profile_override(self, tmp_path: Path) -> None:
         """Project-level archetype profile is used when present."""
-        profiles_dir = tmp_path / ".agent-fox" / "profiles"
+        profiles_dir = tmp_path / ".nightshift" / "profiles"
         profiles_dir.mkdir(parents=True)
         (profiles_dir / "coder.md").write_text("CODER CONTENT")
         result = build_system_prompt("ctx", archetype="coder", project_dir=tmp_path)
@@ -277,7 +277,7 @@ class TestAssemblyWithProjectDir:
 
     def test_mode_specific_profile(self, tmp_path: Path) -> None:
         """Mode-specific profile is loaded when mode is provided."""
-        profiles_dir = tmp_path / ".agent-fox" / "profiles"
+        profiles_dir = tmp_path / ".nightshift" / "profiles"
         profiles_dir.mkdir(parents=True)
         (profiles_dir / "coder_fix.md").write_text("FIX MODE PROFILE")
         result = build_system_prompt("ctx", archetype="coder", mode="fix", project_dir=tmp_path)

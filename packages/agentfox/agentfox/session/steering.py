@@ -1,6 +1,6 @@
 """Steering document loading.
 
-Loads project-level steering directives from {project_root}/.agent-fox/steering.md
+Loads project-level steering directives from {project_root}/.nightshift/steering.md
 and detects placeholder-only content.
 
 Requirements: 64-REQ-2.1 through 64-REQ-2.E1, 64-REQ-5.1, 64-REQ-5.2
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Sentinel string that marks placeholder-only content (64-REQ-5.1)
 STEERING_PLACEHOLDER_SENTINEL: str = "<!-- steering:placeholder -->"
 
-# Steering filename within the .agent-fox directory
+# Steering filename within the .nightshift directory
 _STEERING_FILENAME: str = "steering.md"
 
 # HTML comment pattern for placeholder detection
@@ -25,7 +25,7 @@ _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
 def load_steering(project_root: Path) -> str | None:
-    """Load steering content from {project_root}/.agent-fox/steering.md.
+    """Load steering content from {project_root}/.nightshift/steering.md.
 
     Args:
         project_root: Project root directory.
@@ -38,7 +38,7 @@ def load_steering(project_root: Path) -> str | None:
     Requirements: 64-REQ-2.1, 64-REQ-2.3, 64-REQ-2.4, 64-REQ-2.E1,
                   64-REQ-5.1, 64-REQ-5.2
     """
-    steering_path = project_root / ".agent-fox" / _STEERING_FILENAME
+    steering_path = project_root / ".nightshift" / _STEERING_FILENAME
 
     # Security: reject symlinks to prevent path traversal (CWE-59)
     if steering_path.is_symlink():

@@ -16,18 +16,19 @@ class TestHiddenSectionsLoad:
     """TS-68-11: Manually-added hidden sections load correctly."""
 
     def test_routing_and_theme_load_correctly(self, tmp_path: Path):
-        """Config with routing and theme sections appended loads without error."""
+        """Config with unknown and theme sections appended loads without error.
+
+        RoutingConfig was removed; unknown sections are silently ignored.
+        Theme is a hidden section that still loads correctly.
+        """
         base = generate_default_config()
-        extra = "\n[routing]\nmax_timeout_retries = 3\n\n[theme]\nplayful = false\n"
+        extra = "\n[theme]\nplayful = false\n"
         content = base + extra
         config_file = tmp_path / "config.toml"
         config_file.write_text(content)
 
         config = load_config(config_file)
 
-        assert config.routing.max_timeout_retries == 3, (
-            f"routing.max_timeout_retries is {config.routing.max_timeout_retries}, expected 3"
-        )
         assert config.theme.playful is False, f"theme.playful is {config.theme.playful}, expected False"
 
     def test_knowledge_hidden_section_loads(self, tmp_path: Path):
@@ -41,14 +42,13 @@ class TestHiddenSectionsLoad:
         config = load_config(config_file)
 
         # ask_top_k was removed in spec 114; silently ignored via extra="ignore"
-        assert config.knowledge.store_path == ".agent-fox/knowledge.duckdb"
+        assert config.knowledge.store_path == ".nightshift/knowledge.duckdb"
         assert not hasattr(config.knowledge, "ask_top_k") or "ask_top_k" not in config.knowledge.model_fields
 
     def test_multiple_hidden_sections_load(self, tmp_path: Path):
         """Config with multiple hidden sections all load correctly."""
         base = generate_default_config()
         extra = (
-            "\n[routing]\nmax_timeout_retries = 1\n"
             "\n[theme]\nplayful = true\n"
             '\n[knowledge]\nstore_path = "custom.duckdb"\n'
         )
@@ -58,6 +58,5 @@ class TestHiddenSectionsLoad:
 
         config = load_config(config_file)
 
-        assert config.routing.max_timeout_retries == 1
         assert config.theme.playful is True
         assert config.knowledge.store_path == "custom.duckdb"

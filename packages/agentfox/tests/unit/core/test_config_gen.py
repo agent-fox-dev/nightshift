@@ -20,7 +20,6 @@ from agentfox.core.config import (
 )
 from agentfox.core.config_gen import (
     _FOOTER_COMMENT,
-    _GITHUB_REPO_URL,
     _PROMOTED_DEFAULTS,
     extract_schema,
     generate_default_config,
@@ -110,12 +109,8 @@ class TestTemplateGeneration:
         """
         template = generate_default_config()
 
-        # parallel has bounds 1-8 and is a promoted field
-        assert "1-8" in template, "Missing bounds for parallel field"
-        # parallel default is 4
-        assert "default: 4" in template, "Missing default for parallel"
-        # verifier instances is clamped to 1 (98-REQ-6.2) and is promoted
-        assert "verifier = 1" in template, "Missing verifier instances field in template"
+        # max_budget_usd is a promoted field
+        assert "max_budget_usd" in template, "Missing max_budget_usd promoted field"
 
     def test_template_has_section_headers(self) -> None:
         """TS-33-3: Template emits proper TOML section headers for visible sections.
@@ -126,30 +121,17 @@ class TestTemplateGeneration:
         lines = template.split("\n")
 
         # Sections with promoted fields have active (uncommented) headers
-        for section in ["backend", "orchestrator", "archetypes", "platform"]:
+        for section in ["backend", "orchestrator", "platform", "workspace", "night_shift"]:
             assert any(ln.strip() == f"[{section}]" for ln in lines), f"Missing active section header for [{section}]"
 
-        # [models] was removed — must not appear at all
-        assert not any(ln.strip() == "[models]" for ln in lines), "[models] must not appear as an active section header"
-        assert not any(ln.strip() == "# [models]" for ln in lines), (
-            "[models] must not appear as a commented section header"
-        )
-
-        # Security is hidden — must not appear even as a commented header
-        assert "# [security]" not in template
-        assert "[security]" not in template
-
         # Hidden sections must not appear (even commented)
-        for section in ["routing", "theme", "security", "knowledge"]:
+        for section in ["security", "theme", "knowledge", "pricing", "caching"]:
             assert f"[{section}]" not in template, (
                 f"Hidden section [{section}] should not appear in simplified template"
             )
             assert f"# [{section}]" not in template, (
                 f"Commented hidden section # [{section}] should not appear in template"
             )
-
-        # Visible sub-table headers
-        assert "[archetypes.instances]" in template
 
     def test_template_uncommented_is_valid_toml(self, tmp_path: Path) -> None:
         """TS-33-4: Uncommented template is valid TOML that load_config accepts.
@@ -196,37 +178,35 @@ class TestConfigMerge:
 
         Requirement: 33-REQ-2.1
         """
-        existing = "[orchestrator]\nparallel = 4\nsession_timeout = 60\n"
+        existing = "[orchestrator]\nmax_retries = 5\nsession_timeout = 60\n"
         merged = merge_existing_config(existing)
 
         # Values should be active (uncommented)
-        assert "parallel = 4" in merged
+        assert "max_retries = 5" in merged
         assert "session_timeout = 60" in merged
 
         # Ensure they are NOT commented out
         for line in merged.split("\n"):
-            if "parallel = 4" in line:
-                assert not line.lstrip().startswith("#"), "parallel = 4 should not be commented out"
+            if "max_retries = 5" in line:
+                assert not line.lstrip().startswith("#"), "max_retries = 5 should not be commented out"
             if "session_timeout = 60" in line:
                 assert not line.lstrip().startswith("#"), "session_timeout = 60 should not be commented out"
 
     def test_merge_adds_missing_fields(self) -> None:
         """TS-33-7: Merge adds fields present in schema but missing from file.
 
-        Only visible sections are added by merge. Hidden sections (routing,
-        theme, etc.) are not injected.
+        Only visible sections are added by merge. Hidden sections (theme,
+        security, etc.) are not injected.
         Requirement: 33-REQ-2.2
         """
-        existing = "[orchestrator]\nparallel = 4\n"
+        existing = "[orchestrator]\nmax_retries = 5\n"
         merged = merge_existing_config(existing)
 
         # Should have visible sections added
-        # [models] was removed — must not appear in merged output
-        assert "[models]" not in merged and "# [models]" not in merged
-        assert "[archetypes]" in merged or "# [archetypes]" in merged
+        assert "[backend]" in merged or "# [backend]" in merged
         # Hidden sections must NOT be added by merge
-        assert "# [routing]" not in merged and "[routing]" not in merged
         assert "# [theme]" not in merged and "[theme]" not in merged
+        assert "# [security]" not in merged and "[security]" not in merged
 
     def test_merge_preserves_user_comments(self) -> None:
         """TS-33-8: User comments not managed by the generator are preserved.
@@ -234,19 +214,19 @@ class TestConfigMerge:
         Requirement: 33-REQ-2.3
         """
         existing = (
-            "# My custom note about this project\n[orchestrator]\n# I set this high for the big repo\nparallel = 8\n"
+            "# My custom note about this project\n[orchestrator]\n# I set this high for safety\nmax_retries = 8\n"
         )
         merged = merge_existing_config(existing)
 
         assert "My custom note about this project" in merged
-        assert "I set this high for the big repo" in merged
+        assert "I set this high for safety" in merged
 
     def test_merge_marks_deprecated(self) -> None:
         """TS-33-9: Active fields not in schema are marked DEPRECATED.
 
         Requirement: 33-REQ-2.4
         """
-        existing = '[orchestrator]\nparallel = 4\nremoved_old_option = "value"\n'
+        existing = '[orchestrator]\nmax_retries = 4\nremoved_old_option = "value"\n'
         merged = merge_existing_config(existing)
 
         assert "DEPRECATED" in merged
@@ -276,19 +256,15 @@ class TestSchemaExtraction:
         expected = {
             "backend",
             "orchestrator",
-            "routing",
             "security",
             "theme",
             "platform",
             "knowledge",
             "archetypes",
             "pricing",
-            "planning",
             "caching",
             "night_shift",
-            "paths",
             "workspace",
-            "spec_tool",
         }
         assert section_paths == expected
 
@@ -384,20 +360,16 @@ class TestTemplateEdgeCases:
     def test_alias_used_in_template(self) -> None:
         """TS-33-E4: Fields with aliases use alias as TOML key.
 
-        After the reviewer consolidation, skeptic_config (alias skeptic_settings)
-        was replaced by reviewer_config (no alias). Verify the schema contains
-        the reviewer_config field under archetypes.
+        Verify the schema contains the overrides field under archetypes.
         Requirement: 33-REQ-3.E1
         """
         schema = extract_schema(AgentFoxConfig)
         archetypes_section = next(s for s in schema if s.path == "archetypes")
-        # Find the reviewer_config field (replaces skeptic_config/skeptic_settings)
-        reviewer_field = next(
-            (f for f in archetypes_section.fields if f.name == "reviewer_config"),
+        overrides_field = next(
+            (f for f in archetypes_section.fields if f.name == "overrides"),
             None,
         )
-        assert reviewer_field is not None, "reviewer_config not found in schema"
-        assert reviewer_field.name == "reviewer_config"
+        assert overrides_field is not None, "overrides not found in archetypes schema"
 
 
 class TestMergeEdgeCases:
@@ -457,23 +429,15 @@ class TestTemplateHeaderFooter:
     """Tests for config template header and footer comments (issue #360)."""
 
     def test_header_contains_version(self) -> None:
-        """Template header includes the agent-fox version that generated the file."""
+        """Template header includes the nightshift version that generated the file."""
         template = generate_default_config()
-        assert f"agent-fox {__version__}" in template, f"Template header must include version '{__version__}'"
+        assert f"nightshift {__version__}" in template, f"Template header must include version '{__version__}'"
 
-    def test_header_contains_github_repo_url(self) -> None:
-        """Template header includes the full GitHub repo URL."""
+    def test_footer_references_config_docs(self) -> None:
+        """Template footer references config-reference.md."""
         template = generate_default_config()
-        assert _GITHUB_REPO_URL in template, f"Template header must include GitHub URL '{_GITHUB_REPO_URL}'"
-
-    def test_footer_contains_full_docs_url(self) -> None:
-        """Template footer references the docs via full GitHub URL, not a relative path."""
-        template = generate_default_config()
-        assert "https://github.com/agent-fox-dev/agent-fox/blob/main/docs/config-reference.md" in template, (
-            "Template footer must reference docs via full GitHub URL"
-        )
-        assert "see docs/config-reference.md" not in template, (
-            "Template footer must not use a bare relative path to docs"
+        assert "docs/config-reference.md" in template, (
+            "Template footer must reference docs/config-reference.md"
         )
 
     def test_footer_appears_exactly_once(self) -> None:
@@ -507,11 +471,11 @@ class TestCodingDeprecation:
         )
 
     def test_ac4_project_config_has_no_active_coding_line(self) -> None:
-        """AC-4: The project's own .agent-fox/config.toml must not have active coding =."""
+        """AC-4: The project's own .nightshift/config.toml must not have active coding =."""
         import re
         from pathlib import Path
 
-        config_path = Path(__file__).parents[5] / ".agent-fox" / "config.toml"
+        config_path = Path(__file__).parents[5] / ".nightshift" / "config.toml"
         if not config_path.exists():
             return  # No project config to check
 

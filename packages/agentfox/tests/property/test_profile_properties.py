@@ -27,7 +27,7 @@ def test_layer_order(archetype: str) -> None:
 
     tmp_dir = Path(tempfile.mkdtemp())
     try:
-        profiles_dir = tmp_dir / ".agent-fox" / "profiles"
+        profiles_dir = tmp_dir / ".nightshift" / "profiles"
         profiles_dir.mkdir(parents=True)
         marker = f"PROFILE_{archetype.upper()}_CONTENT"
         (profiles_dir / f"{archetype}.md").write_text(marker)
@@ -60,7 +60,7 @@ def test_override_precedence(archetype: str) -> None:
 
     tmp_dir = Path(tempfile.mkdtemp())
     try:
-        profiles_dir = tmp_dir / ".agent-fox" / "profiles"
+        profiles_dir = tmp_dir / ".nightshift" / "profiles"
         profiles_dir.mkdir(parents=True)
         (profiles_dir / f"{archetype}.md").write_text(f"CUSTOM:{archetype}")
 
@@ -104,7 +104,7 @@ def test_permission_inheritance(preset: str) -> None:
 
     tmp_dir = Path(tempfile.mkdtemp())
     try:
-        profiles_dir = tmp_dir / ".agent-fox" / "profiles"
+        profiles_dir = tmp_dir / ".nightshift" / "profiles"
         profiles_dir.mkdir(parents=True)
         (profiles_dir / "custom_arch.md").write_text("# Custom Arch Profile")
 

@@ -18,7 +18,7 @@ def test_2_layer_order(tmp_path: Path) -> None:
     """
     from agentfox.session.prompt import build_system_prompt
 
-    profiles_dir = tmp_path / ".agent-fox" / "profiles"
+    profiles_dir = tmp_path / ".nightshift" / "profiles"
     profiles_dir.mkdir(parents=True)
 
     (profiles_dir / "coder.md").write_text("PROFILE_CONTENT_MARKER")

@@ -94,7 +94,7 @@ class TestSilentIgnoreOldKeys:
         default_config = AgentFoxConfig()
 
         # Remaining fields should have default values
-        assert config.orchestrator.parallel == default_config.orchestrator.parallel
+        assert config.orchestrator.max_retries == default_config.orchestrator.max_retries
         assert config.orchestrator.max_budget_usd == default_config.orchestrator.max_budget_usd
 
         # The models field must not exist

@@ -1,74 +1,33 @@
 # Night Shift Configuration Reference
 
-This document lists every configuration option supported by Night Shift.
-Add any section below manually to `.agent-fox/config.toml` to override
-the defaults.
+Night Shift reads configuration from `.nightshift/config.toml` (local,
+project-level) or `~/.nightshift/config.toml` (global, user-level). Local
+config takes precedence — when a local config exists, the global config is
+ignored entirely. If neither exists, a minimal local config is auto-created
+with default values for reference.
 
 ### General behavior
 
 - **Symlinks rejected.** `config.toml` must be a regular file, not a symlink.
-  If it is a symlink, the system silently uses all default values (security
-  measure against CWE-59 path traversal). Check logs for a warning.
 - **Out-of-range values clamped.** Numeric values outside their valid bounds
-  are silently clamped to the nearest bound (e.g., `parallel = 20` becomes
-  `8`). A warning is logged when clamping occurs.
-- **Unknown keys.** All sections silently ignore unknown keys (typos use the
-  default).
+  are silently clamped to the nearest bound. A warning is logged.
+- **Unknown keys ignored.** All sections silently ignore unknown keys.
 
 ## Table of Contents
 
-- [paths](#paths)
-- [workspace](#workspace)
 - [backend](#backend)
 - [orchestrator](#orchestrator)
-- [routing](#routing)
 - [security](#security)
 - [theme](#theme)
 - [platform](#platform)
 - [knowledge](#knowledge)
   - [knowledge.provider](#knowledgeprovider)
 - [archetypes](#archetypes)
-  - [archetypes.instances](#archetypesinstances)
-  - [archetypes.reviewer_config](#archetypesreviewer_config)
   - [archetypes.overrides](#archetypesoverrides)
-  - [archetypes.custom](#archetypescustom)
 - [pricing](#pricing)
 - [night_shift](#night_shift)
+- [workspace](#workspace)
 - [caching](#caching)
-
----
-
-## paths
-
-Controls project directory locations.
-
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `spec_root` | str | `".agent-fox/specs"` | -- | Spec root directory relative to project root. |
-
-```toml
-[paths]
-spec_root = ".agent-fox/specs"
-```
-
----
-
-## workspace
-
-Controls workspace health checks, automatic cleanup, and branch configuration.
-
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `force_clean` | bool | `false` | -- | Automatically remove untracked files and reset dirty index before session dispatch instead of aborting. Can also be set via `--force-clean` CLI flag on the `code` command (CLI flag takes precedence). |
-| `integration_branch` | str | `"main"` | -- | Git branch used as the integration target for all merges. Feature branches are created from this branch and squash-merged back into it. Use `"develop"` for git-flow workflows. |
-| `merge_strategy` | str | `"direct"` | -- | Post-session branch integration strategy: `"direct"` (squash-merge to integration branch), `"branch"` (keep feature branch locally without merging), or `"pr"` (open a GitHub PR targeting the integration branch). |
-
-```toml
-[workspace]
-force_clean = false
-integration_branch = "main"
-merge_strategy = "direct"
-```
 
 ---
 
@@ -76,13 +35,9 @@ merge_strategy = "direct"
 
 Selects the AI backend provider used for agent sessions.
 
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `provider` | str | `"claude"` | -- | Backend provider: `"claude"`, `"deepagents"`, or `"google"` |
-
-The `"google"` provider name maps internally to the Google ADK backend.
-
-**Example:**
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | str | `"claude"` | Backend provider: `"claude"`, `"deepagents"`, or `"google"` |
 
 ```toml
 [backend]
@@ -93,58 +48,21 @@ provider = "claude"
 
 ## orchestrator
 
-Controls the orchestration loop: parallelism, retries, timeouts, and budgets.
+Controls session retries, timeouts, and budgets.
 
 | Field | Type | Default | Bounds | Description |
 |-------|------|---------|--------|-------------|
-| `parallel` | int | `4` | 1--8 | Maximum number of parallel coding sessions |
-| `max_budget_usd` | float | `20.0` | >= 0 | Per-session spend cap in USD; `0` means unlimited |
-| `sync_interval` | int | `5` | >= 0 | Task-group sync interval in number of sessions |
-| `hot_load` | bool | `true` | -- | Hot-reload spec files between sessions without restarting the orchestrator |
-| `max_retries` | int | `2` | >= 0 | Maximum number of automatic retries per task group before blocking the node |
+| `max_retries` | int | `2` | >= 0 | Maximum retries per task group |
 | `session_timeout` | int | `45` | >= 1 | Per-session timeout in minutes |
-| `inter_session_delay` | int | `3` | >= 0 | Delay in seconds between consecutive session launches |
 | `max_cost` | float\|null | `null` | -- | Hard cost ceiling for the entire run (null = no limit) |
 | `max_sessions` | int\|null | `null` | -- | Maximum total sessions in a run (null = no limit) |
-| `audit_retention_runs` | int | `20` | >= 1 | Number of run audit logs to retain on disk |
-| `max_blocked_fraction` | float\|null | `null` | 0.0--1.0 | Abort the run when this fraction of nodes are blocked; `null` disables |
-| `max_review_fraction` | float | `0.34` | 0.0--1.0 | Maximum fraction of parallel slots for review sessions; `auto_pre` nodes exempt |
-| `watch_interval` | int | `60` | >= 10 | Seconds between polls in `--watch` mode |
-
-**Example:**
+| `max_budget_usd` | float | `20.0` | >= 0 | Per-session spend cap in USD; `0` = unlimited |
 
 ```toml
 [orchestrator]
-parallel = 4
 max_budget_usd = 10.0
 session_timeout = 45
 max_retries = 3
-```
-
----
-
-## routing
-
-Timeout retry and session extension configuration. Controls how the
-orchestrator retries sessions that exceed their timeout, extending the
-timeout and max-turns limits on each retry.
-
-> **Note:** This is a hidden section -- it does not appear in the simplified
-> template. Add it manually when you want to tune timeout retry behaviour.
-
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `max_timeout_retries` | int | `2` | >= 0 | Maximum timeout retries before falling through to failure handler (0 = disable timeout handling) |
-| `timeout_multiplier` | float | `1.5` | >= 1.0 | Factor by which `max_turns` and `session_timeout` are extended on each timeout retry |
-| `timeout_ceiling_factor` | float | `2.0` | >= 1.0 | Maximum `session_timeout` as a multiple of the original configured value |
-
-**Example:**
-
-```toml
-[routing]
-max_timeout_retries = 3
-timeout_multiplier = 1.5
-timeout_ceiling_factor = 2.0
 ```
 
 ---
@@ -153,12 +71,10 @@ timeout_ceiling_factor = 2.0
 
 Controls the bash command allowlist that agent sessions may execute.
 
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `bash_allowlist` | list[str]\|null | `null` | -- | Full replacement allowlist (null uses the built-in list) |
-| `bash_allowlist_extend` | list[str] | `[]` | -- | Additional commands appended to the built-in allowlist |
-
-**Example:**
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bash_allowlist` | list[str]\|null | `null` | Full replacement allowlist (null uses the built-in list) |
+| `bash_allowlist_extend` | list[str] | `[]` | Additional commands appended to the built-in allowlist |
 
 ```toml
 [security]
@@ -172,45 +88,35 @@ bash_allowlist_extend = ["my-custom-tool", "deploy.sh"]
 Rich text styles for terminal output. Values use
 [Rich markup](https://rich.readthedocs.io/en/stable/style.html) syntax.
 
-> **Note:** This is a hidden section -- add it manually to customise colours.
-
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `playful` | bool | `true` | -- | Enable playful emoji/banner output style |
-| `header` | str | `"bold #ff8c00"` | -- | Style for section headers |
-| `success` | str | `"bold green"` | -- | Style for success messages |
-| `error` | str | `"bold red"` | -- | Style for error messages |
-| `warning` | str | `"bold yellow"` | -- | Style for warning messages |
-| `info` | str | `"#daa520"` | -- | Style for informational messages |
-| `tool` | str | `"bold #cd853f"` | -- | Style for tool/command output |
-| `muted` | str | `"dim"` | -- | Style for secondary/muted text |
-
-**Example:**
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `playful` | bool | `true` | Enable playful emoji/banner output style |
+| `header` | str | `"bold #ff8c00"` | Style for section headers |
+| `success` | str | `"bold green"` | Style for success messages |
+| `error` | str | `"bold red"` | Style for error messages |
+| `warning` | str | `"bold yellow"` | Style for warning messages |
+| `info` | str | `"#daa520"` | Style for informational messages |
+| `tool` | str | `"bold #cd853f"` | Style for tool/command output |
+| `muted` | str | `"dim"` | Style for secondary/muted text |
 
 ```toml
 [theme]
 playful = false
 header = "bold blue"
-success = "green"
 ```
 
 ---
 
 ## platform
 
-Issue-tracker integration for Night Shift and the fix pipeline. Supports
-GitHub, GitLab, and Gitea forges.
+Issue-tracker integration. Supports GitHub, GitLab, and Gitea.
 
-> **Note:** This is a hidden section.
-
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `type` | str | `"none"` | -- | Platform type: `"none"`, `"github"`, `"gitlab"`, or `"gitea"` |
-| `url` | str | `""` | -- | Issue tracker base URL (inferred from type when left empty for GitHub and GitLab; **required** for Gitea) |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `type` | str | `"none"` | Platform type: `"none"`, `"github"`, `"gitlab"`, or `"gitea"` |
+| `url` | str | `""` | Issue tracker base URL (inferred for GitHub/GitLab; **required** for Gitea) |
 
 ### Authentication
-
-Each platform requires a token in an environment variable:
 
 | Platform | Environment variable | Default host |
 |----------|---------------------|--------------|
@@ -218,72 +124,39 @@ Each platform requires a token in an environment variable:
 | `gitlab` | `GITLAB_TOKEN` | `gitlab.com` |
 | `gitea`  | `GITEA_TOKEN` | *(none — `url` required)* |
 
-The repository owner and name are resolved automatically from the git remote
-URL. For GitLab, the project path (`namespace/project`) is parsed from the
-remote.
-
-**SSRF protection:** The `url` field is validated against private, loopback,
-link-local, and reserved IP ranges at both configuration time and connection
-time. Self-hosted instances on internal networks with private IPs will be
-rejected. All API calls automatically retry up to 3 times on transport
-errors with exponential backoff.
-
-**Examples:**
-
 ```toml
-# GitHub (public or Enterprise)
 [platform]
 type = "github"
-url = "https://github.com/my-org/my-repo"
-
-# GitLab (public or self-hosted)
-[platform]
-type = "gitlab"
-url = "https://gitlab.com/my-group/my-project"
-
-# Gitea (self-hosted — url is required)
-[platform]
-type = "gitea"
-url = "https://gitea.example.com/my-org/my-repo"
 ```
 
 ---
 
 ## knowledge
 
-Knowledge store configuration. The knowledge store persists session outcomes,
-review findings, and other artifacts across sessions.
+Knowledge store configuration. Persists session outcomes, review findings,
+and other artifacts across sessions.
 
-> **Note:** This is a hidden section.
-
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `store_path` | str | `".agent-fox/knowledge.duckdb"` | -- | Path to the DuckDB knowledge store file |
-| `provider` | table | -- | -- | Knowledge provider configuration (see `[knowledge.provider]`) |
-
-Old fields (`embedding_model`, `dedup_similarity_threshold`,
-`confidence_threshold`, `fact_cache_enabled`, `decay_half_life_days`, etc.)
-are silently ignored for backward compatibility but have no effect.
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `store_path` | str | `".nightshift/knowledge.duckdb"` | Path to the DuckDB knowledge store file |
+| `provider` | table | -- | Knowledge provider configuration (see below) |
 
 ```toml
 [knowledge]
-store_path = ".agent-fox/knowledge.duckdb"
+store_path = ".nightshift/knowledge.duckdb"
 ```
 
 ### knowledge.provider
 
-Configuration for the pluggable knowledge provider. Controls retrieval limits
-for the context injected into session prompts.
+Controls retrieval limits for context injected into session prompts.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_items` | int | `10` | Max total retrieval items across all categories |
-| `max_cross_group_items` | int | `3` | Max cross-group retrieval items (findings from other groups in the same spec) |
+| `max_items` | int | `10` | Max total retrieval items |
+| `max_cross_group_items` | int | `3` | Max cross-group retrieval items |
 | `max_cross_spec_items` | int | `3` | Max cross-spec drift items |
-| `max_drift_age_days` | int\|null | `30` | Max age in days for active drift findings; `null` disables age-based pruning |
-| `max_summary_items` | int | `5` | Max session summaries from prior task groups injected as context |
-
-**Example:**
+| `max_drift_age_days` | int\|null | `30` | Max age in days for drift findings; `null` disables pruning |
+| `max_summary_items` | int | `5` | Max session summaries injected as context |
 
 ```toml
 [knowledge.provider]
@@ -295,259 +168,111 @@ max_cross_group_items = 3
 
 ## archetypes
 
-Archetype enable/disable toggles and per-archetype advanced configuration.
+Per-archetype configuration overrides.
 
-After the reviewer consolidation, the former `skeptic`, `oracle`, and `auditor`
-archetypes are unified into a single `reviewer` archetype with mode-based
-behaviour (`pre-review`, `drift-review`, `audit-review`, `fix-review`).
-
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `reviewer` | bool | `true` | -- | Enable the Reviewer archetype (all modes: pre-review, drift-review, audit-review, fix-review) |
-| `verifier` | bool | `true` | -- | Enable the Verifier archetype (post-code correctness checks) |
-| `instances` | table | see below | -- | Per-archetype instance counts |
-| `reviewer_config` | table | see below | -- | Reviewer-specific configuration |
-| `overrides` | dict[str, PerArchetypeConfig] | `{}` | -- | Unified per-archetype config overrides (model tier, variant, max turns, thinking, allowlist, budget) |
-| `custom` | dict[str, CustomArchetypeConfig] | `{}` | -- | Custom archetype definitions |
-
-**Example:**
-
-```toml
-[archetypes]
-reviewer = true
-verifier = true
-
-# Override model tier for coder archetype
-[archetypes.overrides.coder]
-model_tier = "ADVANCED"
-max_turns = 100
-```
-
-### archetypes.instances
-
-Controls how many parallel instances of each archetype are spawned.
-
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `reviewer` | int | `1` | 1--5 | Number of parallel Reviewer instances |
-| `verifier` | int | `1` | 1 | Number of Verifier instances (always clamped to 1) |
-
-**Example:**
-
-```toml
-[archetypes.instances]
-reviewer = 2
-```
-
-### archetypes.reviewer_config
-
-Reviewer-specific configuration, consolidating settings for all review modes.
-
-| Field | Type | Default | Bounds | Description |
-|-------|------|---------|--------|-------------|
-| `pre_flight_block_threshold` | int | `1` | >= 0 | Finding count to block for pre-flight review findings |
-| `pre_flight_drift_block_threshold` | int\|null | `1` | -- | Drift finding count to block for pre-flight drift findings; `null` = advisory only |
-| `audit_min_ts_entries` | int | `5` | >= 1 | Minimum test-spec entries to trigger audit-review injection |
-| `audit_max_retries` | int | `1` | >= 0 | Maximum audit-review/coder retry cycles before permanently blocking. Tracked independently of the generic failure counter. Set to 0 to block on the first audit-review failure |
-
-**Example:**
-
-```toml
-[archetypes.reviewer_config]
-pre_flight_block_threshold = 3
-audit_min_ts_entries = 3
-audit_max_retries = 1
-```
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `overrides` | dict[str, table] | `{}` | Per-archetype config overrides (see below) |
 
 ### archetypes.overrides
 
-Unified per-archetype configuration tables. Each override is keyed by
-archetype name and supports:
+Each override is keyed by archetype name:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `model_tier` | str\|null | `null` | Model tier override (SIMPLE, STANDARD, ADVANCED). Null = registry default. |
-| `model_variant` | str\|null | `null` | Model variant override (fast, standard, extended). Null = registry default. |
-| `max_turns` | int\|null | `null` | Max turns override. 0 = unlimited. Null = registry default. |
-| `thinking_mode` | str\|null | `null` | Extended thinking mode: `adaptive` or `disabled`. Null = registry default. |
-| `effort` | str\|null | `null` | Output effort level: `low`, `medium`, `high`, `xhigh`, or `max`. Controls thinking depth and token spend. Null = registry default. |
-| `allowlist` | list[str]\|null | `null` | Bash command allowlist override. Null = registry default. |
-| `max_budget_usd` | float\|null | `null` | Per-archetype budget ceiling in USD. Null = inherit global `orchestrator.max_budget_usd`. 0 = unlimited. |
-| `compaction` | bool\|null | `null` | Enable server-side context compaction to prevent context overflow in long sessions. Null = registry default (archetype-specific: `true` for coder, `false` for others). |
-| `modes` | dict[str, PerArchetypeConfig] | `{}` | Per-mode overrides (same fields as above, keyed by mode name). |
-
-**Example:**
+| `model_tier` | str\|null | `null` | Model tier: SIMPLE, STANDARD, ADVANCED |
+| `model_variant` | str\|null | `null` | Model variant: fast, standard, extended |
+| `max_turns` | int\|null | `null` | Max turns (0 = unlimited) |
+| `thinking_mode` | str\|null | `null` | `adaptive` or `disabled` |
+| `effort` | str\|null | `null` | `low`, `medium`, `high`, `xhigh`, or `max` |
+| `allowlist` | list[str]\|null | `null` | Bash command allowlist override |
+| `max_budget_usd` | float\|null | `null` | Per-archetype budget ceiling in USD |
+| `compaction` | bool\|null | `null` | Enable server-side context compaction |
+| `modes` | dict[str, table] | `{}` | Per-mode overrides (same fields) |
 
 ```toml
-# Override the coder archetype model tier:
 [archetypes.overrides.coder]
 model_tier = "ADVANCED"
 
-[archetypes.overrides.reviewer]
+[archetypes.overrides.reviewer.modes.fix-review]
 model_tier = "ADVANCED"
 max_turns = 120
-
-[archetypes.overrides.reviewer.modes.pre-review]
-model_tier = "STANDARD"
-max_turns = 50
-```
-
-### archetypes.custom
-
-Custom (project-defined) archetype configurations. Each entry specifies
-which built-in archetype's permission profile the custom archetype inherits.
-The custom archetype must have a corresponding profile in
-`.agent-fox/profiles/`.
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `permissions` | str | `"coder"` | Built-in archetype name whose permissions to inherit |
-
-**Example:**
-
-```toml
-[archetypes.custom.my-analyzer]
-permissions = "coder"
 ```
 
 ---
 
 ## pricing
 
-Custom per-model pricing for cost tracking. By default Night Shift ships with
-pricing for the standard Claude models. Override here when using custom
-deployments or when Anthropic updates prices.
+Custom per-model pricing for cost tracking.
 
-> **Note:** This is a hidden section.
+| Sub-field | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `input_price_per_m` | float | `0.0` | USD per million input tokens |
+| `output_price_per_m` | float | `0.0` | USD per million output tokens |
+| `cache_read_price_per_m` | float | `0.0` | USD per million cache-read tokens |
+| `cache_creation_price_per_m` | float | `0.0` | USD per million cache-creation tokens |
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `models` | dict[str, ModelPricing] | (see below) | Per-model pricing entries |
-
-Each entry in `models` is a TOML inline table or sub-table with these fields:
-
-| Sub-field | Type | Default | Bounds | Description |
-|-----------|------|---------|--------|-------------|
-| `input_price_per_m` | float | `0.0` | >= 0 | USD per million input tokens |
-| `output_price_per_m` | float | `0.0` | >= 0 | USD per million output tokens |
-| `cache_read_price_per_m` | float | `0.0` | >= 0 | USD per million cache-read input tokens |
-| `cache_creation_price_per_m` | float | `0.0` | >= 0 | USD per million cache-creation input tokens |
-
-**Built-in defaults:**
-
-| Model | Input $/M | Output $/M | Cache read $/M | Cache creation $/M |
-|-------|-----------|------------|----------------|--------------------|
-| `claude-haiku-4-5` | 1.00 | 5.00 | 0.10 | 1.25 |
-| `claude-sonnet-4-6` | 3.00 | 15.00 | 0.30 | 3.75 |
-| `claude-opus-4-5` | 5.00 | 25.00 | 0.50 | 6.25 |
-| `claude-opus-4-6` | 5.00 | 25.00 | 0.50 | 6.25 |
-| `claude-opus-4-6[1m]` | 5.00 | 25.00 | 0.50 | 6.25 |
-
-**Example (override a single model's pricing):**
+Built-in defaults cover `claude-haiku-4-5`, `claude-sonnet-4-6`,
+`claude-opus-4-5`, and `claude-opus-4-6`.
 
 ```toml
 [pricing.models.claude-sonnet-4-6]
 input_price_per_m = 3.00
 output_price_per_m = 15.00
-cache_read_price_per_m = 0.30
-cache_creation_price_per_m = 3.75
 ```
 
 ---
 
 ## night_shift
 
-Daemon configuration for the night-shift fix-only daemon
-(`nightshift`). Night-shift polls for `af:fix`-labelled issues
-and processes them through a multi-stage fix pipeline.
-
-> **Note:** This is a hidden section.
+Daemon configuration for polling and fix processing.
 
 | Field | Type | Default | Bounds | Description |
 |-------|------|---------|--------|-------------|
 | `issue_check_interval` | int | `900` | >= 60 | Seconds between issue-tracker checks |
+| `pr_check_interval` | int | `900` | >= 60 | Seconds between PR status poll cycles |
 | `push_fix_branch` | bool | `false` | -- | Push fix branches to origin before harvest |
-| `max_parallel` | int | `1` | 1--8 | Maximum number of issues processed concurrently. Independent issues (no dependency edges) are dispatched in parallel up to this limit. Issues with dependencies wait for their prerequisites to complete. Default `1` preserves serial processing. |
-
-**Example:**
+| `max_parallel` | int | `1` | 1--8 | Maximum issues processed concurrently |
+| `max_pr_retries` | int | `2` | 0--10 | Maximum PR feedback iterations |
 
 ```toml
 [night_shift]
 issue_check_interval = 1800
 max_parallel = 3
+push_fix_branch = true
 ```
 
-### Pipeline model tiers
+---
 
-Each pipeline stage runs a specific archetype and mode. The default model
-tiers are set in the archetype registry and can be overridden via
-[`archetypes.overrides`](#archetypesoverrides) — night-shift has no
-separate model configuration of its own.
+## workspace
 
-| Stage | Archetype | Mode | Default tier | Default model |
-|-------|-----------|------|--------------|---------------|
-| Batch triage (dependency ordering) | `maintainer` | `hunt` | SIMPLE | `claude-haiku-4-5` |
-| Issue triage analysis | `maintainer` | `fix-triage` | STANDARD | `claude-sonnet-4-6` |
-| Coder (fix implementation) | `coder` | `fix` | STANDARD | `claude-sonnet-4-6` |
-| Reviewer (fix review) | `reviewer` | `fix-review` | ADVANCED | `claude-opus-4-6` |
-| Staleness detection | *(direct call)* | -- | ADVANCED | `claude-opus-4-6` |
+Branch integration configuration.
 
-All stages except staleness detection resolve their model via
-`resolve_model_tier()`, which checks overrides in this order:
-
-1. Mode-level override: `archetypes.overrides.<archetype>.modes.<mode>.model_tier`
-2. Archetype-level override: `archetypes.overrides.<archetype>.model_tier`
-3. Registry default (the values in the table above)
-
-Staleness detection bypasses this resolution and is hardcoded to ADVANCED.
-
-**Example — upgrade the coder to ADVANCED for higher-quality fixes:**
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `integration_branch` | str | `"main"` | Git branch used as the integration target for merges |
+| `merge_strategy` | str | `"direct"` | `"direct"` (squash-merge), `"branch"` (keep locally), or `"pr"` (open PR) |
 
 ```toml
-[archetypes.overrides.coder.modes.fix]
-model_tier = "ADVANCED"
-```
-
-**Example — downgrade triage to SIMPLE to reduce cost:**
-
-```toml
-[archetypes.overrides.maintainer.modes.fix-triage]
-model_tier = "SIMPLE"
+[workspace]
+integration_branch = "main"
+merge_strategy = "direct"
 ```
 
 ---
 
 ## caching
 
-Prompt caching configuration. Controls whether `cache_control` markers are
-injected into Anthropic API requests, reducing input token costs on cache hits.
+Prompt caching configuration.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `cache_policy` | str | `"DEFAULT"` | Caching strategy: `NONE`, `DEFAULT` (5-min TTL), or `EXTENDED` (1-hour TTL) |
-
-**Policies:**
-
-| Policy | `cache_control` marker | TTL | Cost trade-off |
-|--------|------------------------|-----|----------------|
-| `NONE` | None | -- | No caching -- identical behaviour to pre-caching releases |
-| `DEFAULT` | `{"type": "ephemeral"}` | 5 minutes | Reduces input costs on repeated calls within a short window |
-| `EXTENDED` | `{"type": "ephemeral", "ttl": "1h"}` | 1 hour | Higher cache-write cost; pays off on long-running sessions |
-
-**Token threshold:** Caching is automatically skipped when the system prompt
-is estimated to be below the model's minimum cacheable size (~2048 tokens
-for Sonnet-class models, ~4096 for Opus/Haiku-class). Prompts below this
-threshold are passed through unchanged regardless of policy.
-
-**Example:**
+| `cache_policy` | str | `"DEFAULT"` | `NONE`, `DEFAULT` (5-min TTL), or `EXTENDED` (1-hour TTL) |
 
 ```toml
 [caching]
-cache_policy = "DEFAULT"   # NONE | DEFAULT | EXTENDED
+cache_policy = "DEFAULT"
 ```
-
-**Rollback:** Set `cache_policy = "NONE"` to fully disable caching with no
-code changes required.
 
 ---
 

@@ -6,7 +6,7 @@ Requirements: 103-REQ-1.1, 103-REQ-2.1, 103-REQ-3.1, 103-REQ-4.1, 103-REQ-6.1,
 
 Execution Paths:
   Path 1 (SMOKE-1): _execute_query → AgentTraceSink → agent_{run_id}.jsonl
-  Path 2 (SMOKE-2): _setup_infrastructure → no .agent-fox/*.jsonl files
+  Path 2 (SMOKE-2): _setup_infrastructure → no .nightshift/*.jsonl files
 """
 
 from __future__ import annotations
@@ -172,21 +172,21 @@ class TestFullSessionTrace:
 
 
 class TestNoLegacyTraceFiles:
-    """TS-103-SMOKE-2: No files created at .agent-fox/*.jsonl.
+    """TS-103-SMOKE-2: No files created at .nightshift/*.jsonl.
 
     Execution Path 2 from design.md.
     Requirements: 103-REQ-7.2, 103-REQ-7.3
 
     Verifies that the infrastructure registers AgentTraceSink (not JsonlSink)
-    and all trace output goes to .agent-fox/audit/agent_*.jsonl, never to
-    .agent-fox/{timestamp}_{session_id}.jsonl.
+    and all trace output goes to .nightshift/audit/agent_*.jsonl, never to
+    .nightshift/{timestamp}_{session_id}.jsonl.
     """
 
     def test_no_legacy_trace_files(self, tmp_path: Path) -> None:
-        """AgentTraceSink writes only to audit/, not .agent-fox/ root."""
-        audit_dir = tmp_path / ".agent-fox" / "audit"
+        """AgentTraceSink writes only to audit/, not .nightshift/ root."""
+        audit_dir = tmp_path / ".nightshift" / "audit"
         audit_dir.mkdir(parents=True)
-        dot_agent_fox = tmp_path / ".agent-fox"
+        dot_agent_fox = tmp_path / ".nightshift"
 
         run_id = "20260414_120000_abc123"
 
@@ -205,11 +205,11 @@ class TestNoLegacyTraceFiles:
         agent_files = list(audit_dir.glob("agent_*.jsonl"))
         assert len(agent_files) >= 1, "Expected at least one agent_*.jsonl in audit/"
 
-        # Verify: no *.jsonl files in .agent-fox/ root (only in audit/)
+        # Verify: no *.jsonl files in .nightshift/ root (only in audit/)
         legacy_files = list(dot_agent_fox.glob("*.jsonl"))
         assert len(legacy_files) == 0, (
-            f"Found legacy trace files in .agent-fox/ root: {legacy_files}. "
-            "All traces should be in .agent-fox/audit/ only."
+            f"Found legacy trace files in .nightshift/ root: {legacy_files}. "
+            "All traces should be in .nightshift/audit/ only."
         )
 
     def test_setup_infrastructure_registers_agent_trace_sink_not_jsonl_sink(self, tmp_path: Path) -> None:

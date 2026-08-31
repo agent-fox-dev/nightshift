@@ -227,7 +227,7 @@ async def test_smoke_no_jsonl_audit_files_written(tmp_path: Path) -> None:
     config = _make_config()
     mock_platform = AsyncMock()
 
-    # Change to tmp_path so any accidental JSONL writes would go to tmp_path/.agent-fox/audit/
+    # Change to tmp_path so any accidental JSONL writes would go to tmp_path/.nightshift/audit/
     original_cwd = os.getcwd()
     os.chdir(tmp_path)
     try:
@@ -257,7 +257,7 @@ async def test_smoke_no_jsonl_audit_files_written(tmp_path: Path) -> None:
         os.chdir(original_cwd)
 
     # FAILS until JSONL-based audit.py is removed
-    audit_dir = tmp_path / ".agent-fox" / "audit"
+    audit_dir = tmp_path / ".nightshift" / "audit"
     assert not audit_dir.exists(), (
         f"JSONL audit directory {audit_dir} must NOT be created — all audit events must go to DuckDB"
     )

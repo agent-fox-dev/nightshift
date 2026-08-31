@@ -1,7 +1,7 @@
 """Pydantic model for the session-summary.json artifact.
 
 Defines the canonical schema for the structured session summary that
-coder agents write to ``.agent-fox/session-summary.json``.  This model
+coder agents write to ``.nightshift/session-summary.json``.  This model
 is the **single source of truth** shared between the prompt template
 (``_templates/profiles/coder.md``) and every consumer that reads or
 validates the artifact.
@@ -32,7 +32,7 @@ class TestEntry(BaseModel):
 
 
 class SessionSummary(BaseModel):
-    """Canonical schema for ``.agent-fox/session-summary.json``.
+    """Canonical schema for ``.nightshift/session-summary.json``.
 
     All list fields default to empty so agents can omit them when
     nothing applies.  The ``summary`` field is required -- a session

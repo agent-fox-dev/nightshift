@@ -194,7 +194,7 @@ class TestAuditJsonlSink:
 
     def test_creates_dir(self, tmp_path: Path) -> None:
         """TS-40-13: AuditJsonlSink creates directory on init."""
-        audit_dir = tmp_path / ".agent-fox" / "audit"
+        audit_dir = tmp_path / ".nightshift" / "audit"
         assert not audit_dir.exists()
         AuditJsonlSink(audit_dir, "r1")
         assert audit_dir.exists()

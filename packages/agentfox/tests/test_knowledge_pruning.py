@@ -12,7 +12,6 @@ Requirements: 116-REQ-1.1 through 116-REQ-8.3
 from __future__ import annotations
 
 import importlib
-import inspect
 import uuid
 
 import duckdb

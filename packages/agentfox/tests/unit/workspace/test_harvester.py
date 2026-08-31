@@ -588,7 +588,7 @@ class TestForceCleanDuringHarvest:
     """TS-118-6: harvest with force_clean=True removes divergent files.
 
     AC-2: Before removing divergent files, they are backed up to
-    .agent-fox/conflicts/<branch-slug>/.
+    .nightshift/conflicts/<branch-slug>/.
 
     Requirements: 118-REQ-2.3
     """
@@ -618,10 +618,10 @@ class TestForceCleanDuringHarvest:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """AC-2: When force_clean=True, divergent untracked files are backed
-        up to .agent-fox/conflicts/<branch-slug>/ before removal.
+        up to .nightshift/conflicts/<branch-slug>/ before removal.
 
         Asserts (a) original path is removed from working directory,
-        (b) a backup file exists under .agent-fox/conflicts/,
+        (b) a backup file exists under .nightshift/conflicts/,
         (c) a WARNING log referencing the backup path is emitted.
         """
         ws = await create_worktree(tmp_worktree_repo, "test_spec", 1, base_branch="develop")
@@ -635,12 +635,12 @@ class TestForceCleanDuringHarvest:
         with caplog.at_level(logging.WARNING, logger="agentfox.workspace.harvest"):
             files = await harvest(tmp_worktree_repo, ws, dev_branch="develop", force_clean=True)
 
-        # (a) A backup file exists under .agent-fox/conflicts/ — this is the key
+        # (a) A backup file exists under .nightshift/conflicts/ — this is the key
         # check: the divergent content was preserved before the file was overwritten.
-        conflicts_root = tmp_worktree_repo / ".agent-fox" / "conflicts"
-        assert conflicts_root.exists(), ".agent-fox/conflicts/ should be created"
+        conflicts_root = tmp_worktree_repo / ".nightshift" / "conflicts"
+        assert conflicts_root.exists(), ".nightshift/conflicts/ should be created"
         backup_files = list(conflicts_root.rglob("new_file.py"))
-        assert backup_files, "Backup of new_file.py should exist under .agent-fox/conflicts/"
+        assert backup_files, "Backup of new_file.py should exist under .nightshift/conflicts/"
         # The backup preserves the divergent content (not the branch content)
         assert backup_files[0].read_text() == divergent_content, "Backup should contain the original divergent content"
 
@@ -972,7 +972,7 @@ class TestHarvestCleanupOnFailure:
             "Orphan untracked file should be removed by finally-block git clean"
         )
 
-        # Verify no unexpected untracked files remain (excluding .agent-fox)
+        # Verify no unexpected untracked files remain (excluding .nightshift)
         result = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard"],
             cwd=tmp_worktree_repo,
@@ -982,7 +982,7 @@ class TestHarvestCleanupOnFailure:
         )
         untracked = [
             f for f in result.stdout.strip().splitlines()
-            if f and not f.startswith(".agent-fox")
+            if f and not f.startswith(".nightshift")
         ]
         assert untracked == [], f"Unexpected untracked files after failed harvest: {untracked}"
 
@@ -1058,7 +1058,7 @@ class TestHarvestCleanupOnFailure:
         )
         untracked = [
             f for f in result.stdout.strip().splitlines()
-            if f and not f.startswith(".agent-fox")
+            if f and not f.startswith(".nightshift")
         ]
         assert untracked == [], f"Unexpected untracked files after commit failure: {untracked}"
 
@@ -1114,8 +1114,8 @@ class TestHarvestCleanupOnFailure:
 
         assert "new_file.py" in files
 
-        # Working tree should be clean (excluding .agent-fox/ which is
-        # protected by --exclude .agent-fox in git clean)
+        # Working tree should be clean (excluding .nightshift/ which is
+        # protected by --exclude .nightshift in git clean)
         result = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=tmp_worktree_repo,
@@ -1125,6 +1125,6 @@ class TestHarvestCleanupOnFailure:
         )
         dirty = [
             line for line in result.stdout.strip().splitlines()
-            if line and not line.endswith(".agent-fox/")
+            if line and not line.endswith(".nightshift/")
         ]
         assert dirty == [], f"Working tree should be clean after successful harvest, got: {dirty}"

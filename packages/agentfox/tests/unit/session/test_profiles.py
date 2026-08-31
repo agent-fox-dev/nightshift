@@ -18,7 +18,7 @@ def test_project_override(tmp_path: Path) -> None:
     """
     from agentfox.session.profiles import load_profile
 
-    profiles_dir = tmp_path / ".agent-fox" / "profiles"
+    profiles_dir = tmp_path / ".nightshift" / "profiles"
     profiles_dir.mkdir(parents=True)
     (profiles_dir / "coder.md").write_text("CUSTOM CODER PROFILE")
 
@@ -35,7 +35,7 @@ def test_default_fallback(tmp_path: Path) -> None:
     """
     from agentfox.session.profiles import load_profile
 
-    # tmp_path has no .agent-fox/profiles/coder.md
+    # tmp_path has no .nightshift/profiles/coder.md
     content = load_profile("coder", project_dir=tmp_path)
 
     assert len(content) > 0
@@ -49,7 +49,7 @@ def test_frontmatter_stripping(tmp_path: Path) -> None:
     """
     from agentfox.session.profiles import load_profile
 
-    profiles_dir = tmp_path / ".agent-fox" / "profiles"
+    profiles_dir = tmp_path / ".nightshift" / "profiles"
     profiles_dir.mkdir(parents=True)
     (profiles_dir / "test_arch.md").write_text("---\nname: test\n---\n# Profile Content")
 
@@ -117,7 +117,7 @@ def test_mode_specific_profile_project_override(tmp_path: Path) -> None:
     """Project-level mode-specific profile overrides package default."""
     from agentfox.session.profiles import load_profile
 
-    profiles_dir = tmp_path / ".agent-fox" / "profiles"
+    profiles_dir = tmp_path / ".nightshift" / "profiles"
     profiles_dir.mkdir(parents=True)
     (profiles_dir / "coder_fix.md").write_text("CUSTOM FIX PROFILE")
 
@@ -164,7 +164,7 @@ def test_symlinked_project_profile_is_skipped(tmp_path: Path) -> None:
     external_file = tmp_path / "external_secret.md"
     external_file.write_text("SECRET")
 
-    profiles_dir = tmp_path / "project" / ".agent-fox" / "profiles"
+    profiles_dir = tmp_path / "project" / ".nightshift" / "profiles"
     profiles_dir.mkdir(parents=True)
     symlink = profiles_dir / "coder.md"
     symlink.symlink_to(external_file)
@@ -184,7 +184,7 @@ def test_symlinked_project_profile_logs_warning(tmp_path: Path, caplog: pytest.L
     external_file = tmp_path / "external.md"
     external_file.write_text("SENSITIVE")
 
-    profiles_dir = tmp_path / "project" / ".agent-fox" / "profiles"
+    profiles_dir = tmp_path / "project" / ".nightshift" / "profiles"
     profiles_dir.mkdir(parents=True)
     symlink = profiles_dir / "coder.md"
     symlink.symlink_to(external_file)
@@ -202,7 +202,7 @@ def test_regular_project_profile_still_loads(tmp_path: Path) -> None:
     """AC-5 (profiles): Non-symlinked project profiles load correctly after the fix."""
     from agentfox.session.profiles import load_profile
 
-    profiles_dir = tmp_path / ".agent-fox" / "profiles"
+    profiles_dir = tmp_path / ".nightshift" / "profiles"
     profiles_dir.mkdir(parents=True)
     (profiles_dir / "coder.md").write_text("custom-directive")
 
