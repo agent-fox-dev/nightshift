@@ -145,7 +145,72 @@ Each fix runs as a session with four phases:
 
 ---
 
-## 8. Engine Lifecycle
+## 8. PR Feedback Loop
+
+When `merge_strategy = "pr"`, Night Shift opens pull requests instead of
+squash-merging directly. The **pr-feedback** work stream then monitors those
+PRs for CI failures and reviewer-requested changes, automatically iterating
+on its own work.
+
+### Activation
+
+The pr-feedback stream is registered only when both conditions are met:
+
+- `merge_strategy = "pr"` in `[workspace]`
+- `platform.type` is not `"none"`
+
+It polls on a separate timer (`pr_check_interval`, default 900 seconds).
+
+### Per-PR Processing
+
+Each issue labelled `af:pr` is processed through a four-step state machine:
+
+1. **Parse tracking comment.** Scans the issue's comments for a tracking
+   pattern that records the PR number and current attempt count. Skips the
+   issue if no tracking comment is found (the PR was not created by Night
+   Shift).
+
+2. **Check PR state.** If the PR was merged, the issue is labelled `af:fixed`,
+   `af:pr` is removed, and the issue is closed. If the PR was closed without
+   merge, `af:pr` is removed for manual triage. If the PR is still open,
+   processing continues.
+
+3. **Check CI status.** Queries the platform's check/status API. If checks
+   are in progress or queued, the PR is skipped (wait for next cycle). If any
+   check failed or timed out, a feedback iteration is triggered. If all checks
+   pass, processing continues to the review step.
+
+4. **Check reviews.** Only reached when CI has passed. If the latest active
+   review requests changes, a feedback iteration is triggered. Otherwise the
+   PR is healthy and awaits human merge — no action taken.
+
+### Feedback Iteration
+
+When CI fails or a reviewer requests changes:
+
+1. Check the retry limit (`max_pr_retries`, default 2). If exceeded, post a
+   warning comment and stop iterating — the PR needs human attention.
+2. Set up a git worktree on the PR's source branch.
+3. Compute affected files via `git diff` against the integration branch.
+4. Collect feedback context: CI failure logs for failed checks, or review
+   comments rendered as markdown for reviewer-requested changes.
+5. Build a synthetic `TriageResult` and `InMemorySpec`, then run a coder
+   session through `FixPipeline._run_coder_session()` with the feedback
+   injected as context.
+6. Auto-commit changes and force-push to the PR branch.
+7. Post an updated tracking comment (incrementing the attempt count).
+8. Clean up the worktree.
+
+### Labels
+
+| Label | Meaning |
+|-------|---------|
+| `af:pr` | PR is open and being monitored by the feedback loop |
+| `af:fixed` | PR was merged successfully |
+
+---
+
+## 9. Engine Lifecycle
 
 ### Startup
 
@@ -155,9 +220,13 @@ fix cycle fires immediately.
 
 ### Event Loop
 
-The `DaemonRunner` runs the fix-pipeline stream on a timer (default 15
-minutes). A drain loop re-polls after each fix until zero `af:fix` issues
-remain.
+The `DaemonRunner` schedules work streams on independent timers. Two streams
+are built-in:
+
+- **fix-pipeline** — polls for `af:fix` issues (default every 15 minutes). A
+  drain loop re-polls after each fix until zero issues remain.
+- **pr-feedback** — polls for `af:pr` issues (default every 15 minutes). Only
+  active when `merge_strategy = "pr"`.
 
 ### Cost and Session Limits
 
@@ -172,7 +241,7 @@ in-flight sessions; second signal exits immediately.
 
 ---
 
-## 9. Workspace Isolation
+## 10. Workspace Isolation
 
 Each session gets its own `git worktree` on a feature branch
 (`fix/{issue_number}-{slug}`). Worktrees share the object store but have

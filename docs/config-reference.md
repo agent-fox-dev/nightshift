@@ -230,16 +230,25 @@ Daemon configuration for polling and fix processing.
 | Field | Type | Default | Bounds | Description |
 |-------|------|---------|--------|-------------|
 | `issue_check_interval` | int | `900` | >= 60 | Seconds between issue-tracker checks |
-| `pr_check_interval` | int | `900` | >= 60 | Seconds between PR status poll cycles |
+| `pr_check_interval` | int | `900` | >= 60 | Seconds between PR feedback poll cycles |
 | `push_fix_branch` | bool | `false` | -- | Push fix branches to origin before harvest |
 | `max_parallel` | int | `1` | 1--8 | Maximum issues processed concurrently |
-| `max_pr_retries` | int | `2` | 0--10 | Maximum PR feedback iterations |
+| `max_pr_retries` | int | `2` | 0--10 | Maximum PR feedback iterations before escalating to a human |
+
+`pr_check_interval` and `max_pr_retries` control the **PR feedback loop** —
+an autonomous work stream that monitors PRs created by Night Shift (labelled
+`af:pr`) for CI failures and reviewer-requested changes. When either is
+detected, Night Shift re-runs a coder session with the failure context
+injected, then force-pushes the fix to the PR branch. This loop only runs
+when `merge_strategy = "pr"`. See [Architecture § 8](architecture.md#8-pr-feedback-loop)
+for the full workflow.
 
 ```toml
 [night_shift]
 issue_check_interval = 1800
 max_parallel = 3
 push_fix_branch = true
+max_pr_retries = 3
 ```
 
 ---
@@ -252,6 +261,11 @@ Branch integration configuration.
 |-------|------|---------|-------------|
 | `integration_branch` | str | `"main"` | Git branch used as the integration target for merges |
 | `merge_strategy` | str | `"direct"` | `"direct"` (squash-merge), `"branch"` (keep locally), or `"pr"` (open PR) |
+
+When `merge_strategy = "pr"`, Night Shift opens pull requests instead of
+merging directly and activates the **PR feedback loop** — an autonomous work
+stream that monitors those PRs for CI failures and reviewer-requested changes.
+See [Architecture § 8](architecture.md#8-pr-feedback-loop) for details.
 
 ```toml
 [workspace]
