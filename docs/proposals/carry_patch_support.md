@@ -40,56 +40,274 @@ maintenance, rebuild monitoring) that is ideally suited to AI-driven automation.
 
 ## Hub Integration Surface
 
-Nightshift needs to call the following hub API endpoints, all mounted under
-`/api/v1` and authenticated via `Authorization: Bearer <token>`:
+Nightshift communicates with the af-hub carry-patch API. All REST endpoints are
+mounted under `/api/v1`. Git operations use the smart HTTP protocol at
+`/git/:org/:slug.git`. Authentication for both is via
+`Authorization: Bearer <credential>`.
 
-### Workspace Operations
+### Authentication
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/workspaces` | POST | Create carry-patch workspace |
-| `/workspaces/:slug/sync` | POST | Trigger upstream sync (returns `patches_merged`, `rebuild_triggered`) |
-| `/workspaces/:slug/patch-status` | GET | Dashboard: workspace metadata, per-patch status, rebuild summary |
+The hub supports three credential types, all carried in the `Authorization:
+Bearer` header:
 
-### Patch Management
+| Credential | Format | Use Case |
+|------------|--------|----------|
+| API Key | `af_<key_id>_<secret>` | Full access to owner's resources; created via OAuth login |
+| PAT | `af_pat_<token_id>_<secret>` | Scoped access; created via `POST /user/tokens` |
+| Admin Token | `af_admin_<64-hex>` | Cross-tenant admin access; cannot create workspaces |
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/workspaces/:slug/patches` | GET | List patches ordered by position |
-| `/workspaces/:slug/patches` | POST | Add patch (branch_name, position, description) |
-| `/workspaces/:slug/patches/:id` | PATCH | Update status/position/description |
-| `/workspaces/:slug/patches/:id` | DELETE | Remove patch, auto-compact positions |
-| `/workspaces/:slug/patches/reorder` | POST | Full reorder via ordered patch_ids array |
+**Nightshift should use a PAT** with the following scopes:
 
-### Rebuild Operations
+| Scope | Grants |
+|-------|--------|
+| `workspaces:read` | GET workspace, GET patch-status, GET rerere list |
+| `workspaces:sync` | POST sync, POST reclone (no ownership check) |
+| `patches:write` | All patch CRUD (implies `patches:read`; no ownership check) |
+| `rebuilds:write` | POST rebuild, DELETE cancel, POST requeue, POST rollback (implies `rebuilds:read`) |
+| `git:write` | Push to hub git server (implies `git:read` for clone/fetch) |
+| `vars:read` | Read workspace variables |
+| `secrets:write` | Store upstream credentials |
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/workspaces/:slug/rebuild` | POST | Submit rebuild job (returns 202 with job ID) |
-| `/workspaces/:slug/rebuilds` | GET | List rebuild jobs |
-| `/workspaces/:slug/rebuilds/:id` | GET | Get rebuild with patch_results |
+Note: workspace CRUD endpoints return 404 (not 403) when a PAT lacks scope or
+the workspace is not owned by the caller. Patch, rebuild, rerere, and variable
+endpoints return 403 for missing scopes.
 
-### Support Operations
+The PAT is resolved from (in priority order): `--token` CLI flag,
+`AF_HUB_TOKEN` environment variable. The same credential authenticates both API
+calls and git operations (as HTTP Basic password).
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/workspaces/:slug/rerere` | GET | List recorded conflict resolutions |
-| `/workspaces/:slug/rerere/*pathspec` | DELETE | Forget a resolution |
-| `/workspaces/:slug/secrets` | POST | Store upstream credentials |
-| `/workspaces/:slug/vars` | GET/POST/PATCH/DELETE | Manage workspace variables |
+### Workspace Endpoints
+
+| Method | Endpoint | Response | Purpose |
+|--------|----------|----------|---------|
+| POST | `/workspaces` | 201 | Create workspace (`workspace_mode: "carry_patch"`, `upstream_url`, `integration_branch`) |
+| GET | `/workspaces` | 200 | List workspaces |
+| GET | `/workspaces/:slug` | 200 | Get workspace details |
+| PATCH | `/workspaces/:slug` | 200 | Update mutable workspace fields |
+| POST | `/workspaces/:slug/sync` | 200 | Trigger upstream sync (carry-patch extended response) |
+| POST | `/workspaces/:slug/reclone` | 200 | Nuclear recovery: delete clone, re-clone from scratch |
+| GET | `/workspaces/:slug/patch-status` | 200 | Comprehensive dashboard: workspace state, per-patch status, rebuild summary |
+
+Carry-patch fields set at creation are immutable: `workspace_mode`,
+`upstream_url`, `integration_branch`, `slug`.
+
+**Sync response** (carry-patch mode returns additional fields):
+
+```json
+{
+  "patches_merged": ["feature/already-merged"],
+  "rebuild_triggered": true,
+  "rebuild_job_id": "d3b07384-...",
+  "force_push_detected": false
+}
+```
+
+- `patches_merged`: branch names of patches detected as merged upstream
+- `rebuild_triggered`: whether a rebuild was auto-enqueued (controlled by
+  `AUTO_REBUILD_AFTER_SYNC` variable)
+- `rebuild_job_id`: UUID of the enqueued rebuild (present only when
+  `rebuild_triggered` is true)
+- `force_push_detected`: whether upstream HEAD is not a descendant of the
+  stored upstream SHA
+
+Sync accepts `?reset_to_upstream=true` to force-reset the local ref to upstream
+HEAD regardless of ancestry (recovery from upstream force-pushes).
+
+**Patch-status dashboard** response includes:
+
+- Workspace metadata: `workspace_slug`, `workspace_mode`, `status`,
+  `clone_status`, `clone_error`, `sync_status`, `sync_error`, `sync_mode`,
+  `head_sha`, `git_url`, `upstream_url`, `upstream_head_sha`,
+  `integration_branch`, `integration_head_sha`, `last_sync_at`
+- `last_rebuild`: `{id, status}` or null if no rebuild attempted
+- `patches[]`: each with `id`, `branch_name`, `position`, `status`,
+  `last_rebuild_result`, `conflict_files`
+- `summary`: `total_patches`, `active`, `merged_upstream`, `conflict`,
+  `disabled`, `total_rerere_resolutions`
+
+### Patch Endpoints
+
+| Method | Endpoint | Response | Purpose |
+|--------|----------|----------|---------|
+| GET | `.../patches` | 200 | List patches ordered by position (excludes soft-deleted) |
+| POST | `.../patches` | 201 | Add patch (single object or JSON array for batch) |
+| PATCH | `.../patches/:id` | 200 | Update position, status, description, upstream_pr_url |
+| DELETE | `.../patches/:id` | 204 | Soft-delete patch, auto-compact positions |
+| POST | `.../patches/:id/restore` | 200 | Restore soft-deleted patch (active status, appended position) |
+| POST | `.../patches/reorder` | 200 | Full reorder via `{"patch_ids": [...]}` (must include all IDs) |
+
+**Add-patch request fields:**
+
+| Field | Required | Type | Notes |
+|-------|----------|------|-------|
+| `branch_name` | yes | string | Must not equal integration_branch; must not already exist in patch list |
+| `position` | no | integer | >= 1; values beyond max clamped to append; omit to append |
+| `upstream_pr_url` | no | string | Used for squash-merge detection via PR-number scanning |
+| `description` | no | string | Free-form |
+| `skip_branch_check` | no | boolean | Skip git branch existence validation (default false) |
+| `if_not_exists` | no | boolean | Return existing record (200) instead of 409 if duplicate (default false) |
+
+**Patch statuses:** `active`, `merged_upstream`, `conflict`, `disabled`,
+`deleted`
+
+**Soft-delete lifecycle:**
+1. Sync detects patch merged upstream -> status transitions to `merged_upstream`
+2. Successful rebuild -> `merged_upstream` patches soft-deleted (`deleted`,
+   `deleted_at` set)
+3. Restorable via POST `.../patches/:id/restore` within 7 days
+4. After 7 days, permanently purged from database
+
+### Rebuild Endpoints
+
+| Method | Endpoint | Response | Purpose |
+|--------|----------|----------|---------|
+| POST | `.../rebuild` | 202 | Enqueue rebuild job |
+| GET | `.../rebuilds` | 200 | List rebuild jobs (`{"jobs": [...]}`) |
+| GET | `.../rebuilds/:id` | 200 | Get rebuild with per-patch progress |
+| DELETE | `.../rebuilds/:id` | 200 | Cancel queued job (only `queued` status) |
+| POST | `.../rebuilds/:id/requeue` | 200 | Requeue `dead_letter` job |
+| POST | `.../rebuilds/:id/rollback` | 200 | Reset integration branch to `previous_integration_head_sha` |
+| GET | `.../rebuild-preview` | 200 | Dry-run conflict prediction via `git merge-tree` |
+
+**Rebuild submit** accepts an optional request body:
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `strategy` | string | `REBUILD_STRATEGY` variable or `"rebase"` | `"rebase"` or `"merge"` |
+| `fail_mode` | string | `REBUILD_FAIL_MODE` variable or `"fail_fast"` | `"fail_fast"` or `"continue"` |
+
+Preconditions: carry_patch mode, active workspace, clone ready, at least one
+patch with `active` or `conflict` status. Only one rebuild can be queued or
+running per workspace; concurrent submission returns 409 with
+`error_type: "concurrent_rebuild"`.
+
+**Rebuild job statuses:** `queued`, `running`, `completed`, `failed`,
+`dead_letter`, `cancelled`
+
+**Rebuild job response** (fields with `omitempty` omitted when empty):
+
+```json
+{
+  "id": "<uuid>",
+  "status": "completed",
+  "strategy": "rebase",
+  "error": "",
+  "created_at": "<rfc3339>",
+  "completed_at": "<rfc3339>",
+  "patch_results": [...],
+  "integration_head_sha": "<sha>",
+  "previous_integration_head_sha": "<sha>"
+}
+```
+
+**Patch result** within rebuild:
+
+```json
+{
+  "patch_id": "<uuid>",
+  "branch_name": "feature/foo",
+  "position": 1,
+  "status": "success",
+  "skipped_reason": "merged_upstream",
+  "new_head_sha": "<sha>",
+  "conflict_files": ["file.go"]
+}
+```
+
+- Patch result statuses: `success`, `conflict`, `skipped`
+- Skipped reasons: `merged_upstream`, `disabled`, `deleted`, `branch_not_found`
+
+**Rebuild preview** returns predicted outcomes without modifying state:
+
+```json
+{
+  "patch_results": [
+    {"patch_id": "<uuid>", "branch_name": "feature/foo", "position": 1,
+     "status": "would_succeed", "tree_sha": "<sha>", "conflict_files": []},
+    {"patch_id": "<uuid>", "branch_name": "feature/bar", "position": 2,
+     "status": "would_conflict", "conflict_files": ["src/main.go"]}
+  ]
+}
+```
+
+### Rerere Endpoints
+
+| Method | Endpoint | Response | Purpose |
+|--------|----------|----------|---------|
+| GET | `.../rerere` | 200 | List recorded conflict resolutions (`{resolutions: [{path, recorded_at}]}`) |
+| DELETE | `.../rerere/*pathspec` | 204 | Forget a resolution (`git rerere forget <pathspec>`) |
+
+### Secrets and Variables
+
+| Method | Endpoint | Response | Purpose |
+|--------|----------|----------|---------|
+| POST | `.../secrets` | 201 | Store workspace-scoped secrets |
+| GET | `.../vars` | 200 | List workspace variables |
+| POST | `.../vars` | 201 | Create workspace variable |
+| PATCH | `.../vars/:key` | 200 | Update variable |
+| DELETE | `.../vars/:key` | 204 | Delete variable |
+| GET | `.../vars/resolved` | 200 | Get effective variables (workspace > org > user resolution) |
+
+**Upstream credentials** (stored as secrets):
+
+| Key | Purpose |
+|-----|---------|
+| `UPSTREAM_GIT_PAT` | PAT for upstream remote |
+| `UPSTREAM_GIT_USERNAME` | Username for HTTP basic auth |
+| `UPSTREAM_GIT_PASSWORD` | Password for HTTP basic auth |
+
+Resolution: `UPSTREAM_GIT_PAT` > `UPSTREAM_GIT_USERNAME`+`PASSWORD` > fallback
+to origin credentials.
+
+### Workspace Variables Controlling Carry-Patch
+
+These variables govern automated behavior. Set via `POST .../vars` or the CLI.
+Resolution order: workspace > org > user.
+
+| Variable | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `REBUILD_STRATEGY` | `rebase`, `merge` | `rebase` | Patch application strategy; overridable per-rebuild via request body |
+| `REBUILD_FAIL_MODE` | `fail_fast`, `continue` | `fail_fast` | `fail_fast` aborts on first conflict; `continue` skips conflicting patches |
+| `AUTO_REBUILD_AFTER_SYNC` | `true`, `false` | `true` | Auto-enqueue rebuild after sync detects upstream advancement |
+| `AUTO_REBUILD_AFTER_PUSH` | `true`, `false` | `true` | Auto-enqueue rebuild when push to a registered patch branch is received |
+| `SQUASH_MERGE_DETECTION` | `ancestry_only`, `content_based`, `both` | `both` | Merge detection strategies during sync (ancestry, git cherry + PR-number scanning, or both) |
+
+### Git Server
+
+The hub exposes a smart HTTP git server at `/git/:org/:slug.git` for
+clone, fetch, and push. Requires `git:read` (clone/fetch) or `git:write`
+(push) PAT scope.
+
+**Auto-rebuild on push:** After a successful push, if any pushed branch matches
+a registered patch and `AUTO_REBUILD_AFTER_PUSH` is not `"false"`, the hub
+automatically enqueues a rebuild (with duplicate suppression).
 
 ### Key Protocol Details
 
-- Rebuild and sync calls support a blocking mode (`?wait=true`) — the hub holds
-  the connection open until the operation completes. Nightshift uses this mode
-  by default to avoid client-side polling.
-- Only one rebuild can be queued/running per workspace (concurrent submission
-  returns 409)
-- Sync for carry-patch workspaces returns extra fields (`patches_merged`,
-  `rebuild_triggered`) indicating merged patch detection and auto-rebuild
-  triggering
-- Errors use envelope format: `{"error": {"code": NNN, "message": "..."}}`
-- Anti-enumeration: unauthorized access returns 404, not 403
+- **No server-side blocking mode.** The hub API does not support `?wait=true`
+  or any long-polling mechanism. The CLI's `--wait` flag is implemented as
+  client-side polling (default: 5-second interval, 5-minute timeout).
+  **Nightshift must implement its own polling loops** for rebuild and sync
+  completion.
+- **Rebuild is asynchronous.** `POST .../rebuild` returns 202 Accepted with the
+  job record. Poll `GET .../rebuilds/:id` until status reaches a terminal state
+  (`completed`, `failed`, `dead_letter`, `cancelled`).
+- **Concurrency constraint.** Only one rebuild can be queued or running per
+  workspace at a time. Concurrent submission returns 409 with
+  `error_type: "concurrent_rebuild"`.
+- **Error envelope.** All errors use:
+  `{"error": {"code": <int>, "message": "<text>", "error_type": "<slug>"}}`
+  where `error_type` is present only for machine-actionable conditions
+  (`workspace_mode_mismatch`, `no_active_patches`, `concurrent_rebuild`,
+  `duplicate_merge`).
+- **Anti-enumeration.** Workspace CRUD endpoints return 404 (not 403) when a PAT
+  lacks scope or the workspace is not owned by the caller.
+- **Immutable fields.** `workspace_mode`, `upstream_url`,
+  `integration_branch`, and `slug` cannot be changed after creation.
+- **`omitempty` fields.** Several response fields (`strategy`, `error`,
+  `patch_results`, `integration_head_sha`, `previous_integration_head_sha`,
+  `clone_error`, `sync_error`) are omitted entirely when empty rather than
+  returned as null.
 
 ---
 
@@ -154,50 +372,183 @@ The `afissues` package uses `httpx` for async HTTP with retry logic in
 
 ### What nightshift has that can be reused
 
-1. **WorkStream protocol**: The daemon framework directly supports registering
-   new streams via `build_streams()`
+1. **WorkStream protocol**: The daemon framework (`DaemonRunner` +
+   `EngineWorkStream`) directly supports registering new streams via
+   `build_streams()`. A carry-patch stream slots in alongside `fix-pipeline`
+   and `pr-feedback` with no framework changes. Priority ordering, budget
+   tracking, and graceful shutdown all apply as-is.
 2. **Archetype/mode system**: New modes (e.g., `coder:carry-patch`) can be added
-   to the registry without schema changes
+   to the registry without schema changes. The 3-tier resolution system
+   (mode TOML > archetype TOML > registry default) provides user
+   customizability for conflict resolution behavior.
 3. **Async git wrappers**: `run_git()`, `validate_ref_name()`,
-   `create_branch()`, `checkout_branch()` all work for carry-patch operations
+   `create_branch()`, `checkout_branch()`, `fetch_remote()`,
+   `push_to_remote()`, and `auto_commit_worktree()` all work for carry-patch
+   operations. The timeout routing (60s local, 120s remote) and
+   `GIT_TERMINAL_PROMPT=0` are correct defaults for hub git operations.
 4. **HTTP retry infrastructure**: `request_with_retry()` in `afissues/_http.py`
-   provides the pattern (though not directly reusable due to package boundaries)
-5. **Merge lock**: `MergeLock` serializes concurrent integration branch mutations
-6. **Merge agent**: AI-driven conflict resolution already exists
+   provides the async retry pattern with exponential backoff for transient
+   errors (`ConnectTimeout`, `ConnectError`, `ReadTimeout`). This pattern will
+   be replicated in the hub client (not directly importable due to package
+   boundaries, but the logic is straightforward).
+5. **Merge lock**: `MergeLock` serializes concurrent integration branch
+   mutations across asyncio tasks and OS processes. In carry-patch mode, hub
+   owns the integration branch, so `MergeLock` protects local worktree
+   operations rather than the integration branch itself.
+6. **Merge agent**: AI-driven conflict resolution via
+   `run_merge_agent(worktree_path, conflict_output, model_id)` already exists
+   and can be invoked for carry-patch conflicts.
 7. **Knowledge system**: Session outcomes, prior attempts, and knowledge
-   retrieval all apply
-8. **Audit events**: The event infrastructure needs only new event types
-9. **Config system**: `ConfigDict(extra="ignore")` means new config sections are
-   backward-compatible
+   retrieval all apply to carry-patch conflict resolution sessions.
+8. **Audit events**: The `AuditEventType` enum, `emit_audit_event()` helper,
+   and `SinkDispatcher` infrastructure need only new event type entries -- no
+   structural changes.
+9. **Config system**: Pydantic models with `ConfigDict(extra="ignore")` mean
+   new config sections (`HubConfig`, `CarryPatchConfig`) are
+   backward-compatible. Existing config files without these sections load
+   cleanly with defaults.
+10. **Worktree lifecycle**: `create_worktree()` and `destroy_worktree()` provide
+    isolated working directories for conflict resolution, including stale
+    cleanup and ref conflict handling.
 
 ### What nightshift is missing
 
 1. **Hub API client**: No HTTP client exists for communicating with af-hub. The
    `afissues` HTTP layer talks to GitHub/GitLab/Gitea APIs, not to hub. A new
-   `HubClient` class is needed.
-2. **Hub authentication**: No mechanism for hub tokens. Nightshift currently
-   authenticates only via platform-specific env vars (GITHUB_PAT, etc.). The
-   hub token will be accepted via `--token` CLI flag or `AF_HUB_TOKEN` env var
-   and held in memory only.
-3. ~~**Asynchronous job polling**~~: Resolved — the hub API/CLI is being updated
-   to support blocking calls (e.g., `POST /rebuild?wait=true`), eliminating the
-   need for client-side polling infrastructure.
-4. **Carry-patch domain models**: No data structures for Workspace, Patch,
-   RebuildJob, PatchResult, PatchStatusDashboard.
-5. **Conflict monitoring stream**: A lightweight work stream is needed to poll
+   `HubClient` class is needed that covers the full carry-patch API surface:
+   workspace operations (sync, patch-status, reclone), patch CRUD (add, update,
+   delete, restore, reorder -- including batch add), rebuild lifecycle (submit,
+   list, get, cancel, requeue, rollback, preview), rerere management, workspace
+   variables, and upstream credential storage. The client must handle the hub's
+   error envelope format (`{"error": {"code": N, "message": "...",
+   "error_type": "..."}}`) and map machine-readable `error_type` values
+   (`workspace_mode_mismatch`, `no_active_patches`, `concurrent_rebuild`,
+   `duplicate_merge`) to typed exceptions.
+
+2. **Hub authentication with PAT scopes**: Nightshift currently authenticates
+   only via platform-specific env vars (`GITHUB_PAT`, etc.). The hub uses a
+   Personal Access Token (PAT) system with granular scopes. The `--token` CLI
+   flag (or `AF_HUB_TOKEN` env var) provides the PAT value, which is used as
+   `Authorization: Bearer <token>` for API calls and as HTTP Basic password for
+   git operations against the hub git server. The PAT must be provisioned with
+   the following scopes:
+
+   | Scope | Required for |
+   |-------|-------------|
+   | `workspaces:read` | `GET /patch-status`, `GET /rerere` |
+   | `workspaces:sync` | `POST /sync`, `POST /reclone` |
+   | `patches:read` | `GET /patches` |
+   | `patches:write` | `POST /patches`, `PATCH /patches/:id`, `DELETE /patches/:id`, `POST /patches/:id/restore`, `POST /patches/reorder` |
+   | `rebuilds:read` | `GET /rebuilds`, `GET /rebuilds/:id`, `GET /rebuild-preview` |
+   | `rebuilds:write` | `POST /rebuild`, `DELETE /rebuilds/:id`, `POST /rebuilds/:id/requeue`, `POST /rebuilds/:id/rollback` |
+   | `git:read` | git fetch from hub |
+   | `git:write` | git push to hub |
+
+   Note: `patches:write` implies `patches:read`, `git:write` implies
+   `git:read`, and `workspaces:sync` does not imply `workspaces:read` (both
+   are needed). The hub enforces an anti-enumeration policy where unauthorized
+   workspace access returns 404 (not 403), which the client must account for
+   in error handling.
+
+3. **Client-side polling for rebuild completion**: The hub API does not support
+   a blocking `?wait=true` query parameter on any endpoint. The hub CLI
+   implements `--wait` via client-side polling: it calls `GET /rebuilds/:id`
+   repeatedly until the job reaches a terminal status (`completed`, `failed`,
+   `dead_letter`, `cancelled`). Nightshift must implement the same polling
+   pattern in `HubClient` for rebuild and sync operations. This requires:
+   - A poll loop with configurable interval (default 5s) and timeout (default
+     5m)
+   - Terminal status detection across all six job statuses: `queued`,
+     `running`, `completed`, `failed`, `dead_letter`, `cancelled`
+   - Intermediate progress reporting (running jobs expose per-patch progress
+     via `patch_results` in the GET response)
+   - Timeout handling that does not cancel the server-side job (the rebuild
+     continues regardless of whether the client is polling)
+
+4. **Carry-patch domain models**: No data structures exist for the hub's
+   response schemas. The models must cover the full API surface:
+
+   - **Workspace**: `slug`, `git_url`, `upstream_url`, `integration_branch`,
+     `workspace_mode`, `clone_status`, `clone_error`, `sync_status`,
+     `sync_error`, `sync_mode`, `head_sha`, `upstream_head_sha`,
+     `last_sync_at`, `status`, `owner_id`, plus immutability constraints
+     (workspace_mode, upstream_url, integration_branch cannot change after
+     creation)
+   - **Patch**: `id`, `workspace_slug`, `branch_name`, `position`, `status`
+     (five values: `active`, `merged_upstream`, `conflict`, `disabled`,
+     `deleted`), `conflict_files`, `upstream_pr_url`, `description`,
+     `deleted_at`, `added_at`, `updated_at`
+   - **RebuildJob**: `id`, `status` (six values: `queued`, `running`,
+     `completed`, `failed`, `dead_letter`, `cancelled`), `strategy`,
+     `error`, `created_at`, `completed_at`, `patch_results`,
+     `integration_head_sha`, `previous_integration_head_sha` (several fields
+     use omitempty -- omitted rather than null when empty)
+   - **PatchResult**: `patch_id`, `branch_name`, `position`, `status`
+     (`success`, `conflict`, `skipped`), `skipped_reason`
+     (`merged_upstream`, `disabled`, `deleted`, `branch_not_found`),
+     `new_head_sha`, `conflict_files`
+   - **SyncResult**: `patches_merged`, `rebuild_triggered`, `rebuild_job_id`,
+     `force_push_detected`
+   - **PatchStatusDashboard**: `workspace_slug`, `workspace_mode`, `status`,
+     `clone_status`, `clone_error`, `sync_status`, `sync_error`, `sync_mode`,
+     `head_sha`, `git_url`, `upstream_url`, `upstream_head_sha`,
+     `integration_branch`, `integration_head_sha`, `last_sync_at`,
+     `last_rebuild` (nullable rebuild summary), `patches` (array with
+     per-patch `last_rebuild_result` and `conflict_files`), `summary`
+     (total_patches, active, merged_upstream, conflict, disabled,
+     total_rerere_resolutions)
+   - **RebuildPreview**: per-patch `would_succeed` / `would_conflict` results
+     with tree SHAs and conflict file lists
+
+5. **Workspace variables integration**: The hub exposes five workspace variables
+   that control carry-patch behavior: `REBUILD_STRATEGY`, `REBUILD_FAIL_MODE`,
+   `AUTO_REBUILD_AFTER_SYNC`, `AUTO_REBUILD_AFTER_PUSH`, and
+   `SQUASH_MERGE_DETECTION`. Nightshift must set
+   `AUTO_REBUILD_AFTER_SYNC=false` on workspaces it manages, because nightshift
+   controls its own rebuild timing (it needs to inspect sync results, detect
+   conflicts, attempt resolution, and then trigger a rebuild). Leaving the
+   default (`true`) would cause the hub to auto-enqueue a rebuild immediately
+   after sync, racing with nightshift's conflict resolution logic. Similarly,
+   nightshift should be aware that `AUTO_REBUILD_AFTER_PUSH=true` (the default)
+   means pushing a resolved patch branch will auto-trigger a rebuild on the hub
+   side, which may be desirable or may conflict with nightshift's explicit
+   rebuild submission.
+
+6. **Rebuild preview for conflict prediction**: The hub provides a read-only
+   conflict prediction endpoint (`GET /rebuild-preview`) that uses
+   `git merge-tree --write-tree` to predict which patches would succeed or
+   conflict without actually running a rebuild. Nightshift should call this
+   before committing to a full rebuild cycle, especially after conflict
+   resolution, to verify the fix before submitting a rebuild. Preview results
+   use statuses `would_succeed` and `would_conflict` with conflict file lists.
+
+7. **Conflict monitoring stream**: A lightweight work stream is needed to poll
    hub for patches in conflict status after upstream advances. This does not
-   duplicate the fix pipeline — it only detects conflicts and invokes the
+   duplicate the fix pipeline -- it only detects conflicts and invokes the
    existing coder to resolve them.
-6. **Patch registration in fix pipeline**: When in carry-patch mode, the fix
+
+8. **Patch registration in fix pipeline**: When in carry-patch mode, the fix
    pipeline skips local merge entirely. Instead of harvest/squash-merge, the
    integration phase registers the fix branch as a patch with hub and requests
-   a rebuild. Hub owns the integration branch — nightshift does not touch it.
-7. **Carry-patch profile templates**: No agent profile exists for carry-patch
+   a rebuild. Hub owns the integration branch -- nightshift does not touch it.
+   The patch add endpoint supports `if_not_exists=true` for idempotent
+   registration and `skip_branch_check=true` if the branch has not yet been
+   pushed.
+
+9. **Carry-patch profile templates**: No agent profile exists for carry-patch
    conflict resolution behavioral instructions.
-8. **Carry-patch conflict resolution labels**: Only `af:fix`, `af:fixed`,
-   `af:pr`, `af:no-change` exist. Carry-patch conflict resolution may need a
-   label (e.g., `af:carry-conflict`) or may bypass the issue tracker entirely
-   and invoke the coder directly from the conflict monitoring stream.
+
+10. **Carry-patch conflict resolution labels**: Only `af:fix`, `af:fixed`,
+    `af:pr`, `af:no-change` exist. Carry-patch conflict resolution may need a
+    label (e.g., `af:carry-conflict`) or may bypass the issue tracker entirely
+    and invoke the coder directly from the conflict monitoring stream.
+
+11. **Soft-delete lifecycle awareness**: Hub soft-deletes patches that are
+    detected as merged upstream (after a successful rebuild). These patches
+    can be restored via `POST /patches/:id/restore` within 7 days, after which
+    they are permanently purged. Nightshift should understand this lifecycle to
+    avoid attempting operations on soft-deleted patches and to support restore
+    if a merge detection was incorrect.
 
 ---
 
@@ -223,9 +574,11 @@ The `afissues` package uses `httpx` for async HTTP with retry logic in
 - **State synchronization**: Hub is the source of truth for patch status, rebuild
   results, and upstream state. Nightshift must avoid caching stale state and
   always re-fetch before acting.
-- **Known hub bugs**: The `conflict_files` column does not exist in hub's
-  production schema, causing 500 errors from the patch-status endpoint.
-  Nightshift must handle this gracefully.
+- **API schema evolution**: Hub API fields may evolve between versions (e.g.,
+  new fields added, `omitempty` behavior changes). The `extra="ignore"` model
+  config and optional field defaults handle forward-compatible changes
+  gracefully, but nightshift must still be tested against the hub version it
+  targets.
 - **Testing complexity**: End-to-end testing requires a running hub instance or
   comprehensive mocks of the hub API surface.
 
@@ -270,9 +623,10 @@ The carry-patch workflow maps well onto nightshift's existing patterns:
    multiple workspaces, run multiple instances.
 
 2. ~~**Synchronous pipeline vs. asynchronous jobs**~~: Not an issue. The hub
-   API/CLI is being updated to support blocking calls (`--wait` / `?wait=true`),
-   so rebuild and sync operations can be called synchronously just like the
-   existing fix pipeline.
+   API is fully asynchronous (rebuild and sync operations return immediately
+   with a job ID), but nightshift implements client-side polling to await
+   completion, matching the `afc` CLI's `--wait` pattern. This integrates
+   naturally with the existing fix pipeline's sequential processing model.
 
 3. **Local git vs. remote hub**: The fix pipeline operates on local git
    worktrees. Carry-patch operations (sync, rebuild, patch status) are remote API
@@ -282,7 +636,7 @@ The carry-patch workflow maps well onto nightshift's existing patterns:
    time (see [Bootstrapping](#bootstrapping)).
 
 4. ~~**Budget accounting**~~: Not an issue. There is one shared budget for all
-   work — fix pipeline and conflict resolution draw from the same pool. No
+   work -- fix pipeline and conflict resolution draw from the same pool. No
    partitioning or prioritization needed.
 
 ### Recommended Approach
@@ -291,7 +645,7 @@ A lightweight **conflict monitoring stream** plus **patch registration** in the
 existing fix pipeline, backed by a **hub API client** (`HubClient`). This
 approach:
 
-- Reuses the fix pipeline for all coding work — no duplicate pipeline logic
+- Reuses the fix pipeline for all coding work -- no duplicate pipeline logic
 - Adds only a small monitoring stream for conflict detection
 - Uses the existing daemon framework for scheduling and lifecycle
 - Adds hub as an optional dependency (nightshift still works without it)
@@ -300,22 +654,39 @@ approach:
 
 ## Bootstrapping
 
-An operator sets up the hub workspace and provisions a token before nightshift
-starts. Nightshift then bootstraps itself from just two CLI arguments.
+An operator sets up the hub workspace and provisions a Personal Access Token
+(PAT) before nightshift starts. Nightshift then bootstraps itself from just
+two CLI arguments and the hub's REST API.
 
 ### Prerequisites
 
 1. **Hub workspace exists.** An operator has created a carry-patch workspace on
-   the hub (via the hub UI or API), configured the upstream remote, and
-   registered the initial set of patch branches.
-2. **Hub token provisioned.** A token with at least `git:write` scope and the
-   hub API permissions needed for sync, rebuild, and patch management (exact
-   permission set TBD).
+   the hub (via the hub UI, the `afc` CLI, or the `POST /api/v1/workspaces`
+   endpoint), configured the upstream remote and credentials, and registered
+   the initial set of patch branches.
+
+2. **Hub PAT provisioned.** A Personal Access Token created via
+   `afc tokens create` (or `POST /user/tokens`) with the following scopes:
+
+   | Scope | Purpose |
+   |-------|---------|
+   | `workspaces:read` | Fetch workspace metadata and patch-status dashboard |
+   | `workspaces:sync` | Trigger upstream sync |
+   | `patches:read` | List patches |
+   | `patches:write` | Register fix branches as patches, update status, reorder |
+   | `rebuilds:read` | Poll rebuild job status until completion |
+   | `rebuilds:write` | Submit, cancel, requeue, and rollback rebuilds |
+   | `git:read` | Clone and fetch from the hub git server |
+   | `git:write` | Push conflict resolutions and fix branches |
+
+   The PAT format is `af_pat_<token_id>_<secret>`. Unlike API keys, PATs are
+   restricted to their granted scopes and cannot escalate privileges. This is
+   the recommended credential type for unattended automation.
 
 ### Invocation
 
 ```
-nightshift --workspace <slug> --token <token>
+nightshift --workspace <slug> --token <pat>
 ```
 
 Both `--workspace` and `--token` are required to activate carry-patch mode.
@@ -333,24 +704,42 @@ On startup, nightshift resolves the local working directory in one of two ways:
    `--token` values.
 
 2. **CWD does not match.** If nightshift is not inside a directory that matches
-   the `--workspace` slug, it:
-   1. Queries the hub API for the workspace's git URL
-      (`GET /api/v1/workspaces/<slug>` → `git_url`)
-   2. Clones the repository into a new local directory (named after the slug)
-   3. Changes its working directory to the new clone
-   4. Creates a default `.nightshift/config.toml` inside the clone, pre-populated
-      with the hub endpoint, workspace slug, and carry-patch-specific defaults
-   5. Begins the carry-patch work loop
+   the `--workspace` slug, it bootstraps a new clone via the hub API:
+
+   1. Fetches workspace metadata via `GET /api/v1/workspaces/<slug>`
+      (authenticated with `Authorization: Bearer <pat>`). The response
+      provides `git_url`, `upstream_url`, `integration_branch`,
+      `workspace_mode`, and `clone_status`. Nightshift verifies that
+      `workspace_mode` is `"carry_patch"` and `clone_status` is `"ready"`
+      before proceeding.
+   2. Clones the repository from the hub's built-in git server using the
+      `git_url` from the workspace response. Authentication uses HTTP Basic
+      with the PAT as the password (username is ignored by the hub).
+      ```
+      git clone https://_:<pat>@hub.example.com/git/<org>/<slug>.git <slug>
+      ```
+   3. Changes its working directory to the new clone.
+   4. Creates a default `.nightshift/config.toml` inside the clone,
+      pre-populated with hub endpoint, workspace slug, and carry-patch
+      defaults (see [Config Generation](#config-generation) below).
+   5. Disables hub-side auto-rebuild by setting workspace variables via the
+      API (see [Workspace Variable Setup](#workspace-variable-setup) below).
+   6. Begins the carry-patch work loop.
 
 ### Token Handling
 
-- The `--token` flag value is used for both hub API authentication
-  (`Authorization: Bearer <token>`) and git operations against the hub's git
-  server (HTTP basic auth with the token).
-- The token is held in memory only — it is never written to `config.toml` or
+- The `--token` flag accepts a hub PAT (`af_pat_...`). The PAT is used for
+  both hub API authentication (`Authorization: Bearer <pat>`) and git
+  operations against the hub's git server (HTTP Basic auth with the PAT as
+  the password).
+- The PAT is held in memory only -- it is never written to `config.toml` or
   any file on disk.
-- Alternatively, the token can be provided via the `AF_HUB_TOKEN` environment
+- Alternatively, the PAT can be provided via the `AF_HUB_TOKEN` environment
   variable. The `--token` flag takes precedence if both are set.
+- Nightshift validates the PAT's scopes at startup by making a test API call
+  (`GET /api/v1/workspaces/<slug>`). If the call returns 401 or 404 (the
+  hub's anti-enumeration policy returns 404 for insufficient scope),
+  nightshift logs the error and exits.
 
 ### Config Generation
 
@@ -359,22 +748,49 @@ When nightshift creates a new clone and config, the generated
 
 ```toml
 [hub]
-endpoint_url = "<resolved from workspace API>"
+endpoint_url = "<resolved from workspace API response>"
 
 [carry_patch]
 enabled = true
-workspaces = ["<slug>"]
+workspace = "<slug>"
 check_interval = 300
 auto_resolve = true
 
 [workspace]
-integration_branch = "deploy"
+integration_branch = "<from workspace API: integration_branch>"
 merge_strategy = "direct"
 ```
 
 The operator can customize this config after the first run. Subsequent
 invocations with the same `--workspace` flag reuse the existing config and
 clone directory.
+
+### Workspace Variable Setup
+
+During bootstrapping, nightshift sets two workspace variables via the hub API
+to prevent the hub from triggering rebuilds autonomously. Nightshift controls
+rebuild timing itself -- it needs to observe rebuild results, coordinate with
+conflict resolution, and track outcomes for audit logging.
+
+```
+POST /api/v1/workspaces/<slug>/vars
+{"key": "AUTO_REBUILD_AFTER_SYNC", "value": "false"}
+
+POST /api/v1/workspaces/<slug>/vars
+{"key": "AUTO_REBUILD_AFTER_PUSH", "value": "false"}
+```
+
+| Variable | Value | Reason |
+|----------|-------|--------|
+| `AUTO_REBUILD_AFTER_SYNC` | `"false"` | Nightshift triggers rebuilds explicitly after sync so it can poll for completion and act on the result (resolve conflicts, log outcomes). |
+| `AUTO_REBUILD_AFTER_PUSH` | `"false"` | Nightshift triggers rebuilds explicitly after pushing fix branches so it can track whether the rebuild succeeds or produces new conflicts. |
+
+These variables are set once during initial bootstrapping. Nightshift does not
+reset them on subsequent startups (the hub persists them). If an operator wants
+hub-side auto-rebuild for manual workflows alongside nightshift, they can
+override these variables and nightshift will still function correctly -- it
+handles 409 (concurrent rebuild) gracefully by polling the existing rebuild
+instead of submitting a new one.
 
 ---
 
@@ -383,21 +799,28 @@ clone directory.
 ### DD-1: Hub as optional dependency
 
 **Decision**: Hub integration is opt-in. Carry-patch mode activates only when
-`--workspace` and `--token` are provided on the command line (or `AF_HUB_TOKEN`
-is set). When neither is present, all carry-patch functionality is disabled. The
-fix-pipeline and pr-feedback streams continue to work independently.
+`--workspace <slug>` and `--token <PAT>` are provided on the command line (or
+`AF_HUB_TOKEN` is set). The token must be a Personal Access Token (PAT) with
+the scopes required for carry-patch operations (at minimum: `workspaces:read`,
+`patches:read`, `patches:write`, `rebuilds:read`, `rebuilds:write`, `git:read`,
+`git:write`). When neither flag is present, all carry-patch functionality is
+disabled. The fix-pipeline and pr-feedback streams continue to work
+independently.
 
 **Rationale**: Nightshift must remain functional without hub. Many users will
-never use carry-patch. The CLI-flag approach makes it explicit — no config file
-is needed to get started.
+never use carry-patch. The CLI-flag approach makes it explicit -- no config file
+is needed to get started. Using a scoped PAT rather than an API key follows the
+principle of least privilege; nightshift never needs admin access.
 
 ### DD-2: Workspace discovery mechanism
 
 **Decision**: Nightshift operates on the single workspace specified by
-`--workspace <slug>`. The slug is persisted in the local config's
-`[carry_patch] workspaces` list after bootstrapping. Multiple workspaces can
-be monitored by running multiple nightshift instances, each with its own
-`--workspace` flag and working directory.
+`--workspace <slug>`. At startup, nightshift fetches workspace metadata via
+`GET /api/v1/workspaces/<slug>` to confirm the workspace exists, is in
+`carry_patch` mode, and has `clone_status: ready`. The slug is persisted in the
+local config's `[carry_patch] workspaces` list after bootstrapping. Multiple
+workspaces can be monitored by running multiple nightshift instances, each with
+its own `--workspace` flag and working directory.
 
 **Rationale**: A single-workspace-per-process model is simpler, avoids
 cross-repo CWD management, and maps cleanly to one clone per workspace. For
@@ -413,14 +836,33 @@ reconsidered later if demand warrants it.
 
 **Decision**: When a rebuild fails with a conflict, nightshift:
 
-1. Checks out the conflicting patch branch locally (via hub git server clone)
-2. Applies the upstream changes that cause the conflict
-3. Runs a coder:carry-patch session to resolve the conflict
-4. Pushes the resolution back to hub
-5. Resets patch status to active and resubmits the rebuild
+1. Optionally runs a rebuild preview (`GET /api/v1/workspaces/<slug>/rebuild-preview`)
+   before attempting the rebuild to predict which patches will conflict, using
+   `git merge-tree --write-tree` without side effects.
+2. After a failed rebuild, reads conflict details from the rebuild job result
+   (`GET /api/v1/workspaces/<slug>/rebuilds/<id>`), which reports per-patch
+   `conflict_files` arrays. The same information is available from the
+   patch-status dashboard (`GET /api/v1/workspaces/<slug>/patch-status`).
+3. Checks out the conflicting patch branch locally (via the hub git server clone).
+4. Applies the upstream changes that cause the conflict and runs a
+   coder:carry-patch session to resolve it.
+5. Pushes the resolved branch back to the hub's git server
+   (`POST /git/<org>/<slug>.git/git-receive-pack`). If `AUTO_REBUILD_AFTER_PUSH`
+   is enabled (the default), the hub's post-push hook automatically enqueues a
+   new rebuild. Otherwise, nightshift submits one explicitly via
+   `POST /api/v1/workspaces/<slug>/rebuild`.
+6. Queries recorded rerere resolutions via `GET /api/v1/workspaces/<slug>/rerere`
+   to understand which conflicts the hub can auto-resolve on future rebuilds.
+   Rerere is managed server-side by the hub; nightshift does not manage it
+   directly, but can delete stale resolutions via
+   `DELETE /api/v1/workspaces/<slug>/rerere/<pathspec>` if needed.
 
 **Rationale**: This leverages the existing merge agent pattern but with a
-carry-patch-specific profile that understands the upstream-vs-patch context.
+carry-patch-specific profile that understands the upstream-vs-patch context. The
+rebuild preview step allows nightshift to skip rebuilds that would fail with the
+same conflicts, avoiding wasted work. The auto-rebuild-on-push hook means
+nightshift does not always need to explicitly trigger a rebuild after fixing a
+conflict.
 
 **Alternative considered**: Only report conflicts and wait for human resolution.
 Rejected as it defeats the purpose of nightshift automation, though a
@@ -428,26 +870,48 @@ Rejected as it defeats the purpose of nightshift automation, though a
 
 ### DD-4: Rebuild call strategy
 
-**Decision**: Use the hub API's blocking mode (`?wait=true`) for rebuild and sync
-calls. The hub holds the connection open until the operation completes or a
-server-side timeout is reached. Nightshift sets a client-side timeout matching
-`carry_patch.rebuild_timeout` (default 600 seconds).
+**Decision**: Nightshift implements client-side polling for rebuild and sync
+operations. The hub API does not support server-side blocking; all long-running
+operations return immediately with a job ID.
 
-**Rationale**: The hub is adding `--wait` support to avoid the complexity of
-client-side polling. This keeps nightshift's execution model synchronous and
-consistent with the fix pipeline.
+The polling pattern for rebuilds:
+
+1. `POST /api/v1/workspaces/<slug>/rebuild` returns 202 with a job record
+   containing the job `id` and `status: "queued"`.
+2. Nightshift polls `GET /api/v1/workspaces/<slug>/rebuilds/<id>` at a
+   configurable interval (default 5 seconds) until the job reaches a terminal
+   status: `completed`, `failed`, `dead_letter`, or `cancelled`.
+3. A client-side timeout matching `carry_patch.rebuild_timeout` (default 600
+   seconds) aborts the polling loop if the rebuild takes too long.
+
+The same pattern applies to sync-triggered rebuilds: `POST /workspaces/<slug>/sync`
+returns a `rebuild_job_id` when `rebuild_triggered` is true, and nightshift polls
+that job ID.
+
+**Rationale**: This is the same polling pattern the `afc` CLI uses with its
+`--wait` flag. Server-side blocking is not available in the hub API. The polling
+approach is straightforward to implement and allows nightshift to log
+intermediate progress (running rebuilds expose per-patch `patch_results` as they
+complete). The configurable poll interval and timeout give operators control
+over the tradeoff between responsiveness and API load.
 
 ### DD-5: Integration with issue tracker
 
 **Decision**: Carry-patch operations are NOT driven by issue labels. Instead, the
-carry-patch stream polls hub workspaces on a timer, checking for: (a) pending
-syncs, (b) patches in conflict status, (c) patches detected as merged upstream.
-Issues on the fork's tracker may optionally be created for conflicts that require
-human attention.
+carry-patch stream polls the hub's patch-status dashboard
+(`GET /api/v1/workspaces/<slug>/patch-status`) on a timer. This single endpoint
+provides comprehensive state including: workspace sync status, per-patch status
+and `conflict_files`, `last_rebuild` result, and a `summary` object with counts
+of active, conflict, merged_upstream, and disabled patches plus
+`total_rerere_resolutions`. Nightshift uses this dashboard to decide what actions
+to take: trigger a sync, resolve conflicts, or report merged patches. Issues on
+the fork's tracker may optionally be created for conflicts that require human
+attention.
 
 **Rationale**: Carry-patch is workspace-driven, not issue-driven. The hub is the
-source of truth, not the issue tracker. This avoids coupling two external
-systems.
+source of truth, not the issue tracker. The patch-status dashboard provides all
+the state nightshift needs in a single API call, avoiding the need to
+cross-reference multiple endpoints. This avoids coupling two external systems.
 
 ### DD-6: Where to place the hub client
 
@@ -456,8 +920,10 @@ following the same pattern as `packages/afissues/`. This package owns all hub
 communication, data models, and authentication.
 
 **Rationale**: Separation of concerns. The hub client has its own authentication
-model (token via CLI flag or env var), its own error types, and its own data
-models. Placing it in `agentfox` would violate the existing package boundaries.
+model (PAT with scopes, passed via `Authorization: Bearer <token>`), its own
+error types (including the hub's `error_type` field for machine-readable error
+classification), and its own data models. Placing it in `agentfox` would violate
+the existing package boundaries.
 
 **Alternative considered**: Adding hub client to `agentfox/nightshift/`. Rejected
 because the hub client is a general-purpose API layer, not nightshift-specific
@@ -467,20 +933,25 @@ logic.
 
 **Decision**: Nightshift works from a local clone of the hub workspace. At
 bootstrap time, if the CWD is not already a matching clone, nightshift creates
-one automatically (see [Bootstrapping](#bootstrapping)). Conflict resolution,
-patch inspection, and all git operations run against this local clone. The clone
-is kept up-to-date via `git fetch` at the start of each carry-patch cycle.
+one automatically (see [Bootstrapping](#bootstrapping)). The clone URL is the
+hub's built-in git server (`/git/<org>/<slug>.git`), obtained from the `git_url`
+field of the workspace metadata (`GET /api/v1/workspaces/<slug>`).
+Authentication uses HTTP Basic with the PAT as the password (matching the
+`afc credential-helper` pattern). Conflict resolution, patch inspection, and all
+git operations run against this local clone. The clone is kept up-to-date via
+`git fetch` at the start of each carry-patch cycle.
 
 **Rationale**: Conflict resolution requires local file access for the coder
-agent. Hub's git server at `/git/:org/:slug.git` provides authenticated access.
-A persistent clone (rather than ephemeral worktrees) avoids re-cloning on every
-cycle and gives the coder agent a full repository context.
+agent. Hub's git server at `/git/<org>/<slug>.git` provides authenticated access
+via PAT-based HTTP Basic auth. A persistent clone (rather than ephemeral
+worktrees) avoids re-cloning on every cycle and gives the coder agent a full
+repository context.
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Foundation — Hub Client and Configuration (~35% of effort)
+### Phase 1: Foundation -- Hub Client and Configuration (~35% of effort)
 
 #### 1.1 Create the `afhub` package
 
@@ -492,73 +963,196 @@ Files to create:
   pydantic)
 - `packages/afhub/afhub/__init__.py` -- Public API exports
 - `packages/afhub/afhub/client.py` -- `HubClient` class
+- `packages/afhub/afhub/polling.py` -- Rebuild and clone polling helpers
 - `packages/afhub/afhub/models.py` -- Pydantic data models
 - `packages/afhub/afhub/errors.py` -- Hub-specific error types
-- `packages/afhub/afhub/auth.py` -- Credential resolution (`--token` flag,
-  `AF_HUB_TOKEN` env var)
+- `packages/afhub/afhub/auth.py` -- PAT credential resolution
 - `packages/afhub/tests/` -- Test directory
 
 **`HubClient` class** (`client.py`):
 
+All requests use the `Authorization: Bearer <pat>` header. The PAT is an
+af-hub Personal Access Token (format `af_pat_<token_id>_<secret>`), not a
+generic API key. The required scopes for nightshift operation are documented in
+section 1.1.1.
+
 ```python
 class HubClient:
-    """Async HTTP client for the af-hub API."""
+    """Async HTTP client for the af-hub carry-patch API.
 
-    def __init__(self, endpoint_url: str, api_key: str) -> None: ...
+    Authentication: all requests carry an af-hub PAT as
+    ``Authorization: Bearer <pat>``.  The PAT must have the scopes
+    listed in auth.REQUIRED_SCOPES.
+    """
+
+    def __init__(self, endpoint_url: str, pat: str) -> None: ...
 
     # Workspace operations
     async def get_workspace(self, slug: str) -> Workspace: ...
     async def create_workspace(self, **kwargs) -> Workspace: ...
-    async def sync_workspace(self, slug: str, *, reset_to_upstream: bool = False, wait: bool = True) -> SyncResult: ...
+    async def sync_workspace(
+        self, slug: str, *, reset_to_upstream: bool = False,
+    ) -> SyncResult: ...
     async def get_patch_status(self, slug: str) -> PatchStatusDashboard: ...
+    async def reclone_workspace(self, slug: str) -> Workspace: ...
 
     # Patch operations
     async def list_patches(self, slug: str) -> list[Patch]: ...
-    async def add_patch(self, slug: str, branch_name: str, **kwargs) -> Patch: ...
+    async def add_patch(
+        self, slug: str, branch_name: str, *,
+        position: int | None = None,
+        upstream_pr_url: str | None = None,
+        description: str | None = None,
+        skip_branch_check: bool = False,
+        if_not_exists: bool = False,
+    ) -> Patch: ...
+    async def add_patches_batch(
+        self, slug: str, patches: list[dict],
+    ) -> list[Patch]: ...
     async def update_patch(self, slug: str, patch_id: str, **kwargs) -> Patch: ...
     async def remove_patch(self, slug: str, patch_id: str) -> None: ...
-    async def reorder_patches(self, slug: str, patch_ids: list[str]) -> None: ...
+    async def restore_patch(self, slug: str, patch_id: str) -> Patch: ...
+    async def reorder_patches(self, slug: str, patch_ids: list[str]) -> list[Patch]: ...
 
     # Rebuild operations
-    async def submit_rebuild(self, slug: str, *, wait: bool = True) -> RebuildJob: ...
+    async def submit_rebuild(
+        self, slug: str, *,
+        strategy: str | None = None,
+        fail_mode: str | None = None,
+    ) -> RebuildJob: ...
     async def get_rebuild(self, slug: str, rebuild_id: str) -> RebuildJob: ...
     async def list_rebuilds(self, slug: str) -> list[RebuildJob]: ...
+    async def cancel_rebuild(self, slug: str, rebuild_id: str) -> RebuildJob: ...
+    async def requeue_rebuild(self, slug: str, rebuild_id: str) -> RebuildJob: ...
+    async def rollback_rebuild(self, slug: str, rebuild_id: str) -> str: ...
+    async def get_rebuild_preview(self, slug: str) -> RebuildPreview: ...
+
     # Rerere operations
     async def list_rerere(self, slug: str) -> list[RerereEntry]: ...
     async def forget_rerere(self, slug: str, pathspec: str) -> None: ...
 
-    # Variables
+    # Workspace variables
     async def get_variable(self, slug: str, key: str) -> str | None: ...
     async def set_variable(self, slug: str, key: str, value: str) -> None: ...
+    async def delete_variable(self, slug: str, key: str) -> None: ...
+    async def get_resolved_variables(self, slug: str) -> dict[str, str]: ...
+
+    # Secrets (upstream credentials)
+    async def list_secrets(self, slug: str) -> list[str]: ...
+    async def create_secret(self, slug: str, key: str, value: str) -> None: ...
 ```
 
-The `submit_rebuild()` method uses the hub's blocking mode (`?wait=true`) by
-default, returning the completed rebuild job directly. The client-side timeout
-is set to `carry_patch.rebuild_timeout` (default 600 seconds).
+Key design points:
+
+- **No blocking wait**. The hub API does not support `?wait=true` on any
+  endpoint. `submit_rebuild()` returns a 202 with the queued job record.
+  `sync_workspace()` returns immediately with a `SyncResult` that may contain a
+  `rebuild_job_id`. Polling for completion is a separate concern handled by
+  `polling.py` (see below).
+- **`add_patch()` supports `skip_branch_check`** and **`if_not_exists`**
+  flags. When nightshift registers a fix branch as a patch, it passes
+  `skip_branch_check=True` (the branch exists in hub's git server, but hub
+  validates this asynchronously) and `if_not_exists=True` (idempotent
+  re-registration after retries).
+- **`add_patches_batch()`** sends a JSON array body to `POST /patches` for
+  atomic multi-patch insertion when registering several branches at once.
+- **`submit_rebuild()`** accepts optional `strategy` (`"rebase"` or `"merge"`)
+  and `fail_mode` (`"fail_fast"` or `"continue"`) parameters that override the
+  workspace-level `REBUILD_STRATEGY` and `REBUILD_FAIL_MODE` variables for that
+  single rebuild.
+- **`get_rebuild_preview()`** calls `GET /rebuild-preview` which uses
+  `git merge-tree --write-tree` to predict conflicts without mutating any refs.
+  Nightshift uses this for proactive conflict detection before committing to a
+  full rebuild.
+
+##### 1.1.1 Required PAT scopes
+
+Nightshift requires a PAT with the following scopes:
+
+| Scope | Used for |
+|-------|----------|
+| `workspaces:read` | `get_workspace()`, `get_patch_status()`, `list_rerere()` |
+| `workspaces:write` | `forget_rerere()` |
+| `workspaces:sync` | `sync_workspace()`, `reclone_workspace()` |
+| `patches:write` | `add_patch()`, `update_patch()`, `remove_patch()`, `restore_patch()`, `reorder_patches()` (implies `patches:read`) |
+| `rebuilds:write` | `submit_rebuild()`, `cancel_rebuild()`, `requeue_rebuild()`, `rollback_rebuild()` (implies `rebuilds:read` for `get_rebuild()`, `list_rebuilds()`, `get_rebuild_preview()`) |
+| `git:write` | Pushing resolved branches to hub's git server (implies `git:read`) |
+| `vars:manage` | `get_variable()`, `set_variable()`, `delete_variable()` (implies `vars:read`, `vars:write`, `vars:delete`) |
+| `secrets:manage` | `list_secrets()`, `create_secret()` for upstream credentials (implies `secrets:list`, `secrets:write`, `secrets:delete`) |
+
+Note: scope implication chains mean that `patches:write` implicitly grants
+`patches:read`, `git:write` implicitly grants `git:read`, etc. The PAT should
+be created with the explicit scopes listed above; implied scopes do not need to
+be listed at creation time.
+
+**Polling helpers** (`polling.py`):
+
+```python
+async def poll_rebuild(
+    client: HubClient,
+    slug: str,
+    rebuild_id: str,
+    *,
+    timeout: float = 600.0,
+    interval: float = 5.0,
+) -> RebuildJob:
+    """Poll GET /rebuilds/:id until the job reaches a terminal status.
+
+    Terminal statuses: completed, failed, dead_letter, cancelled.
+    Raises TimeoutError if timeout exceeded.
+    """
+
+async def poll_clone_ready(
+    client: HubClient,
+    slug: str,
+    *,
+    timeout: float = 300.0,
+    interval: float = 5.0,
+) -> Workspace:
+    """Poll GET /workspaces/:slug until clone_status is 'ready' or 'failed'.
+
+    Raises TimeoutError if timeout exceeded.
+    Raises HubError if clone_status transitions to 'failed'.
+    """
+```
+
+These mirror the `afc` CLI's `--wait` behavior, which is implemented as
+client-side polling (the hub has no server-side blocking mode). Default timeout
+is 600 seconds for rebuilds and 300 seconds for clones. Default poll interval
+is 5 seconds.
 
 **Data models** (`models.py`):
 
 ```python
 class Workspace(BaseModel):
     slug: str
+    hub_url: str | None = None       # base URL of this hub instance
+    display_name: str | None = None
+    description: str | None = None
     git_url: str
-    upstream_url: str | None
-    integration_branch: str
-    workspace_mode: str  # "standard" | "carry_patch"
-    clone_status: str
-    sync_status: str
-    upstream_head_sha: str | None
-    head_sha: str | None
-    last_sync_at: str | None
+    upstream_url: str | None = None
+    integration_branch: str | None = None  # defaults to "deploy" for carry_patch
+    workspace_mode: str               # "standard" | "carry_patch"
+    status: str                       # "active" | "archived"
+    clone_status: str                 # "pending" | "cloning" | "ready" | "failed"
+    clone_error: str | None = None    # omitted when empty
+    sync_status: str                  # "idle" | "syncing"
+    sync_mode: str | None = None      # "pull_only" | ...
+    sync_error: str | None = None     # omitted when empty
+    upstream_head_sha: str | None = None
+    head_sha: str | None = None
+    last_sync_at: str | None = None
 
 class Patch(BaseModel):
     id: str
     workspace_slug: str
     branch_name: str
     position: int
-    status: str  # "active" | "merged_upstream" | "conflict" | "disabled"
-    upstream_pr_url: str | None
-    description: str | None
+    status: str  # "active" | "merged_upstream" | "conflict" | "disabled" | "deleted"
+    conflict_files: list[str] | None = None
+    upstream_pr_url: str | None = None
+    description: str | None = None
+    deleted_at: str | None = None
     added_at: str
     updated_at: str
 
@@ -567,52 +1161,142 @@ class PatchResult(BaseModel):
     branch_name: str
     position: int
     status: str  # "success" | "conflict" | "skipped"
-    new_head_sha: str | None
+    skipped_reason: str | None = None  # "merged_upstream" | "disabled" | "deleted" | "branch_not_found"
+    new_head_sha: str | None = None
+    conflict_files: list[str] | None = None
 
 class RebuildJob(BaseModel):
     id: str
-    status: str  # "queued" | "running" | "completed" | "failed"
-    strategy: str | None
-    patch_results: list[PatchResult]
-    error: str | None
+    status: str  # "queued" | "running" | "completed" | "failed" | "dead_letter" | "cancelled"
+    strategy: str | None = None  # "rebase" | "merge"; omitted when empty
+    error: str | None = None     # omitted when empty
+    patch_results: list[PatchResult] | None = None  # omitted when empty
+    integration_head_sha: str | None = None          # omitted when empty
+    previous_integration_head_sha: str | None = None # omitted when empty
     created_at: str
-    completed_at: str | None
+    completed_at: str | None = None
 
 class SyncResult(BaseModel):
     patches_merged: list[str]
     rebuild_triggered: bool
+    rebuild_job_id: str | None = None   # present only when rebuild_triggered is true
+    force_push_detected: bool = False
+
+class RebuildPreviewPatchResult(BaseModel):
+    patch_id: str
+    branch_name: str
+    position: int
+    status: str  # "would_succeed" | "would_conflict"
+    tree_sha: str | None = None
+    conflict_files: list[str] | None = None
+
+class RebuildPreview(BaseModel):
+    patch_results: list[RebuildPreviewPatchResult]
+
+class PatchDetail(BaseModel):
+    id: str
+    branch_name: str
+    position: int
+    status: str
+    last_rebuild_result: str | None = None  # "success" | "conflict" | "skipped" | null
+    conflict_files: list[str] | None = None
+
+class PatchSummary(BaseModel):
+    total_patches: int
+    active: int
+    merged_upstream: int
+    conflict: int
+    disabled: int
+    total_rerere_resolutions: int = 0
+
+class RebuildSummary(BaseModel):
+    id: str
+    status: str
 
 class PatchStatusDashboard(BaseModel):
     workspace_slug: str
     workspace_mode: str
-    upstream_url: str | None
-    upstream_head_sha: str | None
-    integration_branch: str
-    integration_head_sha: str | None
-    last_sync_at: str | None
-    last_rebuild: RebuildSummary | None
+    status: str                        # workspace status: "active" | "archived"
+    clone_status: str
+    clone_error: str | None = None     # omitted when empty
+    sync_status: str
+    sync_error: str | None = None      # omitted when empty
+    sync_mode: str | None = None
+    head_sha: str | None = None
+    git_url: str | None = None
+    upstream_url: str | None = None
+    upstream_head_sha: str | None = None
+    integration_branch: str | None = None
+    integration_head_sha: str | None = None  # from last rebuild, empty if none
+    last_sync_at: str | None = None
+    last_rebuild: RebuildSummary | None = None
     patches: list[PatchDetail]
     summary: PatchSummary
+
+class RerereEntry(BaseModel):
+    path: str | None = None
+    recorded_at: str | None = None
 ```
+
+All models use `model_config = ConfigDict(extra="ignore")` to tolerate
+additional fields from future hub API versions.
 
 **Error types** (`errors.py`):
 
+The hub API returns errors in a standard envelope:
+`{"error": {"code": <int>, "message": "<string>", "error_type": "<string>?"}}`.
+
+The `error_type` field is present only on certain endpoints and provides a
+machine-readable classification.
+
 ```python
-class HubError(Exception): ...
-class HubAuthError(HubError): ...
-class HubNotFoundError(HubError): ...
-class HubConflictError(HubError): ...   # 409 - rebuild already running
-class HubConnectionError(HubError): ...
+class HubError(Exception):
+    """Base error for hub API failures."""
+    def __init__(self, status_code: int, message: str, error_type: str | None = None) -> None: ...
+
+class HubAuthError(HubError): ...         # 401 - invalid or expired PAT
+class HubForbiddenError(HubError): ...    # 403 - PAT lacks required scope
+class HubNotFoundError(HubError): ...     # 404 - workspace/patch/rebuild not found
+class HubConflictError(HubError): ...     # 409 - concurrent rebuild, duplicate merge, etc.
+class HubConnectionError(HubError): ...   # network-level failure (timeout, DNS, etc.)
+
+# Typed 400 errors using error_type from response body
+class HubModeError(HubError): ...         # error_type: "workspace_mode_mismatch"
+class HubNoActivePatchesError(HubError):  # error_type: "no_active_patches"
+    ...
 ```
+
+The client inspects the `error_type` field in 400 responses and raises the
+appropriate typed exception. For 400 responses without a recognized
+`error_type`, the base `HubError` is raised. For 409 responses, the
+`error_type` (e.g., `"concurrent_rebuild"`, `"duplicate_merge"`) is stored on
+the `HubConflictError` instance for caller inspection.
 
 **Auth** (`auth.py`):
 
-- `resolve_hub_token()` resolves the hub token from (in priority order):
+- `resolve_hub_pat()` resolves the af-hub Personal Access Token from (in
+  priority order):
   1. Explicit value passed from `--token` CLI flag
   2. `AF_HUB_TOKEN` environment variable
 - Returns `None` if neither is set (carry-patch mode unavailable)
-- The hub endpoint URL is resolved from `--workspace` via the hub API, or
-  read from `[hub] endpoint_url` in the local config on subsequent runs
+- The hub endpoint URL is read from `[hub] endpoint_url` in the config
+- The PAT must have the scopes listed in section 1.1.1
+
+```python
+REQUIRED_SCOPES: list[str] = [
+    "workspaces:read", "workspaces:write", "workspaces:sync",
+    "patches:write",
+    "rebuilds:write",
+    "git:write",
+    "vars:manage",
+    "secrets:manage",
+]
+
+def resolve_hub_pat(
+    *, token_flag: str | None = None, env_var: str = "AF_HUB_TOKEN",
+) -> str | None:
+    """Return the af-hub PAT or None if unavailable."""
+```
 
 #### 1.2 Add hub configuration to nightshift
 
@@ -634,10 +1318,11 @@ class CarryPatchConfig(BaseModel):
 
     enabled: bool = Field(default=False, description="Enable carry-patch work stream")
     workspaces: list[str] = Field(default_factory=list, description="Hub workspace slugs to monitor")
-    check_interval: int = Field(default=300, description="Seconds between checks (minimum 60)")
+    check_interval: int = Field(default=300, ge=60, description="Seconds between checks (minimum 60)")
     auto_resolve: bool = Field(default=True, description="Auto-resolve conflicts via AI agent")
-    rebuild_timeout: int = Field(default=600, description="Seconds to wait for rebuild completion")
-    max_resolve_retries: int = Field(default=2, description="Max conflict resolution attempts per patch")
+    rebuild_timeout: int = Field(default=600, description="Seconds to wait for rebuild polling completion")
+    rebuild_poll_interval: int = Field(default=5, ge=2, description="Seconds between rebuild status polls")
+    max_resolve_retries: int = Field(default=2, ge=0, le=10, description="Max conflict resolution attempts per patch")
 ```
 
 Add to `AgentFoxConfig`:
@@ -663,13 +1348,41 @@ Files to modify:
 Files to create:
 
 - `packages/afhub/tests/test_client.py` -- Unit tests with httpx mock transport
-- `packages/afhub/tests/test_models.py` -- Model serialization/deserialization
-- `packages/afhub/tests/test_auth.py` -- Credential loading
-- `packages/afhub/tests/test_errors.py` -- Error classification
+- `packages/afhub/tests/test_polling.py` -- Polling helper tests (timeout,
+  terminal status detection, interval behavior)
+- `packages/afhub/tests/test_models.py` -- Model serialization/deserialization,
+  including omitempty field handling
+- `packages/afhub/tests/test_auth.py` -- PAT resolution from flag, env var, and
+  missing
+- `packages/afhub/tests/test_errors.py` -- Error classification from HTTP
+  status codes and error_type values
+
+Key test scenarios for the client:
+
+- `submit_rebuild()` returns 202 with queued job (not a completed job)
+- `sync_workspace()` returns `SyncResult` with `rebuild_job_id` when
+  `rebuild_triggered` is true
+- `add_patch()` with `if_not_exists=True` returns 200 for existing patch
+  instead of 409
+- `add_patches_batch()` sends JSON array body and returns list
+- `get_rebuild_preview()` returns `RebuildPreview` with per-patch conflict
+  prediction
+- 400 with `error_type: "workspace_mode_mismatch"` raises `HubModeError`
+- 400 with `error_type: "no_active_patches"` raises `HubNoActivePatchesError`
+- 409 with `error_type: "concurrent_rebuild"` raises `HubConflictError` with
+  stored `error_type`
+- 403 raises `HubForbiddenError` (PAT lacks scope)
+
+Key test scenarios for polling:
+
+- `poll_rebuild()` polls until `completed` status
+- `poll_rebuild()` raises `TimeoutError` after deadline
+- `poll_rebuild()` returns immediately for `failed`, `dead_letter`, `cancelled`
+- `poll_clone_ready()` raises `HubError` on `failed` clone status
 
 ---
 
-### Phase 2: Core Carry-Patch Logic (Depends on Phase 1, ~25% of effort)
+### Phase 2: Core Carry-Patch Logic (Depends on Phase 1, ~30% of effort)
 
 Carry-patch mode does not duplicate the fix pipeline. The existing fix pipeline
 already creates fixes on branches from `af:fix` issues. In carry-patch mode,
@@ -680,7 +1393,39 @@ the only differences are:
   conflict resolution after upstream advances
 - Conflict resolution reuses the existing coder via `FixPipeline._run_coder_session()`
 
-#### 2.1 Patch registration in fix pipeline
+#### 2.1 Workspace variable initialization
+
+**Complexity**: Small
+
+When nightshift first connects to a hub workspace, it configures workspace
+variables to disable hub's automatic rebuild triggers. Nightshift controls
+rebuild timing explicitly so that it can coordinate with conflict resolution
+and budget constraints.
+
+```python
+async def initialize_workspace_variables(
+    client: HubClient, slug: str,
+) -> None:
+    """Set workspace variables for nightshift-managed operation.
+
+    Disables auto-rebuild so nightshift controls when rebuilds happen.
+    """
+    await client.set_variable(slug, "AUTO_REBUILD_AFTER_SYNC", "false")
+    await client.set_variable(slug, "AUTO_REBUILD_AFTER_PUSH", "false")
+```
+
+This is idempotent. The variables are set once during workspace bootstrap and
+persist across nightshift restarts (they are stored on the hub, not locally).
+
+Hub variables that nightshift reads but does not set:
+
+| Variable | Nightshift usage |
+|----------|-----------------|
+| `REBUILD_STRATEGY` | Default strategy for rebuilds (nightshift can override per-rebuild) |
+| `REBUILD_FAIL_MODE` | Default fail mode (nightshift can override per-rebuild) |
+| `SQUASH_MERGE_DETECTION` | Controls merge detection during sync; nightshift relies on hub's default `"both"` |
+
+#### 2.2 Patch registration in fix pipeline
 
 **Complexity**: Small
 
@@ -693,16 +1438,47 @@ When `carry_patch.enabled` is true, after the fix branch is created and the
 coder-reviewer loop completes, the fix pipeline **skips local merge entirely**
 (no harvest, no squash-merge). Instead:
 
-1. Push the fix branch to origin
-2. Register the fix branch as a patch with hub
-   (`hub_client.add_patch(slug, branch_name, ...)`)
-3. Request a rebuild (`hub_client.submit_rebuild(slug, wait=True)`)
-4. On success, proceed with normal issue closure
+1. Push the fix branch to hub's git server
+2. Register the fix branch as a patch with hub:
+   ```python
+   patch = await hub_client.add_patch(
+       slug, branch_name,
+       upstream_pr_url=upstream_pr_url,  # if available from issue
+       description=f"Fix for #{issue_number}: {issue_title}",
+       skip_branch_check=True,  # branch exists in hub's git server
+       if_not_exists=True,       # idempotent for retry safety
+   )
+   ```
+3. Submit a rebuild and poll for completion:
+   ```python
+   job = await hub_client.submit_rebuild(slug)
+   completed = await poll_rebuild(
+       hub_client, slug, job.id,
+       timeout=config.carry_patch.rebuild_timeout,
+       interval=config.carry_patch.rebuild_poll_interval,
+   )
+   ```
+4. Check `completed.status` and `completed.patch_results` for the new patch
+5. On success, proceed with normal issue closure
 
-Hub owns the integration branch — nightshift never touches it. The existing
+Hub owns the integration branch -- nightshift never touches it. The existing
 merge strategies (`direct`, `branch`, `pr`) are not used in carry-patch mode.
 
-#### 2.2 Conflict monitoring stream
+The `submit_rebuild()` call returns a 202 with a queued job record.
+`poll_rebuild()` then polls `GET /rebuilds/:id` at the configured interval
+until the job reaches a terminal status (`completed`, `failed`, `dead_letter`,
+or `cancelled`).
+
+If `submit_rebuild()` raises `HubConflictError` (a rebuild is already
+queued/running), nightshift retrieves the active rebuild via `list_rebuilds()`
+and polls that one instead.
+
+If `submit_rebuild()` raises `HubNoActivePatchesError` (no patches with
+`active` or `conflict` status), nightshift logs a warning and skips the rebuild
+-- this can happen if all patches were merged upstream between registration and
+rebuild submission.
+
+#### 2.3 Conflict monitoring stream
 
 **Complexity**: Medium
 
@@ -729,14 +1505,19 @@ class CarryPatchMonitor:
         """Execute one monitoring cycle.
 
         Steps:
-        1. Fetch patch-status dashboard from hub
-        2. Log any newly merged patches (informational)
-        3. For each patch in conflict status (if auto_resolve is enabled):
-           a. Fetch upstream diff and conflict details
-           b. Run coder:carry-patch session to resolve
-           c. Push resolved branch back to hub
-           d. Request rebuild
-        4. Return cycle result with actions taken
+        1. Fetch patch-status dashboard from hub (GET /patch-status)
+        2. Log any newly merged patches (informational -- hub transitions
+           patches to merged_upstream during sync)
+        3. Optionally run rebuild preview (GET /rebuild-preview) to detect
+           conflicts proactively before they occur in a real rebuild
+        4. For each patch in conflict status (if auto_resolve is enabled):
+           a. Read conflict_files from the dashboard's patch detail
+              (available in last_rebuild_result and conflict_files fields)
+           b. Fetch upstream diff and conflict context from hub's git server
+           c. Run coder:carry-patch session to resolve
+           d. Push resolved branch back to hub's git server
+           e. Submit rebuild and poll for completion
+        5. Return cycle result with actions taken
         """
 ```
 
@@ -744,6 +1525,16 @@ Key behaviors:
 
 - **Idempotent cycles**: Fetches fresh state from hub on each cycle. No
   persistent local state beyond the working directory clone.
+- **Rebuild polling**: After pushing a resolved branch, the monitor submits a
+  rebuild via `submit_rebuild()` (returns 202) and then polls via
+  `poll_rebuild()` to confirm the resolution succeeded. If the rebuild reveals
+  the conflict persists, the patch stays in `conflict` status and the monitor
+  will retry on the next cycle (up to `max_resolve_retries`).
+- **Proactive conflict detection**: The monitor can call
+  `get_rebuild_preview()` to predict which patches would conflict before
+  committing to a full rebuild. This uses `git merge-tree --write-tree` on the
+  hub side and does not mutate any refs. The preview returns
+  `would_succeed`/`would_conflict` status per patch.
 - **Reuses existing coder**: Conflict resolution invokes
   `FixPipeline._run_coder_session()` (or the underlying `run_session()`) with
   `archetype="coder"` and `mode="carry-patch"`. No duplicate pipeline logic.
@@ -751,7 +1542,7 @@ Key behaviors:
   resolution for one patch does not block attempts on other patches. Hub
   connection failures are logged and the cycle skips.
 
-#### 2.3 Register conflict monitoring work stream
+#### 2.4 Register conflict monitoring work stream
 
 **Complexity**: Small
 
@@ -764,7 +1555,7 @@ Files to modify:
 - `packages/agentfox/agentfox/nightshift/daemon.py` -- Add `"carry-patch"` to
   `_STREAM_DISPLAY_NAMES` and `_STREAM_ACTIVE_LABELS`
 
-#### 2.4 Hub client initialization in daemon startup
+#### 2.5 Hub client initialization in daemon startup
 
 **Complexity**: Small
 
@@ -775,14 +1566,20 @@ Files to modify:
 
 ```python
 hub_client = None
-if workspace_slug and hub_token:
+if hub_pat := resolve_hub_pat(token_flag=token_flag):
     from afhub.client import HubClient
-    hub_client = HubClient(config.hub.endpoint_url, hub_token)
+    hub_client = HubClient(config.hub.endpoint_url, hub_pat)
+    # Initialize workspace variables on first connect
+    for slug in config.carry_patch.workspaces:
+        await initialize_workspace_variables(hub_client, slug)
 elif config.carry_patch.enabled:
-    logger.warning("Carry-patch enabled in config but --workspace/--token not provided; disabling")
+    logger.warning(
+        "carry_patch.enabled is true but no hub PAT available "
+        "(set AF_HUB_TOKEN or pass --token); disabling carry-patch stream"
+    )
 ```
 
-#### 2.5 Audit events for carry-patch
+#### 2.6 Audit events for carry-patch
 
 **Complexity**: Small
 
@@ -796,10 +1593,12 @@ CARRY_PATCH_CONFLICT_RESOLVED = "carry_patch_conflict_resolved"
 CARRY_PATCH_CONFLICT_FAILED = "carry_patch_conflict_failed"
 CARRY_PATCH_PATCH_REGISTERED = "carry_patch_patch_registered"
 CARRY_PATCH_REBUILD_REQUESTED = "carry_patch_rebuild_requested"
+CARRY_PATCH_REBUILD_COMPLETED = "carry_patch_rebuild_completed"
+CARRY_PATCH_REBUILD_FAILED = "carry_patch_rebuild_failed"
 CARRY_PATCH_MERGED_DETECTED = "carry_patch_merged_detected"
 ```
 
-#### 2.6 Tests for Phase 2
+#### 2.7 Tests for Phase 2
 
 **Complexity**: Medium
 
@@ -815,87 +1614,36 @@ Files to create:
 Key test scenarios:
 
 - Monitor cycle with no conflicts (no-op)
-- Monitor cycle with one patch in conflict -> resolution -> rebuild
+- Monitor cycle with one patch in conflict -> resolution -> rebuild poll ->
+  completed
+- Monitor cycle with rebuild poll -> failed (conflict persists) -> retry on
+  next cycle
 - Monitor cycle with hub unreachable (graceful degradation)
 - Monitor cycle with merged patches detected (informational)
 - Auto-resolve disabled (skip resolution, only report)
-- Fix pipeline registers patch after successful fix
+- Fix pipeline registers patch via `add_patch()` with `skip_branch_check=True`
+  and `if_not_exists=True`
 - Fix pipeline skips registration when not in carry-patch mode
+- Rebuild submission returns 409 (concurrent rebuild) -> poll existing rebuild
+- Rebuild submission returns 400 with `no_active_patches` -> skip gracefully
+- Workspace variable initialization is idempotent
+- Rebuild preview returns `would_conflict` predictions
 
 ---
 
-### Phase 3: CLI Integration (Depends on Phase 1, ~10% of effort)
+### Phase 3: Agent Integration -- Conflict Resolution (Depends on Phase 2, ~15% of effort)
 
-#### 3.1 Carry-patch CLI subcommands
-
-**Complexity**: Medium
-
-Files to modify:
-
-- `packages/nightshift/nightshift/app.py` -- Add carry-patch subcommand group
-
-```python
-@main.group("carry-patch")
-def carry_patch_group():
-    """Manage carry-patch workspaces."""
-
-@carry_patch_group.command("status")
-@click.argument("workspace_slug")
-def cp_status(workspace_slug: str):
-    """Show patch-status dashboard for a workspace."""
-
-@carry_patch_group.command("sync")
-@click.argument("workspace_slug")
-@click.option("--reset-to-upstream", is_flag=True)
-def cp_sync(workspace_slug: str, reset_to_upstream: bool):
-    """Trigger upstream sync for a workspace."""
-
-@carry_patch_group.command("rebuild")
-@click.argument("workspace_slug")
-@click.option("--wait/--no-wait", default=True)
-def cp_rebuild(workspace_slug: str, wait: bool):
-    """Submit a rebuild and optionally wait for completion."""
-
-@carry_patch_group.command("patches")
-@click.argument("workspace_slug")
-def cp_patches(workspace_slug: str):
-    """List patches for a workspace."""
-```
-
-These are one-shot commands (not daemon streams) for manual interaction with
-carry-patch workspaces.
-
-#### 3.2 Rich output formatting
-
-**Complexity**: Small
-
-Files to create:
-
-- `packages/agentfox/agentfox/ui/carry_patch.py` -- Rich table formatters
-
-Functions:
-
-- `render_patch_status_dashboard(dashboard: PatchStatusDashboard) -> Table`
-- `render_patch_list(patches: list[Patch]) -> Table`
-- `render_rebuild_status(rebuild: RebuildJob) -> Table`
-
-#### 3.3 Tests for Phase 3
-
-**Complexity**: Small
-
-Files to create:
-
-- `packages/nightshift/tests/test_carry_patch_cli.py` -- CLI invocation tests
-
----
-
-### Phase 4: Agent Integration — Conflict Resolution (Depends on Phase 2, ~15% of effort)
+Nightshift does not add CLI subcommands for carry-patch operations. Users
+interact with carry-patch workspaces through the existing `afc` CLI
+(`afc patch list`, `afc rebuild submit --wait`, `afc workspace sync`, etc.).
+Nightshift's value is automation -- it polls, detects, resolves, and rebuilds
+without human intervention.
 
 Conflict resolution reuses the existing coder session infrastructure. The new
 pieces are a dedicated archetype mode and profile template that give the coder
 agent the right context and instructions for carry-patch conflicts.
 
-#### 4.1 Carry-patch archetype mode
+#### 3.1 Carry-patch archetype mode
 
 **Complexity**: Small
 
@@ -913,7 +1661,7 @@ Files to modify:
 )
 ```
 
-#### 4.2 Carry-patch profile template
+#### 3.2 Carry-patch profile template
 
 **Complexity**: Medium
 
@@ -931,16 +1679,21 @@ Profile content should instruct the agent:
 - Test the resolution if a test suite is available
 - Explain what changed and why in the commit message
 
-#### 4.3 Context construction for conflict resolution
+#### 3.3 Context construction for conflict resolution
 
 **Complexity**: Small
 
-The `CarryPatchMonitor` (Phase 2.2) builds context for the coder session:
+The `CarryPatchMonitor` (Phase 2.3) builds context for the coder session using
+data from the hub API:
 
-- Patch description (why the patch exists)
-- Conflict files and markers
-- Upstream changes that caused the conflict (diff)
-- Git rerere history if available (from hub API)
+- Patch description (why the patch exists) -- from `Patch.description`
+- Conflict files with full paths -- from `PatchResult.conflict_files` in the
+  rebuild result, or from `PatchDetail.conflict_files` in the dashboard
+- Rebuild preview predictions -- from `GET /rebuild-preview` which returns
+  `would_succeed`/`would_conflict` per patch with `conflict_files` listing
+- Upstream changes that caused the conflict (diff between old and new upstream
+  HEAD)
+- Git rerere history if available (from `GET /rerere` hub API endpoint)
 - Prior resolution attempts (from knowledge store)
 
 This context is passed to `run_session()` with `archetype="coder"` and
@@ -952,7 +1705,7 @@ Files to modify (if needed):
 - `packages/agentfox/agentfox/session/context.py` -- Add carry-patch to
   `_ARCHETYPE_ARTIFACTS`
 
-#### 4.4 Tests for Phase 4
+#### 3.4 Tests for Phase 3
 
 **Complexity**: Small
 
@@ -963,9 +1716,9 @@ Files to create:
 
 ---
 
-### Phase 5: Testing and Hardening (Depends on all previous phases, ~10% ongoing)
+### Phase 4: Testing and Hardening (Depends on all previous phases, ~20% ongoing)
 
-#### 5.1 Integration test suite
+#### 4.1 Integration test suite
 
 **Complexity**: Large
 
@@ -977,18 +1730,33 @@ Files to create:
 
 Test scenarios:
 
-- Full happy path: fix issue -> register patch -> rebuild (blocking) -> verify
-- Conflict monitoring: detect conflict -> resolve -> rebuild
-- Hub returns 500 for patch-status (known conflict_files bug) -> graceful
-  degradation
-- Hub returns 409 on rebuild submission -> skip and report
-- Hub connection timeout -> retry and fallback
-- Upstream force-push -> sync with reset-to-upstream
-- Patch detected as merged upstream -> informational reporting
+- Full happy path: fix issue -> register patch -> submit rebuild (202) -> poll
+  until completed -> verify
+- Conflict monitoring: detect conflict via patch-status dashboard -> resolve ->
+  submit rebuild -> poll until completed -> verify resolution
+- Hub returns 409 on rebuild submission (concurrent rebuild) -> retrieve active
+  rebuild via list_rebuilds -> poll that rebuild instead
+- Hub returns 400 with `error_type: "no_active_patches"` -> skip rebuild
+  gracefully
+- Hub connection timeout -> retry via request_with_retry -> fallback
+- Upstream force-push -> sync with reset-to-upstream -> force_push_detected in
+  SyncResult
+- Sync returns `rebuild_triggered: true` with `rebuild_job_id` -> poll that
+  rebuild
+- Patch detected as merged upstream -> informational reporting, soft-delete
+  lifecycle
 - Multiple patches in conflict -> resolve in position order
 - Budget exhaustion mid-resolution -> stop and report
+- Rebuild preview (GET /rebuild-preview) -> would_conflict predictions match
+  actual rebuild conflicts
+- Rebuild rollback -> integration branch reset to
+  `previous_integration_head_sha`
+- Rebuild cancel -> queued job transitions to cancelled
+- Rebuild requeue -> dead_letter job transitions to queued
+- Polling timeout -> TimeoutError raised after deadline
+- PAT with insufficient scopes -> HubForbiddenError (403)
 
-#### 5.2 Error handling hardening
+#### 4.2 Error handling hardening
 
 **Complexity**: Medium
 
@@ -1001,13 +1769,21 @@ Files to modify:
 
 Key error paths to harden:
 
-- Hub API returns unexpected JSON schema (handle Pydantic validation errors)
-- Git clone of workspace fails (auth error, network error)
+- Hub API returns unexpected JSON schema (handle Pydantic validation errors
+  with `extra="ignore"` and graceful None defaults)
+- Git push to hub's git server fails (auth error, network error)
 - Push of resolution fails (branch was modified on hub between clone and push)
-- Patch status changes between dashboard fetch and action (stale state)
-- Hub git server returns 401 (credential expiry)
+- Patch status changes between dashboard fetch and action (stale state --
+  re-fetch before acting)
+- Hub returns 401 (PAT expired or revoked) vs 403 (PAT lacks scope) --
+  distinct error handling
+- Rebuild transitions to `dead_letter` (infrastructure failure) -- log and
+  optionally requeue via `requeue_rebuild()`
+- Hub returns omitempty fields (e.g., `clone_error`, `sync_error`,
+  `patch_results` absent instead of null) -- models handle gracefully via
+  `None` defaults
 
-#### 5.3 Documentation
+#### 4.3 Documentation
 
 **Complexity**: Medium
 
@@ -1021,22 +1797,29 @@ Files to create:
 
 - `docs/carry-patch.md` -- User guide for carry-patch setup and operation
 
-#### 5.4 Known limitations
+#### 4.4 Known limitations
 
 Document the following known limitations:
 
-1. **Squash-merge detection**: Hub's ancestry-based detection misses squash
-   merges. Users must manually mark these patches as merged_upstream.
-2. **`conflict_files` bug**: Hub's patch-status endpoint may return 500 due to
-   missing schema column. Nightshift handles this gracefully but conflict file
-   details may be unavailable.
-3. **Single rebuild constraint**: Only one rebuild per workspace at a time.
-   Nightshift will not submit if one is already running.
-4. **Conflict resolution quality**: The AI agent may not resolve all conflicts
+1. **Single rebuild constraint**: Only one rebuild per workspace at a time.
+   If nightshift submits a rebuild and one is already queued/running, it
+   receives a 409 (`concurrent_rebuild`) and polls the existing rebuild
+   instead.
+2. **Conflict resolution quality**: The AI agent may not resolve all conflicts
    correctly. Failed resolutions are logged and the patch remains in conflict
-   status for manual intervention.
-5. **No per-rebuild strategy override**: Rebuild strategy is workspace-level
-   only.
+   status for manual intervention via `afc`.
+3. **Polling overhead**: Since the hub API has no server-side blocking mode,
+   nightshift polls `GET /rebuilds/:id` at a configurable interval (default 5
+   seconds). This is consistent with how the `afc` CLI implements `--wait`.
+   The polling interval is tunable via `carry_patch.rebuild_poll_interval`.
+4. **Soft-delete visibility**: Patches soft-deleted by the hub after a
+   successful rebuild (merged_upstream -> deleted) are excluded from the
+   `GET /patches` list and the patch-status dashboard. They can be restored
+   via `afc patch restore` within 7 days but nightshift does not track them.
+5. **Scope accumulation**: The PAT used by nightshift requires a broad set of
+   scopes (see section 1.1.1). A PAT with missing scopes will receive 403
+   errors on specific endpoints; nightshift logs these as `HubForbiddenError`
+   with the failing endpoint for diagnosis.
 
 ---
 
@@ -1046,14 +1829,13 @@ Document the following known limitations:
 
 | Package | Purpose | Files |
 |---------|---------|-------|
-| `packages/afhub/` | Hub API client | ~6 source files, ~5 test files |
+| `packages/afhub/` | Hub API client, polling helpers, data models | ~7 source files, ~6 test files |
 
 ### New files in existing packages
 
 | File | Package | Purpose |
 |------|---------|---------|
 | `agentfox/nightshift/carry_patch_monitor.py` | agentfox | Conflict monitoring stream |
-| `agentfox/ui/carry_patch.py` | agentfox | Rich formatters |
 | `agentfox/_templates/profiles/coder_carry-patch.md` | agentfox | Agent profile |
 
 ### Modified files
@@ -1062,13 +1844,13 @@ Document the following known limitations:
 |------|--------|
 | `agentfox/core/config.py` | Add HubConfig, CarryPatchConfig |
 | `agentfox/archetypes.py` | Add carry-patch ModeConfig to coder |
-| `agentfox/nightshift/fix_pipeline.py` | Add patch registration step |
+| `agentfox/nightshift/fix_pipeline.py` | Add patch registration step with polling |
 | `agentfox/nightshift/engine.py` | Add `_run_carry_patch_monitor()` |
 | `agentfox/nightshift/streams.py` | Register carry-patch stream |
 | `agentfox/nightshift/daemon.py` | Display names for carry-patch stream |
 | `agentfox/session/context.py` | Carry-patch artifact filtering (if needed) |
 | `afaudit/events.py` | Add carry-patch audit event types |
-| `nightshift/app.py` | `--workspace`/`--token` flags, hub client init, bootstrap |
+| `nightshift/app.py` | `--token` flag, hub client init, variable bootstrap |
 | `agentfox/pyproject.toml` | Add afhub dependency |
 | `nightshift/pyproject.toml` | Add afhub dependency |
 | `agentfox/core/config_gen.py` | Add hub/carry_patch to visible sections |
@@ -1077,12 +1859,11 @@ Document the following known limitations:
 
 | Phase | Complexity | Relative Size |
 |-------|-----------|---------------|
-| Phase 1: Foundation | Large | ~35% |
-| Phase 2: Core logic | Medium | ~25% |
-| Phase 3: CLI | Medium | ~10% |
-| Phase 4: Agent integration | Small | ~10% |
-| Phase 5: Testing/hardening | Medium | ~20% (ongoing) |
+| Phase 1: Foundation (client, polling, config) | Large | ~35% |
+| Phase 2: Core logic (registration, monitoring, variables) | Medium-Large | ~30% |
+| Phase 3: Agent integration (archetype, profile, context) | Small-Medium | ~15% |
+| Phase 4: Testing and hardening | Medium | ~20% (ongoing) |
 
-Phases 1 and 3 can be partially parallelized (CLI subcommands only need the
-HubClient from Phase 1). Phase 4 (profile template and archetype mode) can
-be created independently of Phase 2.
+Phase 3 (profile template and archetype mode) can be created independently of
+Phase 2. Phases 1 and 2 are strictly sequential (Phase 2 depends on the
+HubClient and polling infrastructure from Phase 1).
