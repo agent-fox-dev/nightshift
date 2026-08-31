@@ -80,8 +80,9 @@ Nightshift needs to call the following hub API endpoints, all mounted under
 
 ### Key Protocol Details
 
-- Rebuild jobs are asynchronous: POST returns 202 with job ID; nightshift must
-  poll GET `/rebuilds/:id` for completion
+- Rebuild and sync calls support a blocking mode (`?wait=true`) — the hub holds
+  the connection open until the operation completes. Nightshift uses this mode
+  by default to avoid client-side polling.
 - Only one rebuild can be queued/running per workspace (concurrent submission
   returns 409)
 - Sync for carry-patch workspaces returns extra fields (`patches_merged`,
@@ -174,32 +175,29 @@ The `afissues` package uses `httpx` for async HTTP with retry logic in
 1. **Hub API client**: No HTTP client exists for communicating with af-hub. The
    `afissues` HTTP layer talks to GitHub/GitLab/Gitea APIs, not to hub. A new
    `HubClient` class is needed.
-2. **Hub authentication**: No mechanism to read hub credentials
-   (`~/.af/config.toml` with `endpoint_url`, `user_id`, `api_key`). Nightshift
-   currently authenticates only via platform-specific env vars (GITHUB_PAT,
-   etc.).
-3. **Asynchronous job polling**: The fix pipeline is synchronous per-issue (run
-   session, wait for result). Carry-patch rebuilds are asynchronous (submit, poll
-   for completion). Nightshift has no polling-with-backoff infrastructure for
-   external jobs.
+2. **Hub authentication**: No mechanism for hub tokens. Nightshift currently
+   authenticates only via platform-specific env vars (GITHUB_PAT, etc.). The
+   hub token will be accepted via `--token` CLI flag or `AF_HUB_TOKEN` env var
+   and held in memory only.
+3. ~~**Asynchronous job polling**~~: Resolved — the hub API/CLI is being updated
+   to support blocking calls (e.g., `POST /rebuild?wait=true`), eliminating the
+   need for client-side polling infrastructure.
 4. **Carry-patch domain models**: No data structures for Workspace, Patch,
    RebuildJob, PatchResult, PatchStatusDashboard.
-5. **Carry-patch work stream**: No stream implementation for the carry-patch
-   polling/dispatch loop.
-6. **Carry-patch pipeline**: No pipeline analogous to `FixPipeline` for the
-   carry-patch workflow (sync, detect conflicts, resolve, rebuild, verify).
-7. **Cherry-pick operations**: `git.py` has no `cherry_pick()` function. The
-   existing `rebase_onto()` does whole-branch rebase but not selective commit
-   cherry-picking. (Note: this may not be needed if nightshift delegates
-   rebuilding entirely to hub.)
-8. **Multi-workspace awareness**: Nightshift currently operates on a single
-   repository. Carry-patch may require the daemon to monitor multiple hub
-   workspaces.
-9. **Carry-patch profile templates**: No agent profile exists for carry-patch
-   behavioral instructions.
-10. **Carry-patch labels**: Only `af:fix`, `af:fixed`, `af:pr`, `af:no-change`
-    exist. Carry-patch needs its own label set or a different triggering
-    mechanism.
+5. **Conflict monitoring stream**: A lightweight work stream is needed to poll
+   hub for patches in conflict status after upstream advances. This does not
+   duplicate the fix pipeline — it only detects conflicts and invokes the
+   existing coder to resolve them.
+6. **Patch registration in fix pipeline**: When in carry-patch mode, the fix
+   pipeline skips local merge entirely. Instead of harvest/squash-merge, the
+   integration phase registers the fix branch as a patch with hub and requests
+   a rebuild. Hub owns the integration branch — nightshift does not touch it.
+7. **Carry-patch profile templates**: No agent profile exists for carry-patch
+   conflict resolution behavioral instructions.
+8. **Carry-patch conflict resolution labels**: Only `af:fix`, `af:fixed`,
+   `af:pr`, `af:no-change` exist. Carry-patch conflict resolution may need a
+   label (e.g., `af:carry-conflict`) or may bypass the issue tracker entirely
+   and invoke the coder directly from the conflict monitoring stream.
 
 ---
 
@@ -222,10 +220,6 @@ The `afissues` package uses `httpx` for async HTTP with retry logic in
 
 ### Medium Risk
 
-- **Polling complexity**: Rebuild jobs are asynchronous. Nightshift must poll for
-  completion without busy-waiting, handle timeouts, and deal with the 409
-  constraint (only one rebuild per workspace). The existing WorkStream
-  interval-based polling is coarse-grained for this.
 - **State synchronization**: Hub is the source of truth for patch status, rebuild
   results, and upstream state. Nightshift must avoid caching stale state and
   always re-fetch before acting.
@@ -269,39 +263,118 @@ The carry-patch workflow maps well onto nightshift's existing patterns:
    failures and continuing (never crashing the daemon) is exactly right for hub
    integration, where the hub may be temporarily unreachable.
 
-### Areas of Tension
+### Areas of Tension (Resolved)
 
-1. **Single-repo vs. multi-workspace**: Nightshift assumes a single repository
-   context. Carry-patch operates on hub workspaces that may correspond to
-   different repositories. The daemon may need to manage multiple workspace
-   contexts.
+1. ~~**Single-repo vs. multi-workspace**~~: Not an issue. Each nightshift
+   instance works against exactly one workspace (`--workspace <slug>`). For
+   multiple workspaces, run multiple instances.
 
-2. **Synchronous pipeline vs. asynchronous jobs**: `FixPipeline.process_issue()`
-   runs a complete pipeline synchronously (blocking until the fix is merged or
-   fails). Carry-patch rebuilds are fire-and-forget with polling. This requires a
-   different execution model -- closer to a state machine than a linear pipeline.
+2. ~~**Synchronous pipeline vs. asynchronous jobs**~~: Not an issue. The hub
+   API/CLI is being updated to support blocking calls (`--wait` / `?wait=true`),
+   so rebuild and sync operations can be called synchronously just like the
+   existing fix pipeline.
 
 3. **Local git vs. remote hub**: The fix pipeline operates on local git
    worktrees. Carry-patch operations (sync, rebuild, patch status) are remote API
    calls to hub. The "workspace" concept in nightshift (a local directory with a
    worktree) differs from the hub "workspace" (a server-side repository clone).
+   Nightshift bridges this by cloning the hub workspace locally at bootstrap
+   time (see [Bootstrapping](#bootstrapping)).
 
-4. **Budget accounting**: Carry-patch conflict resolution sessions consume LLM
-   tokens just like fix sessions. The `SharedBudget` mechanism works, but the
-   budget must be partitioned or prioritized between fix-pipeline and carry-patch
-   streams.
+4. ~~**Budget accounting**~~: Not an issue. There is one shared budget for all
+   work — fix pipeline and conflict resolution draw from the same pool. No
+   partitioning or prioritization needed.
 
 ### Recommended Approach
 
-The cleanest integration is a **new WorkStream** (`carry-patch`) with its own
-**pipeline class** (`CarryPatchPipeline`), backed by a **hub API client**
-(`HubClient`). This approach:
+A lightweight **conflict monitoring stream** plus **patch registration** in the
+existing fix pipeline, backed by a **hub API client** (`HubClient`). This
+approach:
 
-- Keeps carry-patch logic isolated from the fix pipeline
+- Reuses the fix pipeline for all coding work — no duplicate pipeline logic
+- Adds only a small monitoring stream for conflict detection
 - Uses the existing daemon framework for scheduling and lifecycle
-- Adds hub as an optional dependency (the daemon still works without hub
-  configured)
-- Allows independent development and testing of carry-patch features
+- Adds hub as an optional dependency (nightshift still works without it)
+
+---
+
+## Bootstrapping
+
+An operator sets up the hub workspace and provisions a token before nightshift
+starts. Nightshift then bootstraps itself from just two CLI arguments.
+
+### Prerequisites
+
+1. **Hub workspace exists.** An operator has created a carry-patch workspace on
+   the hub (via the hub UI or API), configured the upstream remote, and
+   registered the initial set of patch branches.
+2. **Hub token provisioned.** A token with at least `git:write` scope and the
+   hub API permissions needed for sync, rebuild, and patch management (exact
+   permission set TBD).
+
+### Invocation
+
+```
+nightshift --workspace <slug> --token <token>
+```
+
+Both `--workspace` and `--token` are required to activate carry-patch mode.
+When either is absent, nightshift falls back to its normal fix-pipeline
+behavior (if configured) or exits with an error if no work mode is available.
+
+### Startup Behavior
+
+On startup, nightshift resolves the local working directory in one of two ways:
+
+1. **CWD matches the workspace.** If the current working directory is already
+   a git clone whose origin matches the hub workspace identified by `<slug>`,
+   nightshift starts working from there immediately. It reads any existing
+   `.nightshift/config.toml` in the CWD and merges in the `--workspace` and
+   `--token` values.
+
+2. **CWD does not match.** If nightshift is not inside a directory that matches
+   the `--workspace` slug, it:
+   1. Queries the hub API for the workspace's git URL
+      (`GET /api/v1/workspaces/<slug>` → `git_url`)
+   2. Clones the repository into a new local directory (named after the slug)
+   3. Changes its working directory to the new clone
+   4. Creates a default `.nightshift/config.toml` inside the clone, pre-populated
+      with the hub endpoint, workspace slug, and carry-patch-specific defaults
+   5. Begins the carry-patch work loop
+
+### Token Handling
+
+- The `--token` flag value is used for both hub API authentication
+  (`Authorization: Bearer <token>`) and git operations against the hub's git
+  server (HTTP basic auth with the token).
+- The token is held in memory only — it is never written to `config.toml` or
+  any file on disk.
+- Alternatively, the token can be provided via the `AF_HUB_TOKEN` environment
+  variable. The `--token` flag takes precedence if both are set.
+
+### Config Generation
+
+When nightshift creates a new clone and config, the generated
+`.nightshift/config.toml` contains:
+
+```toml
+[hub]
+endpoint_url = "<resolved from workspace API>"
+
+[carry_patch]
+enabled = true
+workspaces = ["<slug>"]
+check_interval = 300
+auto_resolve = true
+
+[workspace]
+integration_branch = "deploy"
+merge_strategy = "direct"
+```
+
+The operator can customize this config after the first run. Subsequent
+invocations with the same `--workspace` flag reuse the existing config and
+clone directory.
 
 ---
 
@@ -309,26 +382,32 @@ The cleanest integration is a **new WorkStream** (`carry-patch`) with its own
 
 ### DD-1: Hub as optional dependency
 
-**Decision**: Hub integration is opt-in via configuration. When `[hub]` section
-is absent or `hub.endpoint_url` is empty, all carry-patch functionality is
-disabled. The fix-pipeline and pr-feedback streams continue to work
-independently.
+**Decision**: Hub integration is opt-in. Carry-patch mode activates only when
+`--workspace` and `--token` are provided on the command line (or `AF_HUB_TOKEN`
+is set). When neither is present, all carry-patch functionality is disabled. The
+fix-pipeline and pr-feedback streams continue to work independently.
 
 **Rationale**: Nightshift must remain functional without hub. Many users will
-never use carry-patch.
+never use carry-patch. The CLI-flag approach makes it explicit — no config file
+is needed to get started.
 
 ### DD-2: Workspace discovery mechanism
 
-**Decision**: Nightshift monitors a configured list of hub workspace slugs (via
-`[hub] workspaces = ["slug-1", "slug-2"]` in config). It does not auto-discover
-workspaces.
+**Decision**: Nightshift operates on the single workspace specified by
+`--workspace <slug>`. The slug is persisted in the local config's
+`[carry_patch] workspaces` list after bootstrapping. Multiple workspaces can
+be monitored by running multiple nightshift instances, each with its own
+`--workspace` flag and working directory.
 
-**Rationale**: Auto-discovery would require listing all workspaces and filtering
-by mode, which introduces security and scope concerns. Explicit configuration is
-safer and more predictable.
+**Rationale**: A single-workspace-per-process model is simpler, avoids
+cross-repo CWD management, and maps cleanly to one clone per workspace. For
+multi-workspace scenarios, an operator runs multiple nightshift instances
+(e.g., one systemd unit or container per workspace).
 
-**Alternative considered**: Single workspace mode (one slug in config). Rejected
-because organizations often maintain multiple forks.
+**Alternative considered**: Multi-workspace in a single process (list of slugs
+in config). Rejected for initial implementation because it requires managing
+multiple local clones and CWD switching within a single daemon. Can be
+reconsidered later if demand warrants it.
 
 ### DD-3: Conflict resolution strategy
 
@@ -347,15 +426,16 @@ carry-patch-specific profile that understands the upstream-vs-patch context.
 Rejected as it defeats the purpose of nightshift automation, though a
 `carry_patch.auto_resolve = false` config option should exist as an escape hatch.
 
-### DD-4: Rebuild polling strategy
+### DD-4: Rebuild call strategy
 
-**Decision**: After submitting a rebuild, poll at increasing intervals: 5s, 10s,
-20s, 30s, then every 30s up to a configurable timeout (default 10 minutes). Use
-the WorkStream's `run_once()` cycle to check pending rebuilds rather than
-blocking.
+**Decision**: Use the hub API's blocking mode (`?wait=true`) for rebuild and sync
+calls. The hub holds the connection open until the operation completes or a
+server-side timeout is reached. Nightshift sets a client-side timeout matching
+`carry_patch.rebuild_timeout` (default 600 seconds).
 
-**Rationale**: Rebuilds typically complete in seconds to minutes. Exponential
-backoff avoids hammering the hub API while maintaining responsiveness.
+**Rationale**: The hub is adding `--wait` support to avoid the complexity of
+client-side polling. This keeps nightshift's execution model synchronous and
+consistent with the fix pipeline.
 
 ### DD-5: Integration with issue tracker
 
@@ -376,23 +456,25 @@ following the same pattern as `packages/afissues/`. This package owns all hub
 communication, data models, and authentication.
 
 **Rationale**: Separation of concerns. The hub client has its own authentication
-model (API keys from `~/.af/config.toml`), its own error types, and its own data
+model (token via CLI flag or env var), its own error types, and its own data
 models. Placing it in `agentfox` would violate the existing package boundaries.
 
 **Alternative considered**: Adding hub client to `agentfox/nightshift/`. Rejected
 because the hub client is a general-purpose API layer, not nightshift-specific
 logic.
 
-### DD-7: Local clone for conflict resolution
+### DD-7: Local clone and working directory
 
-**Decision**: For conflict resolution, nightshift clones the workspace from hub's
-git server into a local worktree (under
-`.nightshift/worktrees/carry-patch/{workspace-slug}/`). The clone is shallow and
-cached between cycles.
+**Decision**: Nightshift works from a local clone of the hub workspace. At
+bootstrap time, if the CWD is not already a matching clone, nightshift creates
+one automatically (see [Bootstrapping](#bootstrapping)). Conflict resolution,
+patch inspection, and all git operations run against this local clone. The clone
+is kept up-to-date via `git fetch` at the start of each carry-patch cycle.
 
 **Rationale**: Conflict resolution requires local file access for the coder
 agent. Hub's git server at `/git/:org/:slug.git` provides authenticated access.
-Caching the clone avoids re-cloning on every cycle.
+A persistent clone (rather than ephemeral worktrees) avoids re-cloning on every
+cycle and gives the coder agent a full repository context.
 
 ---
 
@@ -412,8 +494,8 @@ Files to create:
 - `packages/afhub/afhub/client.py` -- `HubClient` class
 - `packages/afhub/afhub/models.py` -- Pydantic data models
 - `packages/afhub/afhub/errors.py` -- Hub-specific error types
-- `packages/afhub/afhub/auth.py` -- Credential loading from
-  `~/.af/config.toml`
+- `packages/afhub/afhub/auth.py` -- Credential resolution (`--token` flag,
+  `AF_HUB_TOKEN` env var)
 - `packages/afhub/tests/` -- Test directory
 
 **`HubClient` class** (`client.py`):
@@ -427,7 +509,7 @@ class HubClient:
     # Workspace operations
     async def get_workspace(self, slug: str) -> Workspace: ...
     async def create_workspace(self, **kwargs) -> Workspace: ...
-    async def sync_workspace(self, slug: str, *, reset_to_upstream: bool = False) -> SyncResult: ...
+    async def sync_workspace(self, slug: str, *, reset_to_upstream: bool = False, wait: bool = True) -> SyncResult: ...
     async def get_patch_status(self, slug: str) -> PatchStatusDashboard: ...
 
     # Patch operations
@@ -438,11 +520,9 @@ class HubClient:
     async def reorder_patches(self, slug: str, patch_ids: list[str]) -> None: ...
 
     # Rebuild operations
-    async def submit_rebuild(self, slug: str) -> RebuildJob: ...
+    async def submit_rebuild(self, slug: str, *, wait: bool = True) -> RebuildJob: ...
     async def get_rebuild(self, slug: str, rebuild_id: str) -> RebuildJob: ...
     async def list_rebuilds(self, slug: str) -> list[RebuildJob]: ...
-    async def poll_rebuild(self, slug: str, rebuild_id: str, *, timeout: float = 600) -> RebuildJob: ...
-
     # Rerere operations
     async def list_rerere(self, slug: str) -> list[RerereEntry]: ...
     async def forget_rerere(self, slug: str, pathspec: str) -> None: ...
@@ -452,8 +532,9 @@ class HubClient:
     async def set_variable(self, slug: str, key: str, value: str) -> None: ...
 ```
 
-The `poll_rebuild()` method implements the polling strategy from DD-4 internally,
-returning the terminal-state rebuild job or raising `RebuildTimeoutError`.
+The `submit_rebuild()` method uses the hub's blocking mode (`?wait=true`) by
+default, returning the completed rebuild job directly. The client-side timeout
+is set to `carry_patch.rebuild_timeout` (default 600 seconds).
 
 **Data models** (`models.py`):
 
@@ -521,16 +602,17 @@ class HubError(Exception): ...
 class HubAuthError(HubError): ...
 class HubNotFoundError(HubError): ...
 class HubConflictError(HubError): ...   # 409 - rebuild already running
-class RebuildTimeoutError(HubError): ...
 class HubConnectionError(HubError): ...
 ```
 
 **Auth** (`auth.py`):
 
-- `load_hub_credentials()` reads `~/.af/config.toml` and returns
-  `(endpoint_url, api_key)`
-- Falls back to environment variables `AF_HUB_URL` and `AF_HUB_API_KEY`
-- Returns `None` if neither is configured (hub is optional)
+- `resolve_hub_token()` resolves the hub token from (in priority order):
+  1. Explicit value passed from `--token` CLI flag
+  2. `AF_HUB_TOKEN` environment variable
+- Returns `None` if neither is set (carry-patch mode unavailable)
+- The hub endpoint URL is resolved from `--workspace` via the hub API, or
+  read from `[hub] endpoint_url` in the local config on subsequent runs
 
 #### 1.2 Add hub configuration to nightshift
 
@@ -546,7 +628,6 @@ class HubConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     endpoint_url: str = Field(default="", description="Hub API endpoint URL")
-    api_key: str = Field(default="", description="Hub API key (prefer AF_HUB_API_KEY env var)")
 
 class CarryPatchConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -585,101 +666,92 @@ Files to create:
 - `packages/afhub/tests/test_models.py` -- Model serialization/deserialization
 - `packages/afhub/tests/test_auth.py` -- Credential loading
 - `packages/afhub/tests/test_errors.py` -- Error classification
-- `packages/afhub/tests/test_poll_rebuild.py` -- Polling behavior (backoff,
-  timeout)
 
 ---
 
-### Phase 2: Core Carry-Patch Logic (Depends on Phase 1, ~30% of effort)
+### Phase 2: Core Carry-Patch Logic (Depends on Phase 1, ~25% of effort)
 
-#### 2.1 Carry-patch pipeline
+Carry-patch mode does not duplicate the fix pipeline. The existing fix pipeline
+already creates fixes on branches from `af:fix` issues. In carry-patch mode,
+the only differences are:
 
-**Complexity**: Large
+- Fix branches are **registered as patches** with hub after integration
+- A lightweight **conflict monitoring stream** polls hub for patches that need
+  conflict resolution after upstream advances
+- Conflict resolution reuses the existing coder via `FixPipeline._run_coder_session()`
+
+#### 2.1 Patch registration in fix pipeline
+
+**Complexity**: Small
+
+Files to modify:
+
+- `packages/agentfox/agentfox/nightshift/fix_pipeline.py` -- Replace
+  harvest/integration with patch registration in carry-patch mode
+
+When `carry_patch.enabled` is true, after the fix branch is created and the
+coder-reviewer loop completes, the fix pipeline **skips local merge entirely**
+(no harvest, no squash-merge). Instead:
+
+1. Push the fix branch to origin
+2. Register the fix branch as a patch with hub
+   (`hub_client.add_patch(slug, branch_name, ...)`)
+3. Request a rebuild (`hub_client.submit_rebuild(slug, wait=True)`)
+4. On success, proceed with normal issue closure
+
+Hub owns the integration branch — nightshift never touches it. The existing
+merge strategies (`direct`, `branch`, `pr`) are not used in carry-patch mode.
+
+#### 2.2 Conflict monitoring stream
+
+**Complexity**: Medium
 
 Files to create:
 
-- `packages/agentfox/agentfox/nightshift/carry_patch_pipeline.py`
+- `packages/agentfox/agentfox/nightshift/carry_patch_monitor.py`
 
 ```python
-class CarryPatchPipeline:
-    """Manages the carry-patch lifecycle for a single hub workspace."""
+class CarryPatchMonitor:
+    """Lightweight conflict monitor for a hub workspace.
+
+    Polls hub for patch-status on each cycle. When patches are in
+    conflict status, invokes the existing coder to resolve them.
+    """
 
     def __init__(
         self,
         hub_client: HubClient,
         workspace_slug: str,
         config: AgentFoxConfig,
-        callbacks: ...,
-        knowledge_provider: KnowledgeProvider | None = None,
-        conn: duckdb.DuckDBPyConnection | None = None,
     ) -> None: ...
 
-    async def run_cycle(self) -> CarryPatchCycleResult:
-        """Execute one carry-patch maintenance cycle.
+    async def run_cycle(self) -> MonitorCycleResult:
+        """Execute one monitoring cycle.
 
         Steps:
         1. Fetch patch-status dashboard from hub
-        2. Report any newly merged patches (informational)
-        3. If patches are in conflict status and auto_resolve is enabled:
-           a. Clone/update workspace from hub git server
-           b. For each conflicting patch, run conflict resolution
-           c. Push resolved patch branch back to hub
-           d. Reset patch status to active
-           e. Submit new rebuild
-        4. If no conflicts but rebuild is needed (e.g., after sync):
-           a. Submit rebuild
-           b. Poll for completion
-        5. Return cycle result with actions taken
+        2. Log any newly merged patches (informational)
+        3. For each patch in conflict status (if auto_resolve is enabled):
+           a. Fetch upstream diff and conflict details
+           b. Run coder:carry-patch session to resolve
+           c. Push resolved branch back to hub
+           d. Request rebuild
+        4. Return cycle result with actions taken
         """
-
-    async def _resolve_conflict(
-        self, patch: Patch, dashboard: PatchStatusDashboard
-    ) -> bool: ...
-
-    async def _ensure_local_clone(self) -> Path: ...
-
-    async def _push_resolution(self, patch: Patch, clone_path: Path) -> None: ...
 ```
 
 Key behaviors:
 
-- **Idempotent cycles**: Each `run_cycle()` call fetches fresh state from hub
-  and acts only on what is needed. No persistent local state beyond the cached
-  git clone.
-- **Conflict resolution**: Uses the coder:carry-patch archetype+mode. The agent
-  receives the conflicting patch's changes, the upstream changes that cause the
-  conflict, and instructions to resolve while preserving the patch's intent.
-- **Rebuild management**: Respects the 409 constraint (only one rebuild at a
-  time). If a rebuild is already running, the cycle logs this and returns without
-  submitting.
+- **Idempotent cycles**: Fetches fresh state from hub on each cycle. No
+  persistent local state beyond the working directory clone.
+- **Reuses existing coder**: Conflict resolution invokes
+  `FixPipeline._run_coder_session()` (or the underlying `run_session()`) with
+  `archetype="coder"` and `mode="carry-patch"`. No duplicate pipeline logic.
 - **Error handling**: Follows nightshift's fail-open pattern. A failed conflict
   resolution for one patch does not block attempts on other patches. Hub
   connection failures are logged and the cycle skips.
 
-#### 2.2 Carry-patch engine integration
-
-**Complexity**: Medium
-
-Files to modify:
-
-- `packages/agentfox/agentfox/nightshift/engine.py` -- Add carry-patch dispatch
-  method
-
-```python
-async def _run_carry_patch_cycle(self) -> None:
-    """Run one carry-patch maintenance cycle across all configured workspaces.
-
-    For each workspace slug in config.carry_patch.workspaces:
-    1. Get or create CarryPatchPipeline instance
-    2. Call pipeline.run_cycle()
-    3. Update state counters
-    """
-```
-
-The engine lazily creates `CarryPatchPipeline` instances (one per workspace
-slug), cached in a dict. The `HubClient` is shared across all pipelines.
-
-#### 2.3 Register carry-patch work stream
+#### 2.3 Register conflict monitoring work stream
 
 **Complexity**: Small
 
@@ -687,27 +759,8 @@ Files to modify:
 
 - `packages/agentfox/agentfox/nightshift/streams.py` -- Add carry-patch stream
   to `build_streams()`
-
-```python
-carry_patch_cfg = getattr(config, "carry_patch", None)
-carry_patch_enabled = (
-    getattr(carry_patch_cfg, "enabled", False)
-    and bool(getattr(carry_patch_cfg, "workspaces", []))
-)
-if carry_patch_enabled:
-    cp_interval = getattr(carry_patch_cfg, "check_interval", 300)
-    streams.append(
-        EngineWorkStream(
-            stream_name="carry-patch",
-            engine=engine,
-            method_name="_run_carry_patch_cycle",
-            budget=budget,
-            enabled=True,
-            interval=cp_interval,
-        )
-    )
-```
-
+- `packages/agentfox/agentfox/nightshift/engine.py` -- Add
+  `_run_carry_patch_monitor()` method that delegates to `CarryPatchMonitor`
 - `packages/agentfox/agentfox/nightshift/daemon.py` -- Add `"carry-patch"` to
   `_STREAM_DISPLAY_NAMES` and `_STREAM_ACTIVE_LABELS`
 
@@ -722,14 +775,11 @@ Files to modify:
 
 ```python
 hub_client = None
-if config.carry_patch.enabled and config.carry_patch.workspaces:
-    from afhub.auth import load_hub_credentials
-    creds = load_hub_credentials(config.hub)
-    if creds:
-        from afhub.client import HubClient
-        hub_client = HubClient(creds.endpoint_url, creds.api_key)
-    else:
-        logger.warning("Carry-patch enabled but hub credentials not found; disabling")
+if workspace_slug and hub_token:
+    from afhub.client import HubClient
+    hub_client = HubClient(config.hub.endpoint_url, hub_token)
+elif config.carry_patch.enabled:
+    logger.warning("Carry-patch enabled in config but --workspace/--token not provided; disabling")
 ```
 
 #### 2.5 Audit events for carry-patch
@@ -741,40 +791,36 @@ Files to modify:
 - `packages/afaudit/afaudit/events.py` -- Add new event types
 
 ```python
-CARRY_PATCH_CYCLE_START = "carry_patch_cycle_start"
-CARRY_PATCH_CYCLE_COMPLETE = "carry_patch_cycle_complete"
 CARRY_PATCH_CONFLICT_DETECTED = "carry_patch_conflict_detected"
 CARRY_PATCH_CONFLICT_RESOLVED = "carry_patch_conflict_resolved"
 CARRY_PATCH_CONFLICT_FAILED = "carry_patch_conflict_failed"
-CARRY_PATCH_REBUILD_SUBMITTED = "carry_patch_rebuild_submitted"
-CARRY_PATCH_REBUILD_COMPLETED = "carry_patch_rebuild_completed"
-CARRY_PATCH_REBUILD_FAILED = "carry_patch_rebuild_failed"
+CARRY_PATCH_PATCH_REGISTERED = "carry_patch_patch_registered"
+CARRY_PATCH_REBUILD_REQUESTED = "carry_patch_rebuild_requested"
 CARRY_PATCH_MERGED_DETECTED = "carry_patch_merged_detected"
 ```
 
 #### 2.6 Tests for Phase 2
 
-**Complexity**: Large
+**Complexity**: Medium
 
 Files to create:
 
-- `packages/agentfox/tests/test_carry_patch_pipeline.py` -- Pipeline logic tests
+- `packages/agentfox/tests/test_carry_patch_monitor.py` -- Monitor logic tests
   with mocked HubClient
+- `packages/agentfox/tests/test_carry_patch_registration.py` -- Patch
+  registration in fix pipeline
 - `packages/agentfox/tests/test_carry_patch_stream.py` -- Stream registration
   and enablement
-- `packages/agentfox/tests/test_carry_patch_engine.py` -- Engine dispatch
 
 Key test scenarios:
 
-- Cycle with no conflicts, no rebuilds needed (no-op)
-- Cycle with one patch in conflict status -> resolution -> rebuild submission
-- Cycle with rebuild already running (409 handling)
-- Cycle with hub unreachable (graceful degradation)
-- Cycle with merged patches detected (informational reporting)
-- Multiple workspaces in a single cycle
-- Auto-resolve disabled (skip conflict resolution, only report)
-- Rebuild timeout handling
-- Budget exhaustion during conflict resolution
+- Monitor cycle with no conflicts (no-op)
+- Monitor cycle with one patch in conflict -> resolution -> rebuild
+- Monitor cycle with hub unreachable (graceful degradation)
+- Monitor cycle with merged patches detected (informational)
+- Auto-resolve disabled (skip resolution, only report)
+- Fix pipeline registers patch after successful fix
+- Fix pipeline skips registration when not in carry-patch mode
 
 ---
 
@@ -845,6 +891,10 @@ Files to create:
 
 ### Phase 4: Agent Integration — Conflict Resolution (Depends on Phase 2, ~15% of effort)
 
+Conflict resolution reuses the existing coder session infrastructure. The new
+pieces are a dedicated archetype mode and profile template that give the coder
+agent the right context and instructions for carry-patch conflicts.
+
 #### 4.1 Carry-patch archetype mode
 
 **Complexity**: Small
@@ -881,65 +931,33 @@ Profile content should instruct the agent:
 - Test the resolution if a test suite is available
 - Explain what changed and why in the commit message
 
-#### 4.3 Conflict resolution session runner
-
-**Complexity**: Medium
-
-Files to create:
-
-- `packages/agentfox/agentfox/nightshift/carry_patch_resolver.py`
-
-```python
-class CarryPatchResolver:
-    """Runs a coder:carry-patch session to resolve a patch conflict."""
-
-    async def resolve(
-        self,
-        clone_path: Path,
-        patch: Patch,
-        upstream_head: str,
-        conflict_context: str,
-    ) -> ResolveResult:
-        """Set up the conflict scenario and run the agent.
-
-        Steps:
-        1. Checkout the patch branch
-        2. Attempt rebase onto upstream HEAD to reproduce the conflict
-        3. Build context with conflict details, patch description, upstream diff
-        4. Run coder:carry-patch session
-        5. Verify resolution (no conflict markers remain)
-        6. Return success/failure
-        """
-```
-
-This class uses `run_session()` from `agentfox/session/session.py` with
-`archetype="coder"` and `mode="carry-patch"`.
-
-#### 4.4 Context construction for conflict resolution
+#### 4.3 Context construction for conflict resolution
 
 **Complexity**: Small
+
+The `CarryPatchMonitor` (Phase 2.2) builds context for the coder session:
+
+- Patch description (why the patch exists)
+- Conflict files and markers
+- Upstream changes that caused the conflict (diff)
+- Git rerere history if available (from hub API)
+- Prior resolution attempts (from knowledge store)
+
+This context is passed to `run_session()` with `archetype="coder"` and
+`mode="carry-patch"`, reusing the same session infrastructure as the fix
+pipeline.
 
 Files to modify (if needed):
 
 - `packages/agentfox/agentfox/session/context.py` -- Add carry-patch to
   `_ARCHETYPE_ARTIFACTS`
 
-The conflict resolution context includes:
+#### 4.4 Tests for Phase 4
 
-- Patch description (why the patch exists)
-- Conflict files and markers
-- Upstream changes that caused the conflict (diff)
-- Git rerere history if available
-- Prior resolution attempts (from knowledge store)
-
-#### 4.5 Tests for Phase 4
-
-**Complexity**: Medium
+**Complexity**: Small
 
 Files to create:
 
-- `packages/agentfox/tests/test_carry_patch_resolver.py` -- Resolver tests with
-  mock sessions
 - `packages/agentfox/tests/test_carry_patch_profile.py` -- Profile loading and
   content tests
 
@@ -959,7 +977,8 @@ Files to create:
 
 Test scenarios:
 
-- Full happy path: sync -> detect conflict -> resolve -> rebuild -> verify
+- Full happy path: fix issue -> register patch -> rebuild (blocking) -> verify
+- Conflict monitoring: detect conflict -> resolve -> rebuild
 - Hub returns 500 for patch-status (known conflict_files bug) -> graceful
   degradation
 - Hub returns 409 on rebuild submission -> skip and report
@@ -967,9 +986,7 @@ Test scenarios:
 - Upstream force-push -> sync with reset-to-upstream
 - Patch detected as merged upstream -> informational reporting
 - Multiple patches in conflict -> resolve in position order
-- Rebuild timeout -> report and skip
 - Budget exhaustion mid-resolution -> stop and report
-- Concurrent fix-pipeline and carry-patch streams -> no interference
 
 #### 5.2 Error handling hardening
 
@@ -977,8 +994,10 @@ Test scenarios:
 
 Files to modify:
 
-- `packages/agentfox/agentfox/nightshift/carry_patch_pipeline.py` -- Add
+- `packages/agentfox/agentfox/nightshift/carry_patch_monitor.py` -- Add
   comprehensive error handling
+- `packages/agentfox/agentfox/nightshift/fix_pipeline.py` -- Harden patch
+  registration error paths
 
 Key error paths to harden:
 
@@ -1033,8 +1052,7 @@ Document the following known limitations:
 
 | File | Package | Purpose |
 |------|---------|---------|
-| `agentfox/nightshift/carry_patch_pipeline.py` | agentfox | Main pipeline |
-| `agentfox/nightshift/carry_patch_resolver.py` | agentfox | Conflict resolution |
+| `agentfox/nightshift/carry_patch_monitor.py` | agentfox | Conflict monitoring stream |
 | `agentfox/ui/carry_patch.py` | agentfox | Rich formatters |
 | `agentfox/_templates/profiles/coder_carry-patch.md` | agentfox | Agent profile |
 
@@ -1044,12 +1062,13 @@ Document the following known limitations:
 |------|--------|
 | `agentfox/core/config.py` | Add HubConfig, CarryPatchConfig |
 | `agentfox/archetypes.py` | Add carry-patch ModeConfig to coder |
-| `agentfox/nightshift/engine.py` | Add `_run_carry_patch_cycle()` |
+| `agentfox/nightshift/fix_pipeline.py` | Add patch registration step |
+| `agentfox/nightshift/engine.py` | Add `_run_carry_patch_monitor()` |
 | `agentfox/nightshift/streams.py` | Register carry-patch stream |
 | `agentfox/nightshift/daemon.py` | Display names for carry-patch stream |
 | `agentfox/session/context.py` | Carry-patch artifact filtering (if needed) |
 | `afaudit/events.py` | Add carry-patch audit event types |
-| `nightshift/app.py` | Carry-patch CLI group, hub client init |
+| `nightshift/app.py` | `--workspace`/`--token` flags, hub client init, bootstrap |
 | `agentfox/pyproject.toml` | Add afhub dependency |
 | `nightshift/pyproject.toml` | Add afhub dependency |
 | `agentfox/core/config_gen.py` | Add hub/carry_patch to visible sections |
@@ -1059,12 +1078,11 @@ Document the following known limitations:
 | Phase | Complexity | Relative Size |
 |-------|-----------|---------------|
 | Phase 1: Foundation | Large | ~35% |
-| Phase 2: Core logic | Large | ~30% |
+| Phase 2: Core logic | Medium | ~25% |
 | Phase 3: CLI | Medium | ~10% |
-| Phase 4: Agent integration | Medium | ~15% |
-| Phase 5: Testing/hardening | Large | ~10% (ongoing) |
+| Phase 4: Agent integration | Small | ~10% |
+| Phase 5: Testing/hardening | Medium | ~20% (ongoing) |
 
 Phases 1 and 3 can be partially parallelized (CLI subcommands only need the
-HubClient from Phase 1, not the pipeline from Phase 2). Phase 4 depends on Phase
-2 for the pipeline integration points but the profile template and archetype mode
-can be created independently.
+HubClient from Phase 1). Phase 4 (profile template and archetype mode) can
+be created independently of Phase 2.
