@@ -82,12 +82,6 @@ class TestNoOldImportPaths:
         for old_path in self.OLD_MODULE_PATHS:
             assert old_path not in content, f"Old import path '{old_path}' still found in agentfox/"
 
-    def test_no_old_imports_in_af(self) -> None:
-        """No old audit module imports should remain in af/ source."""
-        content = _read_all_py_content(AF_PKG)
-        for old_path in self.OLD_MODULE_PATHS:
-            assert old_path not in content, f"Old import path '{old_path}' still found in af/"
-
     def test_no_old_imports_in_nightshift(self) -> None:
         """No old audit module imports should remain in nightshift/ source."""
         content = _read_all_py_content(NIGHTSHIFT_PKG)
@@ -124,18 +118,11 @@ class TestNoReexportShims:
             )
 
 
-class TestAfNightshiftDependencies:
-    """TS-01-37: af and nightshift declare afaudit as a direct dependency.
+class TestNightshiftDependencies:
+    """TS-01-37: nightshift declares afaudit as a direct dependency.
 
     Requirement: 01-REQ-10.4
     """
-
-    def test_af_depends_on_afaudit(self) -> None:
-        """af/pyproject.toml must list afaudit in [project.dependencies]."""
-        with open(AF_PKG / "pyproject.toml", "rb") as f:
-            toml = tomllib.load(f)
-        deps = toml["project"]["dependencies"]
-        assert any("afaudit" in d for d in deps), f"afaudit not found in af [project.dependencies]: {deps}"
 
     def test_nightshift_depends_on_afaudit(self) -> None:
         """nightshift/pyproject.toml must list afaudit in [project.dependencies]."""
@@ -143,13 +130,6 @@ class TestAfNightshiftDependencies:
             toml = tomllib.load(f)
         deps = toml["project"]["dependencies"]
         assert any("afaudit" in d for d in deps), f"afaudit not found in nightshift [project.dependencies]: {deps}"
-
-    def test_af_imports_from_afaudit(self) -> None:
-        """af source must import symbols from afaudit (not old agentfox paths)."""
-        content = _read_all_py_content(AF_PKG)
-        assert "from afaudit" in content or "import afaudit" in content, (
-            "af source should import from afaudit after migration"
-        )
 
     def test_nightshift_imports_from_afaudit(self) -> None:
         """nightshift source must import symbols from afaudit."""

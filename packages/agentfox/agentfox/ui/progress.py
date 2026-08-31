@@ -25,8 +25,17 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.text import Text
 
-from agentfox.reporting.formatters import format_tokens
 from agentfox.ui.display import AppTheme
+
+
+def format_tokens(count: int | None) -> str:
+    if count is None:
+        return "?k"
+    if count >= 1_000_000:
+        return f"{count / 1_000_000:.1f}M"
+    if count >= 1000:
+        return f"{count / 1000:.1f}k"
+    return str(count)
 
 if TYPE_CHECKING:
     from agentfox.io.spinner import StatusSpinner

@@ -251,17 +251,3 @@ class TestTestsAddedOrModifiedAccessible:
         assert len(model.tests_added_or_modified) == 1
         assert model.tests_added_or_modified[0].path == "tests/test_a.py"
 
-    def test_session_lifecycle_source_references_tests_added(self) -> None:
-        """session_lifecycle.py source contains a reference to tests_added_or_modified."""
-        from pathlib import Path
-
-        # Read the source file directly to avoid importing session_lifecycle
-        # (which pulls in afaudit and other heavy dependencies).
-        lifecycle_path = (
-            Path(__file__).resolve().parents[3]
-            / "agentfox"
-            / "engine"
-            / "session_lifecycle.py"
-        )
-        source = lifecycle_path.read_text(encoding="utf-8")
-        assert "tests_added_or_modified" in source

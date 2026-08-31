@@ -73,12 +73,10 @@ class TestUnifiedLoadConfig:
     """TS-13-1: All CLIs share the same load_config function."""
 
     def test_all_clis_share_load_config_function(self):
-        """Verify af and nightshift import the same load_config."""
-        import af.app
+        """Verify nightshift imports the same load_config."""
         import nightshift.app
         from agentfox.core.config import load_config as agentfox_load_config
 
-        assert af.app.load_config is agentfox_load_config
         assert nightshift.app.load_config is agentfox_load_config
 
 
@@ -576,155 +574,6 @@ class TestDebugLogHomeUnresolvable:
         assert any("HOME" in msg and ("could not be resolved" in msg or "skipped" in msg) for msg in caplog.messages)
 
 
-# ===================================================================
-# TS-13-24: af init creates global config with 0o700
-# ===================================================================
-class TestAfInitGlobalConfig:
-    """TS-13-24: af init creates global dir and config."""
-
-    def test_af_init_creates_global_config(self, fake_home, tmp_path, monkeypatch, clean_af_env):
-        """af init creates $HOME/.agent-fox/ with 0o700 and default config."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-
-        repo = tmp_path / "repo"
-        repo.mkdir(exist_ok=True)
-        monkeypatch.chdir(repo)
-
-        runner = CliRunner()
-        result = runner.invoke(af_main, ["init"])
-
-        assert result.exit_code == 0
-        global_dir = fake_home / ".agent-fox"
-        assert global_dir.exists()
-        assert oct(global_dir.stat().st_mode & 0o777) == "0o700"
-        assert (global_dir / "config.toml").exists()
-
-
-# ===================================================================
-# TS-13-25: af init --config preserves global config
-# ===================================================================
-class TestAfInitGlobalPreserved:
-    """TS-13-25: af init --config never overwrites global config."""
-
-    def test_af_init_config_preserves_global(self, fake_home, global_config_dir, tmp_path, monkeypatch, clean_af_env):
-        """Global config with custom content is preserved even with --config."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-
-        original_content = "# custom\n[theme]\nplayful = false\n"
-        (global_config_dir / "config.toml").write_text(original_content)
-        repo = tmp_path / "repo"
-        repo.mkdir(exist_ok=True)
-        monkeypatch.chdir(repo)
-
-        runner = CliRunner()
-        result = runner.invoke(af_main, ["init", "--config"])
-
-        assert result.exit_code == 0
-        assert (global_config_dir / "config.toml").read_text() == original_content
-
-
-# ===================================================================
-# TS-13-26: af init does NOT create local config; --config creates one
-# ===================================================================
-class TestAfInitLocalOptIn:
-    """TS-13-26: af init without --config does not create local config."""
-
-    def test_af_init_no_local_config(self, fake_home, global_config, tmp_path, monkeypatch, clean_af_env):
-        """af init without --config does not create a local config."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-
-        repo = tmp_path / "repo"
-        repo.mkdir(exist_ok=True)
-        monkeypatch.chdir(repo)
-
-        runner = CliRunner()
-        result = runner.invoke(af_main, ["init"])
-
-        assert result.exit_code == 0
-        local_config = repo / ".agent-fox" / "config.toml"
-        assert not local_config.exists()
-
-    def test_af_init_config_creates_local(self, fake_home, global_config, tmp_path, monkeypatch, clean_af_env):
-        """af init --config creates a local config with promoted-fields style."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-
-        repo = tmp_path / "repo"
-        repo.mkdir(exist_ok=True)
-        monkeypatch.chdir(repo)
-
-        runner = CliRunner()
-        result = runner.invoke(af_main, ["init", "--config"])
-
-        assert result.exit_code == 0
-        local_config = repo / ".agent-fox" / "config.toml"
-        assert local_config.exists()
-        content = local_config.read_text()
-        assert "local configuration" in content.lower()
-
-
-# ===================================================================
-# TS-13-27: af init preserves existing local config
-# ===================================================================
-class TestAfInitLocalPreserved:
-    """TS-13-27: af init without --config preserves existing local config."""
-
-    def test_af_init_preserves_local(self, fake_home, global_config, tmp_path, monkeypatch, clean_af_env):
-        """Existing local config is not overwritten without --config."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-
-        repo = tmp_path / "repo"
-        repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
-        local_dir.mkdir(exist_ok=True)
-        original = "[orchestrator]\nparallel = 4\n"
-        (local_dir / "config.toml").write_text(original)
-        monkeypatch.chdir(repo)
-
-        runner = CliRunner()
-        result = runner.invoke(af_main, ["init"])
-
-        assert result.exit_code == 0
-        assert (local_dir / "config.toml").read_text() == original
-
-
-# ===================================================================
-# TS-13-28: af init --config overwrites local, preserves global
-# ===================================================================
-class TestAfInitConfigOverwritesLocal:
-    """TS-13-28: af init --config overwrites local, preserves global."""
-
-    def test_af_init_config_overwrites_local(self, fake_home, global_config_dir, tmp_path, monkeypatch, clean_af_env):
-        """--config regenerates local config template."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-
-        global_content = "# custom global\n[theme]\nplayful = false\n"
-        (global_config_dir / "config.toml").write_text(global_content)
-
-        repo = tmp_path / "repo"
-        repo.mkdir(exist_ok=True)
-        local_dir = repo / ".agent-fox"
-        local_dir.mkdir(exist_ok=True)
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 4\n")
-        monkeypatch.chdir(repo)
-
-        runner = CliRunner()
-        result = runner.invoke(af_main, ["init", "--config"])
-
-        assert result.exit_code == 0
-
-        # Local config should be the promoted-fields template
-        local_content = (local_dir / "config.toml").read_text()
-        assert "local configuration" in local_content.lower()
-
-        # Global config should be unchanged
-        assert (global_config_dir / "config.toml").read_text() == global_content
-
 
 # ===================================================================
 # TS-13-29: Full test suite regression gate
@@ -753,7 +602,6 @@ class TestRegressionSuite:
                 "--tb=short",
                 "-o",
                 "addopts=",
-                "packages/af/",
                 "packages/nightshift/",
                 "packages/agentfox/tests/unit/core/",
                 "-k",
@@ -818,33 +666,6 @@ class TestNonexistentCWD:
         with pytest.raises((ConfigError, OSError)):
             load_config()
 
-
-# ===================================================================
-# TS-13-E7: af init with HOME unset
-# ===================================================================
-class TestAfInitNoHome:
-    """TS-13-E7: af init with HOME unset still succeeds."""
-
-    def test_af_init_no_home(self, tmp_path, monkeypatch, caplog, clean_af_env):
-        """af init without HOME skips global config, still succeeds."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-
-        repo = tmp_path / "repo"
-        repo.mkdir(exist_ok=True)
-        monkeypatch.chdir(repo)
-        monkeypatch.delenv("HOME", raising=False)
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: (_ for _ in ()).throw(RuntimeError("no home"))))
-
-        runner = CliRunner()
-        with caplog.at_level(logging.DEBUG):
-            result = runner.invoke(af_main, ["init"])
-
-        assert result.exit_code == 0
-        # No local config without --config
-        local_config = repo / ".agent-fox" / "config.toml"
-        assert not local_config.exists()
-        assert any("HOME" in msg for msg in caplog.messages)
 
 
 # ===================================================================
@@ -1011,51 +832,6 @@ class TestSymlinkFinalFileOnlyProperty:
         check_symlinked_intermediate_dir_accepted()
 
 
-# ===================================================================
-# TS-13-P6: af init never overwrites global config
-# ===================================================================
-class TestAfInitNeverOverwritesGlobalProperty:
-    """TS-13-P6: af init never overwrites existing global config."""
-
-    @pytest.mark.property
-    def test_af_init_never_overwrites_global(self, fake_home, tmp_path, monkeypatch, clean_af_env):
-        """Property: existing global config content preserved by af init."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-        from hypothesis import given, settings
-        from hypothesis import strategies as st
-
-        valid_toml = st.sampled_from(
-            [
-                "# custom config\n",
-                "[orchestrator]\nparallel = 4\n",
-                "[theme]\nplayful = false\n",
-                "# empty with comment\n",
-                "[routing]\nmax_timeout_retries = 3\n",
-            ]
-        )
-        use_config = st.booleans()
-
-        @given(content=valid_toml, config_flag=use_config)
-        @settings(max_examples=10)
-        def check(content, config_flag):
-            global_dir = fake_home / ".agent-fox"
-            global_dir.mkdir(exist_ok=True)
-            config_path = global_dir / "config.toml"
-            config_path.write_text(content)
-
-            repo = tmp_path / "repo"
-            repo.mkdir(exist_ok=True)
-            monkeypatch.chdir(repo)
-
-            runner = CliRunner()
-            args = ["init", "--config"] if config_flag else ["init"]
-            runner.invoke(af_main, args)
-
-            assert config_path.read_text() == content
-
-        check()
-
 
 # ===================================================================
 # SMOKE TESTS — end-to-end execution path verification
@@ -1164,70 +940,6 @@ class TestSmoke3MalformedGlobalFailFast:
         config = load_config()
         assert config.orchestrator.parallel == 1
 
-
-class TestSmoke6AfInitCleanEnvironment:
-    """TS-13-SMOKE-6: af init creates global config only (local is opt-in)."""
-
-    @pytest.mark.smoke
-    def test_af_init_clean_e2e(self, fake_home, tmp_path, monkeypatch, clean_af_env):
-        """PATH-6: af init creates global config; no local config without --config."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        monkeypatch.chdir(repo)
-
-        runner = CliRunner()
-        result = runner.invoke(af_main, ["init"])
-
-        assert result.exit_code == 0
-
-        # Global config created with 0o700 dir and active defaults
-        global_dir = fake_home / ".agent-fox"
-        global_config = global_dir / "config.toml"
-        assert global_dir.exists()
-        assert oct(global_dir.stat().st_mode & 0o777) == "0o700"
-        assert global_config.exists()
-        import tomllib
-
-        tomllib.loads(global_config.read_text())
-
-        # No local config created without --config
-        local_config = repo / ".agent-fox" / "config.toml"
-        assert not local_config.exists()
-
-
-class TestSmoke7AfInitConfig:
-    """TS-13-SMOKE-7: af init --config creates/overwrites local config."""
-
-    @pytest.mark.smoke
-    def test_af_init_config_e2e(self, fake_home, global_config_dir, tmp_path, monkeypatch, clean_af_env):
-        """PATH-7: --config overwrites local, leaves global unchanged."""
-        from af.app import main as af_main
-        from click.testing import CliRunner
-
-        global_content = "# my custom global\n[orchestrator]\nparallel = 7\n"
-        (global_config_dir / "config.toml").write_text(global_content)
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        local_dir = repo / ".agent-fox"
-        local_dir.mkdir()
-        (local_dir / "config.toml").write_text("[orchestrator]\nparallel = 4\n")
-        monkeypatch.chdir(repo)
-
-        runner = CliRunner()
-        result = runner.invoke(af_main, ["init", "--config"])
-
-        assert result.exit_code == 0
-
-        # Global config byte-for-byte identical
-        assert (global_config_dir / "config.toml").read_text() == global_content
-
-        # Local config regenerated as promoted-fields template
-        local_content = (local_dir / "config.toml").read_text()
-        assert "local configuration" in local_content.lower()
 
 
 class TestSmoke8HomeUnsetLocalUsed:

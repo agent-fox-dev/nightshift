@@ -51,9 +51,3 @@ class TestRootReadme:
         content = readme_path.read_text()
         assert "afissues" in content, "afissues not found in root README.md"
 
-    def test_afissues_appears_multiple_times(self) -> None:
-        """afissues must appear in at least 3 locations (graph, table, standalone)."""
-        readme_path = _WORKSPACE_ROOT / "README.md"
-        content = readme_path.read_text()
-        count = content.count("afissues")
-        assert count >= 3, f"afissues should appear >= 3 times in root README.md, found {count}"

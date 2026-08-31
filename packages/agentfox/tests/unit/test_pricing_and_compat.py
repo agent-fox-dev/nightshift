@@ -155,7 +155,6 @@ class TestExistingTestSuitePasses:
                 "packages/agentfox/tests/unit/test_resolve_model_variant.py",
                 "packages/agentfox/tests/unit/test_resolve_model_variant_awareness.py",
                 "packages/agentfox/tests/unit/test_variant_properties.py",
-                "packages/agentfox/tests/unit/test_node_session_runner_wiring.py",
                 "-q",
                 "--tb=short",
             ],

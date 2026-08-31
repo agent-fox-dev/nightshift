@@ -20,12 +20,6 @@ def _load_nightshift_toml() -> dict:
         return tomllib.load(f)
 
 
-def _load_af_toml() -> dict:
-    """Load and return packages/af/pyproject.toml."""
-    path = Path("packages/af/pyproject.toml")
-    with path.open("rb") as f:
-        return tomllib.load(f)
-
 
 class TestPackageDirectoryStructure:
     """TS-07-4: All required files and directories exist.
@@ -68,22 +62,6 @@ class TestPyprojectMetadata:
         config = _load_nightshift_toml()
         assert config["build-system"]["build-backend"] == "hatchling.build"
 
-    def test_license_matches_af(self) -> None:
-        """License field matches the af package (if present in af)."""
-        ns_config = _load_nightshift_toml()
-        af_config = _load_af_toml()
-        ns_license = ns_config["project"].get("license")
-        af_license = af_config["project"].get("license")
-        # Both should be the same (both may be None if not set)
-        assert ns_license == af_license
-
-    def test_authors_match_af(self) -> None:
-        """Authors field matches the af package (if present in af)."""
-        ns_config = _load_nightshift_toml()
-        af_config = _load_af_toml()
-        ns_authors = ns_config["project"].get("authors")
-        af_authors = af_config["project"].get("authors")
-        assert ns_authors == af_authors
 
 
 class TestDirectDependencies:

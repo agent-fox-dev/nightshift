@@ -64,8 +64,6 @@ def _seed_review_data(conn: duckdb.DuckDBPyConnection) -> None:
 # ---------------------------------------------------------------------------
 
 _READ_ONLY_CALL_SITES = [
-    "af_code",
-    "af_plan_verify",
     "assemble_context",
 ]
 
@@ -83,18 +81,7 @@ class TestReadOnlyCallSitesNeverWrite:
         _seed_review_data(conn)
         counts_before = _snapshot_row_counts(conn)
 
-        if call_site == "af_code":
-            from agentfox.graph.analyzer import compute_phases
-            from agentfox.graph.persistence import load_plan
-
-            graph = load_plan(conn)
-            if graph is not None:
-                compute_phases(graph)
-        elif call_site == "af_plan_verify":
-            from agentfox.graph.persistence import load_plan
-
-            load_plan(conn)
-        elif call_site == "assemble_context":
+        if call_site == "assemble_context":
             from agentfox.session.context import assemble_context
 
             spec_dir = tmp_path / "test_spec"
@@ -111,43 +98,6 @@ class TestReadOnlyCallSitesNeverWrite:
         )
         conn.close()
 
-    @pytest.mark.parametrize("call_site", ["af_code", "af_plan_verify"])
-    def test_call_site_opens_with_read_only_true(self, call_site: str) -> None:
-        """Each read-only call site must call open_knowledge_store with read_only=True."""
-        mock_db = MagicMock()
-        mock_db.connection = MagicMock()
-
-        if call_site == "af_code":
-            with (
-                patch("af.code.open_knowledge_store", return_value=mock_db) as mock_oks,
-                patch("agentfox.graph.persistence.load_plan", return_value=None),
-                patch("agentfox.core.node_id.DEFAULT_DB_PATH", new=MagicMock(exists=lambda: True)),
-                patch("agentfox.graph.analyzer.compute_phases", return_value=[]),
-                patch("agentfox.graph.analyzer.critical_path", return_value=[]),
-                patch("agentfox.graph.analyzer.group_edges", return_value=MagicMock(intra_spec=[], cross_spec=[])),
-                patch("agentfox.spec.discovery.discover_specs", return_value=[]),
-                patch("agentfox.graph.planner.format_plan_analysis", return_value="output"),
-            ):
-                from af.app import main
-                from click.testing import CliRunner
-
-                CliRunner().invoke(main, ["code", "--dry-run"])
-            mock_oks.assert_called_once()
-            assert mock_oks.call_args.kwargs.get("read_only") is True
-        elif call_site == "af_plan_verify":
-            with (
-                patch("af.plan.open_knowledge_store", return_value=mock_db) as mock_oks,
-                patch("af.plan.build_plan", return_value=MagicMock(nodes={}, edges=[], order=[])),
-                patch("af.plan.load_plan", return_value=None),
-                patch("af.plan.discover_specs", return_value=[]),
-                patch("agentfox.core.node_id.DEFAULT_DB_PATH", new=MagicMock(exists=lambda: True)),
-            ):
-                from af.app import main
-                from click.testing import CliRunner
-
-                CliRunner().invoke(main, ["plan", "--verify", "--specs-dir", "/tmp"])
-            if mock_oks.called:
-                assert mock_oks.call_args.kwargs.get("read_only") is True
 
 
 # ---------------------------------------------------------------------------
@@ -251,39 +201,3 @@ class TestAssembleContextZeroWrites:
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# TS-06-P5: af standup always uses read-only connection
-# ---------------------------------------------------------------------------
-
-
-class TestStandupAlwaysReadOnly:
-    """TS-06-P5: For any invocation of af standup, open_knowledge_store
-    is always called with read_only=True and no write operation is
-    performed on knowledge.duckdb."""
-
-    @pytest.mark.parametrize("hours", [1, 12, 24, 48], ids=["1h", "12h", "24h", "48h"])
-    def test_standup_uses_read_only_for_any_hours(self, hours: int) -> None:
-        """af standup must use read_only=True regardless of --hours value."""
-        from agentfox.nightshift.pid import PidStatus
-
-        mock_db = MagicMock()
-        mock_db.connection = MagicMock()
-        mock_report = MagicMock()
-        mock_report.cost_by_spec = {}
-        mock_report.cost_by_archetype = {}
-        mock_db_path = MagicMock()
-        mock_db_path.exists.return_value = True
-
-        with (
-            patch("af.standup.open_knowledge_store", return_value=mock_db) as mock_oks,
-            patch("af.standup.DEFAULT_DB_PATH", new=mock_db_path),
-            patch("af.standup.generate_standup", return_value=mock_report),
-            patch("agentfox.nightshift.pid.check_pid_file", return_value=(PidStatus.ABSENT, None)),
-        ):
-            from af.app import main
-            from click.testing import CliRunner
-
-            CliRunner().invoke(main, ["standup", "--hours", str(hours)])
-
-        mock_oks.assert_called_once()
-        assert mock_oks.call_args.kwargs.get("read_only") is True, f"af standup --hours {hours} must use read_only=True"

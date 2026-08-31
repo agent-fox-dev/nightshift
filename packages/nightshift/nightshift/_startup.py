@@ -24,11 +24,11 @@ def init_knowledge(config, project_root):
         return None, None, None
     # Run legacy migrations at startup via the canonical helper.
     from agentfox.core.config import resolve_spec_root
-    from agentfox.engine.run import _run_startup_migrations
+    from agentfox.engine.migrations import run_startup_migrations
 
     specs = resolve_spec_root(config, project_root)
     try:
-        _run_startup_migrations(kdb, specs, project_root)
+        run_startup_migrations(kdb, specs, project_root)
     except Exception:
         logger.warning("Startup migrations failed", exc_info=True)
     return kdb, sink, kprov

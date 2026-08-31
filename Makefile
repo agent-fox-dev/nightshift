@@ -15,13 +15,13 @@ test-fast:
 	uv run pytest -m "not slow" -q
 
 test-unit:
-	uv run pytest packages/agentfox/tests/unit/ packages/af/tests/unit/ -q
+	uv run pytest packages/agentfox/tests/unit/ -q
 
 test-property:
-	uv run pytest packages/agentfox/tests/property/ packages/af/tests/property/ -q
+	uv run pytest packages/agentfox/tests/property/ -q
 
 test-integration:
-	uv run pytest packages/agentfox/tests/integration/ packages/af/tests/integration/ -q
+	uv run pytest packages/agentfox/tests/integration/ -q
 
 test-deepagents:
 	uv pip install '.[deepagents]' && uv run pytest packages/agentfox/tests/unit/session/backends/test_deepagents.py -q

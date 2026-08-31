@@ -356,26 +356,6 @@ class TestBlockingHistoryRemoved:
 
 
 # ============================================================================
-# TS-116-8: Result handler does not import blocking_history
-# ============================================================================
-
-
-class TestResultHandlerNoBlocking:
-    """TS-116-8: Verify result_handler has no blocking_history references.
-
-    Requirement: 116-REQ-3.E1
-    """
-
-    def test_result_handler_no_blocking(self) -> None:
-        """result_handler.py source should not reference blocking_history."""
-        import agentfox.engine.result_handler as rh
-
-        source = inspect.getsource(rh)
-        assert "blocking_history" not in source
-        assert "record_blocking_decision" not in source
-
-
-# ============================================================================
 # TS-116-9: Migration v18 drops unused tables
 # ============================================================================
 
@@ -682,34 +662,6 @@ class TestNoDeadImports:
 
 # ============================================================================
 # TS-116-20: Reset table list updated
-# ============================================================================
-
-
-class TestResetTableList:
-    """TS-116-20: Verify reset.py does not list dropped tables.
-
-    Requirement: 116-REQ-8.2
-    """
-
-    def test_reset_table_list(self) -> None:
-        """reset.py should not reference dropped table names."""
-        import agentfox.engine.reset as reset_module
-
-        source = inspect.getsource(reset_module)
-        dropped_tables = [
-            "blocking_history",
-            "gotchas",
-            "errata_index",
-            "sleep_artifacts",
-            "memory_facts",
-            "memory_embeddings",
-            "entity_graph",
-            "entity_edges",
-            "fact_entities",
-            "fact_causes",
-        ]
-        for table in dropped_tables:
-            assert f'"{table}"' not in source, f'reset.py should not reference "{table}"'
 
 
 # ============================================================================

@@ -69,30 +69,12 @@ class TestNightshiftNoAfissuesDep:
 
     def test_nightshift_deps_exclude_afissues(self) -> None:
         """afissues must not appear in nightshift's dependencies."""
-        # Find nightshift pyproject.toml(s) - could be under packages/ or at root
-        nightshift_tomls = glob.glob(str(_WORKSPACE_ROOT / "packages" / "*" / "pyproject.toml"))
-        for toml_path in nightshift_tomls:
-            if "nightshift" not in toml_path:
-                continue
-            with open(toml_path, "rb") as f:
-                toml = tomllib.load(f)
-            deps = toml.get("project", {}).get("dependencies", [])
-            assert not any("afissues" in dep for dep in deps), f"afissues should not be in nightshift deps: {deps}"
-
-
-# ── TS-03-38: af/pyproject.toml unchanged ───────────────────────────
-
-
-class TestAfPackageUnchanged:
-    """TS-03-38: af/pyproject.toml does not add afissues as a dependency."""
-
-    def test_af_deps_exclude_afissues(self) -> None:
-        """afissues must not appear in af's dependencies."""
-        af_toml_path = _WORKSPACE_ROOT / "packages" / "af" / "pyproject.toml"
-        with open(af_toml_path, "rb") as f:
+        toml_path = _WORKSPACE_ROOT / "packages" / "nightshift" / "pyproject.toml"
+        with open(toml_path, "rb") as f:
             toml = tomllib.load(f)
         deps = toml.get("project", {}).get("dependencies", [])
-        assert not any("afissues" in dep for dep in deps), f"afissues should not be in af deps: {deps}"
+        assert not any("afissues" in dep for dep in deps), f"afissues should not be in nightshift deps: {deps}"
+
 
 
 # ── TS-03-P1: Property — afissues modules have zero workspace imports

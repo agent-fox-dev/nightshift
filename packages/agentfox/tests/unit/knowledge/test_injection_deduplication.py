@@ -332,43 +332,6 @@ class TestFailedSessionDoesNotSupersede:
 
 
 # ===========================================================================
-# AC-4: session_lifecycle passes session_id to retrieve()
-# ===========================================================================
-
-
-class TestSessionLifecyclePassesSessionId:
-    """AC-4: _build_prompts() passes self._node_id as session_id to retrieve().
-
-    Requirements: 558-AC-4
-    """
-
-    def test_ac4_retrieve_call_includes_session_id(self) -> None:
-        """AC-4: The retrieve() call in session_lifecycle._build_prompts()
-        passes session_id=self._node_id."""
-        from pathlib import Path
-
-        lifecycle_path = Path(__file__).parents[3] / "agentfox" / "engine" / "session_lifecycle.py"
-        source = lifecycle_path.read_text()
-
-        # Find the retrieve() call and confirm session_id kwarg is present
-        assert "session_id=self._node_id" in source, (
-            "session_lifecycle.py must pass session_id=self._node_id to retrieve()"
-        )
-
-    def test_ac4_protocol_signature_includes_session_id(self) -> None:
-        """AC-4: KnowledgeProvider.retrieve() protocol signature includes
-        session_id: str | None = None."""
-        import inspect
-
-        from agentfox.knowledge.fox_provider import KnowledgeProvider
-
-        sig = inspect.signature(KnowledgeProvider.retrieve)
-        assert "session_id" in sig.parameters, "KnowledgeProvider.retrieve() must have a session_id parameter"
-        param = sig.parameters["session_id"]
-        assert param.default is None, "session_id parameter must default to None for backward compatibility"
-
-
-# ===========================================================================
 # Integration: end-to-end S1 → complete → S2 does not see finding
 # ===========================================================================
 

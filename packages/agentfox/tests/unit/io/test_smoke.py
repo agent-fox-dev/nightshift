@@ -212,21 +212,6 @@ class TestSmoke6ReadStdin:
 # ---------------------------------------------------------------------------
 
 
-class TestSmoke7VersionOption:
-    """TS-03-SMOKE-7: --version uses click.echo() before OutputManager."""
-
-    def test_version_exits_cleanly(self) -> None:
-        """PATH-7: --version outputs version string and exits 0."""
-        from af.app import main as af_main
-
-        runner = CliRunner()
-        result = runner.invoke(af_main, ["--version"])
-
-        assert result.exit_code == 0
-        assert len(result.output.strip()) > 0  # version string present
-        # No AttributeError or KeyError in exception chain
-        assert result.exception is None or isinstance(result.exception, SystemExit)
-
 
 # ---------------------------------------------------------------------------
 # TS-03-SMOKE-8: emit_error with state parameter
@@ -353,12 +338,3 @@ class TestStubAudit:
                 assert callable(sym), f"{sym_name} is not callable"
 
 
-class TestAfAppWiring:
-    """Verify af/app.py uses AgentFoxGroup."""
-
-    def test_af_app_uses_agent_fox_group(self) -> None:
-        """af/app.py root group uses cls=AgentFoxGroup."""
-        from af.app import main as af_main
-        from agentfox.io import AgentFoxGroup
-
-        assert isinstance(af_main, AgentFoxGroup) or (type(af_main).__name__ == "AgentFoxGroup")

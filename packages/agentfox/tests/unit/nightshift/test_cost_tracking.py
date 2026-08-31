@@ -175,8 +175,6 @@ class TestCliCreatesSinkDispatcher:
             patch("agentfox.nightshift.streams.build_streams", return_value=[MagicMock()]),
             patch("agentfox.nightshift.engine.NightShiftEngine") as mock_engine_cls,
             patch("agentfox.nightshift.daemon.SharedBudget"),
-            patch("agentfox.engine.hot_load.discover_new_specs_gated", new_callable=AsyncMock, return_value=[]),
-            # Mock open_knowledge_store so CLI can create a SinkDispatcher without a real DB
             patch("agentfox.knowledge.db.open_knowledge_store", return_value=MagicMock()),
         ):
             mock_create_plat.return_value.check_credentials = AsyncMock(return_value=None)
@@ -202,7 +200,6 @@ class TestCliCreatesSinkDispatcher:
             )
 
             call_kwargs = mock_engine_cls.call_args.kwargs
-            # FAILS until CLI passes sink_dispatcher to NightShiftEngine
             assert "sink_dispatcher" in call_kwargs, "night_shift_cmd must pass sink_dispatcher= to NightShiftEngine"
             assert call_kwargs["sink_dispatcher"] is not None, (
                 "sink_dispatcher must be a non-None SinkDispatcher backed by DuckDBSink"
@@ -692,7 +689,6 @@ class TestCliDuckDBUnavailable:
             patch("agentfox.nightshift.streams.build_streams", return_value=[MagicMock()]),
             patch("agentfox.nightshift.engine.NightShiftEngine") as mock_engine_cls,
             patch("agentfox.nightshift.daemon.SharedBudget"),
-            patch("agentfox.engine.hot_load.discover_new_specs_gated", new_callable=AsyncMock, return_value=[]),
             # Make DuckDB unavailable
             patch(
                 "agentfox.knowledge.db.open_knowledge_store",

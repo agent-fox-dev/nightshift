@@ -86,23 +86,6 @@ def test_default_completeness(archetype: str) -> None:
     assert len(content) > 0
 
 
-def test_init_idempotence(tmp_path: Path) -> None:
-    """TS-99-P4: Repeated init_profiles calls never overwrite existing files.
-
-    Property: Pre-existing profile content is unchanged after multiple inits.
-    Requirement: 99-REQ-3.2
-    """
-    from af.init import init_profiles
-
-    profiles_dir = tmp_path / ".agent-fox" / "profiles"
-    profiles_dir.mkdir(parents=True)
-    (profiles_dir / "coder.md").write_text("ORIGINAL")
-
-    init_profiles(tmp_path)
-    init_profiles(tmp_path)  # second call
-
-    assert (profiles_dir / "coder.md").read_text() == "ORIGINAL"
-
 
 @given(st.sampled_from(["coder", "verifier"]))
 @settings(max_examples=2)

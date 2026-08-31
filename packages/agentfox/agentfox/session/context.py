@@ -501,25 +501,6 @@ def assemble_context(
                 task_group,
             )
 
-    # Verification checklist for the verifier archetype
-    if archetype == "verifier":
-        try:
-            from agentfox.spec.verification_checklist import (
-                build_verification_checklist,
-                render_checklist_markdown,
-            )
-
-            tests_dir = project_root / "tests" if project_root is not None else None
-            checklist = build_verification_checklist(spec_dir, tests_dir=tests_dir)
-            checklist_md = render_checklist_markdown(checklist)
-            sections.append(checklist_md)
-        except Exception:
-            logger.warning(
-                "Failed to build verification checklist for %s",
-                spec_dir.name,
-                exc_info=True,
-            )
-
     # 03-REQ-4.3: Return formatted string with section headers
     return "\n\n---\n\n".join(sections)
 

@@ -147,15 +147,6 @@ class TestAfLabelTestMigration:
             "test_init_labels.py still references agentfox.platform"
         )
 
-    def test_af_pyproject_no_afissues_dep(self) -> None:
-        """af/pyproject.toml does not directly list afissues in dependencies."""
-        toml_path = _WORKSPACE_ROOT / "packages" / "af" / "pyproject.toml"
-        with open(toml_path, "rb") as f:
-            toml = tomllib.load(f)
-        deps = toml.get("project", {}).get("dependencies", [])
-        assert not any("afissues" in dep for dep in deps), (
-            "af/pyproject.toml should not directly depend on afissues"
-        )
 
 
 # ── TS-03-28: agentfox pyproject.toml has afissues dependency ─────────

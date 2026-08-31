@@ -649,21 +649,7 @@ class FoxKnowledgeProvider:
         for r in records:
             if r.task_group in group_impacts:
                 continue
-            if spec_dir is not None:
-                try:
-                    from agentfox.graph.file_impacts import extract_file_impacts
-
-                    impacts = extract_file_impacts(spec_dir, int(r.task_group))
-                    group_impacts[r.task_group] = impacts
-                except Exception:
-                    logger.debug(
-                        "extract_file_impacts failed for group %s in %s; treating as zero overlap",
-                        r.task_group,
-                        spec_name,
-                    )
-                    group_impacts[r.task_group] = set()
-            else:
-                group_impacts[r.task_group] = set()
+            group_impacts[r.task_group] = set()
 
         # Score each record by file overlap.
         scored: list[tuple[int, int, Any]] = []
@@ -719,7 +705,7 @@ class FoxKnowledgeProvider:
         import uuid
 
         try:
-            from agentfox.engine.session_lifecycle import compose_enriched_summary
+            from agentfox.engine.migrations import compose_enriched_summary
             from agentfox.knowledge.summary_store import SummaryRecord, insert_summary
 
             raw_summary = context.get("summary", "")
