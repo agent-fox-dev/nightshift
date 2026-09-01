@@ -1,19 +1,24 @@
 """Tests for HubClient workspace, patch, rebuild, rerere, variable, and secret operations.
 
-Covers: TS-01-1 through TS-01-30 (spec 01, groups 1–4).
-Requirements: 01-REQ-1 through 01-REQ-4.
+Covers: TS-01-1 through TS-01-30 (spec 01, groups 1-4),
+        TS-01-52 through TS-01-57 (spec 01, group 7).
+Requirements: 01-REQ-1 through 01-REQ-4, 01-REQ-9, 01-REQ-10.
 
 These tests are written against the stub implementation and will FAIL until
-groups 13–14 provide the real implementation.
+groups 12-14 provide the real implementation.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import os
+import tomllib
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from afhub.client import HubClient
+from afhub.errors import HubConnectionError
 from afhub.models import (
     PatchStatusDashboard,
     PatchSummary,
@@ -1611,3 +1616,329 @@ class TestNoListVariables:
     def test_no_list_variables_method_on_hub_client(self) -> None:
         """HubClient has no list_variables method — intentionally omitted by design."""
         assert not hasattr(HubClient, "list_variables")
+
+
+# ---------------------------------------------------------------------------
+# TS-01-52: HubClient retries up to 3 times with exponential backoff
+# ---------------------------------------------------------------------------
+
+
+class TestRetryWithBackoff:
+    """TS-01-52 -- HubClient retries up to 3 times with exponential backoff
+    when httpx raises ConnectTimeout, ReadTimeout, or ConnectError, then raises
+    HubConnectionError.
+
+    Requirements: 01-REQ-9.1, 01-REQ-9.E1, 01-REQ-9.E2, 01-REQ-9.E3
+    Correctness properties: 01-PROP-4, 01-PROP-5
+    """
+
+    async def test_connect_timeout_retried_then_hub_connection_error(self) -> None:
+        """ConnectTimeout on all attempts raises HubConnectionError after
+        4 total attempts (1 original + 3 retries) (01-PROP-4).
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.get = AsyncMock(
+            side_effect=httpx.ConnectTimeout("timeout")
+        )
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(HubConnectionError):
+                await client.get_workspace("ws1")
+            assert client._http_client.get.call_count == 4
+            sleep_calls = [call.args[0] for call in mock_sleep.call_args_list]
+            assert sleep_calls == [1.0, 2.0, 4.0]
+
+    async def test_read_timeout_retried_then_hub_connection_error(self) -> None:
+        """ReadTimeout on all attempts raises HubConnectionError after
+        4 total attempts.
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.get = AsyncMock(
+            side_effect=httpx.ReadTimeout("read timeout")
+        )
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(HubConnectionError):
+                await client.get_workspace("ws1")
+            assert client._http_client.get.call_count == 4
+
+    async def test_connect_error_retried_then_hub_connection_error(self) -> None:
+        """ConnectError on all attempts raises HubConnectionError after
+        4 total attempts.
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.get = AsyncMock(
+            side_effect=httpx.ConnectError("connection refused")
+        )
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(HubConnectionError):
+                await client.get_workspace("ws1")
+            assert client._http_client.get.call_count == 4
+
+    async def test_second_attempt_succeeds_returns_response(self) -> None:
+        """When first attempt raises ConnectTimeout but second succeeds,
+        returns parsed response without raising (01-REQ-9.E2).
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        success_response = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "slug": "ws1",
+                "git_url": "https://git.example.com/repo.git",
+                "workspace_mode": "carry",
+                "status": "active",
+                "clone_status": "ready",
+                "sync_status": "ok",
+            },
+        )
+        client._http_client.get = AsyncMock(
+            side_effect=[httpx.ConnectTimeout("timeout"), success_response]
+        )
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await client.get_workspace("ws1")
+            assert result.slug == "ws1"
+
+    async def test_backoff_sleep_capped_at_30_seconds(self) -> None:
+        """Backoff sleep is never greater than 30.0 seconds
+        (01-REQ-9.E3, 01-PROP-5).
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.get = AsyncMock(
+            side_effect=httpx.ConnectTimeout("timeout")
+        )
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(HubConnectionError):
+                await client.get_workspace("ws1")
+            for call in mock_sleep.call_args_list:
+                assert call.args[0] <= 30.0
+
+    async def test_exponential_backoff_values(self) -> None:
+        """Backoff delays follow base 1s * (factor 2 ^ attempt):
+        1.0, 2.0, 4.0 for 3 retries (01-REQ-9.1).
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.get = AsyncMock(
+            side_effect=httpx.ConnectTimeout("timeout")
+        )
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(HubConnectionError):
+                await client.get_workspace("ws1")
+            sleep_calls = [call.args[0] for call in mock_sleep.call_args_list]
+            assert sleep_calls == [1.0, 2.0, 4.0]
+
+
+# ---------------------------------------------------------------------------
+# TS-01-53: Non-retryable exceptions propagate immediately
+# ---------------------------------------------------------------------------
+
+
+class TestNonRetryableExceptions:
+    """TS-01-53 -- HubClient does not retry on non-retryable httpx exceptions;
+    the exception propagates immediately.
+
+    Requirements: 01-REQ-9.2, 01-REQ-9.E4
+    """
+
+    async def test_timeout_exception_base_not_retried(self) -> None:
+        """httpx.TimeoutException (base class) propagates immediately
+        without retry.
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.get = AsyncMock(
+            side_effect=httpx.TimeoutException("base timeout")
+        )
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(httpx.TimeoutException):
+                await client.get_workspace("ws1")
+            assert client._http_client.get.call_count == 1
+            mock_sleep.assert_not_called()
+
+    async def test_pool_timeout_not_retried(self) -> None:
+        """httpx.PoolTimeout propagates immediately without retry
+        (01-REQ-9.E4).
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.get = AsyncMock(
+            side_effect=httpx.PoolTimeout("pool timeout")
+        )
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(httpx.PoolTimeout):
+                await client.get_workspace("ws1")
+            assert client._http_client.get.call_count == 1
+            mock_sleep.assert_not_called()
+
+    async def test_write_timeout_not_retried(self) -> None:
+        """httpx.WriteTimeout propagates immediately without retry
+        (01-REQ-9.E4).
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.get = AsyncMock(
+            side_effect=httpx.WriteTimeout("write timeout")
+        )
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with pytest.raises(httpx.WriteTimeout):
+                await client.get_workspace("ws1")
+            assert client._http_client.get.call_count == 1
+            mock_sleep.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TS-01-54: Every HTTP request contains /api/v1/ path prefix
+# ---------------------------------------------------------------------------
+
+
+class TestApiV1PathPrefix:
+    """TS-01-54 -- Every HTTP request issued by HubClient contains /api/v1/
+    as the path prefix.
+
+    Requirements: 01-REQ-10.1
+    Correctness property: 01-PROP-2
+    """
+
+    async def test_get_workspace_uses_api_v1_prefix(self) -> None:
+        """get_workspace request URL contains '/api/v1/'."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "slug": "ws1",
+                "git_url": "https://git.example.com/repo.git",
+                "workspace_mode": "carry",
+                "status": "active",
+                "clone_status": "ready",
+                "sync_status": "ok",
+            },
+        )
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        await client.get_workspace("ws1")
+        call_args = str(client._http_client.get.call_args)
+        assert "/api/v1/" in call_args
+
+    async def test_submit_rebuild_uses_api_v1_prefix(self) -> None:
+        """submit_rebuild request URL contains '/api/v1/'."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=202,
+            json=lambda: {
+                "id": "job-1",
+                "status": "pending",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.submit_rebuild("ws1")
+        call_args = str(client._http_client.post.call_args)
+        assert "/api/v1/" in call_args
+
+    async def test_list_patches_uses_api_v1_prefix(self) -> None:
+        """list_patches request URL contains '/api/v1/'."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: [])
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        await client.list_patches("ws1")
+        call_args = str(client._http_client.get.call_args)
+        assert "/api/v1/" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-55: pyproject.toml declares correct dependencies
+# ---------------------------------------------------------------------------
+
+
+class TestPyprojectTomlDependencies:
+    """TS-01-55 -- afhub pyproject.toml declares correct runtime and dev
+    dependencies with Python >=3.12.
+
+    Requirements: 01-REQ-10.2
+    """
+
+    def test_runtime_dep_httpx(self) -> None:
+        """pyproject.toml declares httpx>=0.27 as a runtime dependency."""
+        with open("packages/afhub/pyproject.toml", "rb") as f:
+            config = tomllib.load(f)
+        deps = config["project"]["dependencies"]
+        assert any("httpx" in d and "0.27" in d for d in deps)
+
+    def test_runtime_dep_pydantic(self) -> None:
+        """pyproject.toml declares pydantic>=2.0 as a runtime dependency."""
+        with open("packages/afhub/pyproject.toml", "rb") as f:
+            config = tomllib.load(f)
+        deps = config["project"]["dependencies"]
+        assert any("pydantic" in d and "2.0" in d for d in deps)
+
+    def test_python_requires_312(self) -> None:
+        """pyproject.toml declares requires-python >= 3.12."""
+        with open("packages/afhub/pyproject.toml", "rb") as f:
+            config = tomllib.load(f)
+        assert config["project"]["requires-python"] == ">=3.12"
+
+
+# ---------------------------------------------------------------------------
+# TS-01-56: Package source and test files exist at specified paths
+# ---------------------------------------------------------------------------
+
+
+class TestPackageLayout:
+    """TS-01-56 -- afhub package source files and test files exist at the
+    specified paths.
+
+    Requirements: 01-REQ-10.3
+    """
+
+    @pytest.mark.parametrize(
+        "rel_path",
+        [
+            "afhub/__init__.py",
+            "afhub/client.py",
+            "afhub/models.py",
+            "afhub/errors.py",
+            "afhub/auth.py",
+            "afhub/polling.py",
+            "afhub/_http.py",
+            "tests/test_client.py",
+            "tests/test_models.py",
+            "tests/test_errors.py",
+            "tests/test_auth.py",
+            "tests/test_polling.py",
+        ],
+    )
+    def test_file_exists(self, rel_path: str) -> None:
+        """Expected file exists within the packages/afhub directory."""
+        full_path = os.path.join("packages/afhub", rel_path)
+        assert os.path.exists(full_path), f"Expected file not found: {full_path}"
+
+
+# ---------------------------------------------------------------------------
+# TS-01-57: pytest asyncio_mode=auto configured, no external mock library
+# ---------------------------------------------------------------------------
+
+
+class TestPytestConfig:
+    """TS-01-57 -- pytest with asyncio_mode=auto runs all async test functions
+    without explicit decorators; unittest.mock is used for httpx mocking with
+    no external mock library.
+
+    Requirements: 01-REQ-10.4
+    """
+
+    def test_asyncio_mode_auto_configured(self) -> None:
+        """pyproject.toml configures asyncio_mode='auto' for pytest."""
+        with open("packages/afhub/pyproject.toml", "rb") as f:
+            config = tomllib.load(f)
+        ini_opts = config.get("tool", {}).get("pytest", {}).get("ini_options", {})
+        assert ini_opts.get("asyncio_mode") == "auto"
+
+    def test_no_external_mock_library_imported(self) -> None:
+        """No test file imports an external mock library like pytest-mock."""
+        # Build patterns dynamically to avoid this test's own source
+        # matching itself.
+        ext_lib = "pytest" + "_" + "mock"
+        patterns = [f"from {ext_lib}", f"import {ext_lib}"]
+        test_dir = os.path.join("packages", "afhub", "tests")
+        for fname in os.listdir(test_dir):
+            if fname.startswith("test_") and fname.endswith(".py"):
+                filepath = os.path.join(test_dir, fname)
+                with open(filepath) as f:
+                    content = f.read()
+                for pat in patterns:
+                    assert pat not in content, (
+                        f"External mock library found in {fname}"
+                    )
