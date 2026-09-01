@@ -2,7 +2,7 @@
 
 Covers: TS-01-1 through TS-01-30 (spec 01, groups 1-4),
         TS-01-52 through TS-01-57 (spec 01, group 7).
-Edge cases: 01-REQ-2.E1 through E5, 01-REQ-3.E1 through E6.
+Edge cases: 01-REQ-2.E1 through E5, 01-REQ-3.E1 through E6, 01-REQ-4.E1 through E5.
 Requirements: 01-REQ-1 through 01-REQ-4, 01-REQ-9, 01-REQ-10.
 """
 
@@ -1973,6 +1973,171 @@ class TestCreateSecret:
         await client.create_secret("my-workspace", "MY_SECRET", "s3cr3t")
         call_args = str(client._http_client.post.call_args)
         assert "/api/v1/workspaces/my-workspace/secrets" in call_args
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-4.E1: forget_rerere raises HubNotFoundError on HTTP 404
+# ---------------------------------------------------------------------------
+
+
+class TestForgetRerereNotFound:
+    """01-REQ-4.E1 — forget_rerere raises HubNotFoundError when the hub
+    returns HTTP 404 for the pathspec.
+
+    Requirements: 01-REQ-4.E1
+    """
+
+    async def test_forget_rerere_raises_hub_not_found_error_on_404(self) -> None:
+        """forget_rerere raises HubNotFoundError with status_code=404."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=404,
+            json=lambda: {
+                "error": {"code": 404, "message": "not found", "error_type": "not_found"}
+            },
+        )
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubNotFoundError) as exc_info:
+            await client.forget_rerere("my-workspace", "nonexistent/path.py")
+        assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-4.E2: set_variable raises HubNotFoundError when both PATCH and POST return 404
+# ---------------------------------------------------------------------------
+
+
+class TestSetVariableDoubleNotFound:
+    """01-REQ-4.E2 — set_variable raises HubNotFoundError when both PATCH and
+    the fallback POST return HTTP 404; it does not retry further.
+
+    Requirements: 01-REQ-4.E2
+    """
+
+    async def test_set_variable_raises_hub_not_found_error_when_both_404(self) -> None:
+        """set_variable raises HubNotFoundError from the POST failure."""
+        error_envelope = {
+            "error": {"code": 404, "message": "not found", "error_type": "not_found"}
+        }
+        patch_404 = MagicMock(status_code=404, json=lambda: error_envelope)
+        post_404 = MagicMock(status_code=404, json=lambda: error_envelope)
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.patch = AsyncMock(return_value=patch_404)
+        client._http_client.post = AsyncMock(return_value=post_404)
+        with pytest.raises(HubNotFoundError) as exc_info:
+            await client.set_variable("my-workspace", "MISSING_KEY", "val")
+        assert exc_info.value.status_code == 404
+
+    async def test_set_variable_does_not_retry_after_post_404(self) -> None:
+        """set_variable calls PATCH once and POST once, then stops (no further retry)."""
+        error_envelope = {
+            "error": {"code": 404, "message": "not found", "error_type": "not_found"}
+        }
+        patch_404 = MagicMock(status_code=404, json=lambda: error_envelope)
+        post_404 = MagicMock(status_code=404, json=lambda: error_envelope)
+        client = HubClient("https://hub.example.com", "pat")
+        client._http_client.patch = AsyncMock(return_value=patch_404)
+        client._http_client.post = AsyncMock(return_value=post_404)
+        with pytest.raises(HubNotFoundError):
+            await client.set_variable("my-workspace", "MISSING_KEY", "val")
+        client._http_client.patch.assert_called_once()
+        client._http_client.post.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-4.E3: create_secret raises HubAuthError on HTTP 401
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSecretAuthError:
+    """01-REQ-4.E3 — create_secret raises HubAuthError when the hub
+    returns HTTP 401 Unauthorized.
+
+    Requirements: 01-REQ-4.E3
+    """
+
+    async def test_create_secret_raises_hub_auth_error_on_401(self) -> None:
+        """create_secret raises HubAuthError with status_code=401."""
+        from afhub.errors import HubAuthError
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=401,
+            json=lambda: {
+                "error": {
+                    "code": 401,
+                    "message": "unauthorized",
+                    "error_type": "unauthorized",
+                }
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubAuthError) as exc_info:
+            await client.create_secret("my-workspace", "MY_SECRET", "s3cr3t")
+        assert exc_info.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-4.E4: create_variable raises HubConflictError on HTTP 409
+# ---------------------------------------------------------------------------
+
+
+class TestCreateVariableConflict:
+    """01-REQ-4.E4 — create_variable raises HubConflictError with the error_type
+    from the response envelope when the hub returns HTTP 409.
+
+    Requirements: 01-REQ-4.E4
+    """
+
+    async def test_create_variable_raises_hub_conflict_error_on_409(self) -> None:
+        """create_variable raises HubConflictError with status_code=409
+        and error_type stored on the exception.
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=409,
+            json=lambda: {
+                "error": {
+                    "code": 409,
+                    "message": "variable already exists",
+                    "error_type": "duplicate_variable",
+                }
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubConflictError) as exc_info:
+            await client.create_variable("my-workspace", "MY_KEY", "my_value")
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.error_type == "duplicate_variable"
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-4.E5: set_variable surfaces HubConnectionError without POST fallback
+# ---------------------------------------------------------------------------
+
+
+class TestSetVariableConnectionError:
+    """01-REQ-4.E5 — set_variable surfaces HubConnectionError immediately
+    when the PATCH request fails due to network errors; the fallback POST
+    is NOT attempted.
+
+    Requirements: 01-REQ-4.E5
+    """
+
+    async def test_set_variable_raises_hub_connection_error_without_post_fallback(
+        self,
+    ) -> None:
+        """set_variable raises HubConnectionError; POST is never called."""
+        client = HubClient("https://hub.example.com", "pat")
+        # Mock the PATCH path to raise HubConnectionError (as if retries exhausted)
+        client._http_client.patch = AsyncMock(
+            side_effect=httpx.ConnectTimeout("timeout")
+        )
+        client._http_client.post = AsyncMock()
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(HubConnectionError):
+                await client.set_variable("my-workspace", "SOME_KEY", "val")
+        client._http_client.post.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
