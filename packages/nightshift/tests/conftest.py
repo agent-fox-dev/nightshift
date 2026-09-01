@@ -11,13 +11,22 @@ from __future__ import annotations
 
 import json as json_mod
 import logging
+import sys
 from collections.abc import Generator
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import click
 import pytest
 from click.testing import CliRunner
 from hypothesis import settings
+
+# Make afhub importable for carry-patch tests.  afhub is a sibling workspace
+# package but not yet a nightshift wheel dependency.  Placed after all imports
+# so that subsequent test modules (collected after conftest) can import afhub.
+_afhub_root = str(Path(__file__).resolve().parent.parent.parent / "afhub")
+if _afhub_root not in sys.path:
+    sys.path.insert(0, _afhub_root)
 
 settings.register_profile("ci", deadline=None)
 settings.load_profile("ci")

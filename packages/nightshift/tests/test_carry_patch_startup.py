@@ -1,27 +1,43 @@
-"""Tests for CLI flag 3-tier resolution in nightshift carry-patch mode.
+"""Tests for CLI flag 3-tier resolution and CWD validation in nightshift carry-patch mode.
 
 Tests verify that hub URL, workspace slug, and PAT are resolved in priority
 order: CLI flag > environment variable > config file. They also verify the
 conditions under which carry-patch mode is activated or skipped.
 
-These are initially failing tests (group 2). They will pass once the CLI
-flags (--hub-url, --workspace, --token) and 3-tier resolution logic are
-implemented in nightshift.app (groups 5-6).
+CWD validation tests (TS-02-16 through TS-02-26) verify the async startup
+helper: HubClient construction, workspace state checks, git subprocess
+invocation, origin URL matching, and logging on success.
+
+These are initially failing tests (groups 2–3). They will pass once the CLI
+flags (--hub-url, --workspace, --token), 3-tier resolution logic, and the
+async startup helper are implemented (groups 5–9).
 
 Specification: 02_carry_patch_bootstrap
-Test IDs: TS-02-7, TS-02-8, TS-02-9, TS-02-10, TS-02-11, TS-02-12,
-          TS-02-13, TS-02-14, TS-02-15
-Requirements: 02-REQ-2
+Test IDs: TS-02-7 through TS-02-15 (CLI resolution),
+          TS-02-16 through TS-02-26 (CWD validation)
+Requirements: 02-REQ-2, 02-REQ-3
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
+import subprocess
 from collections.abc import Generator
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from afhub.errors import (
+    HubAuthError,
+    HubConnectionError,
+    HubForbiddenError,
+    HubNotFoundError,
+)
+from afhub.models import Workspace
 from click.testing import CliRunner
+from nightshift._carry_patch_startup import startup_helper
 from nightshift.app import main
 
 # ---------------------------------------------------------------------------
@@ -581,4 +597,690 @@ class TestCarryPatchModeActivation:
             "url" in stderr_lower or "required" in stderr_lower
         ), (
             f"Expected error message mentioning hub URL in stderr; got: {result.stderr!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# CWD validation test helpers
+# ---------------------------------------------------------------------------
+
+_VALID_HUB_URL = "https://hub.example.com"
+_VALID_PAT = "myPAT"
+_VALID_SLUG = "my-slug"
+_VALID_GIT_URL = "https://git.example.com/repo.git"
+
+
+def _valid_workspace(**overrides: object) -> Workspace:
+    """Create a Workspace model that passes all CWD validation checks.
+
+    Override individual fields to trigger specific failure modes.
+    """
+    defaults: dict[str, object] = {
+        "workspace_mode": "carry_patch",
+        "clone_status": "ready",
+        "git_url": _VALID_GIT_URL,
+    }
+    defaults.update(overrides)
+    return Workspace(**defaults)  # type: ignore[arg-type]
+
+
+def _mock_hub_client(
+    *,
+    get_workspace_returns: Workspace | None = None,
+    get_workspace_raises: BaseException | None = None,
+) -> MagicMock:
+    """Build a mock HubClient whose get_workspace is an AsyncMock.
+
+    Either *returns* the given workspace or *raises* the given exception.
+    set_variable is mocked to succeed silently by default.
+    """
+    client = MagicMock()
+    gw = AsyncMock()
+    if get_workspace_raises is not None:
+        gw.side_effect = get_workspace_raises
+    else:
+        gw.return_value = get_workspace_returns or _valid_workspace()
+    client.get_workspace = gw
+    client.set_variable = AsyncMock()
+    return client
+
+
+def _git_result(
+    returncode: int = 0,
+    stdout: bytes = b"",
+    stderr: bytes = b"",
+) -> MagicMock:
+    """Build a mock subprocess.CompletedProcess for git remote get-url."""
+    result = MagicMock()
+    result.returncode = returncode
+    result.stdout = stdout
+    result.stderr = stderr
+    return result
+
+
+def _run_startup(
+    *,
+    hub_url: str = _VALID_HUB_URL,
+    pat: str = _VALID_PAT,
+    slug: str = _VALID_SLUG,
+) -> None:
+    """Run the async startup_helper synchronously.
+
+    Caller is responsible for patching HubClient and subprocess.run
+    before calling this helper.
+    """
+    asyncio.run(
+        startup_helper(
+            hub_url=hub_url,
+            pat=pat,
+            slug=slug,
+            config=MagicMock(),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-16: HubClient construction and get_workspace invocation
+# ---------------------------------------------------------------------------
+
+
+class TestCwdValidationHubClientConstruction:
+    """Verify the startup helper constructs exactly one HubClient and calls
+    get_workspace with the resolved slug.
+
+    Requirements: 02-REQ-3.1
+    Test ID: TS-02-16
+    """
+
+    def test_startup_constructs_one_hubclient_and_calls_get_workspace(self) -> None:
+        """HubClient is constructed once with the resolved endpoint_url and pat,
+        and get_workspace is called once with the workspace slug.
+
+        TS-02-16 / 02-REQ-3.1
+        """
+        mock_client = _mock_hub_client()
+        mock_git = _git_result(
+            returncode=0,
+            stdout=_VALID_GIT_URL.encode() + b"\n",
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ) as mock_cls,
+            patch(
+                "subprocess.run",
+                return_value=mock_git,
+            ),
+        ):
+            _run_startup()
+
+        # Exactly one HubClient instance was created
+        assert mock_cls.call_count == 1, (
+            f"Expected HubClient to be constructed exactly once; "
+            f"got {mock_cls.call_count} calls"
+        )
+
+        # Constructed with the correct keyword arguments
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs.get("endpoint_url") == _VALID_HUB_URL, (
+            f"Expected endpoint_url={_VALID_HUB_URL!r}; got {call_kwargs}"
+        )
+        assert call_kwargs.get("pat") == _VALID_PAT, (
+            f"Expected pat={_VALID_PAT!r}; got {call_kwargs}"
+        )
+
+        # get_workspace called once with the slug
+        assert mock_client.get_workspace.call_count == 1, (
+            f"Expected get_workspace to be called once; "
+            f"got {mock_client.get_workspace.call_count}"
+        )
+        assert mock_client.get_workspace.call_args[0][0] == _VALID_SLUG, (
+            f"Expected get_workspace to be called with {_VALID_SLUG!r}; "
+            f"got {mock_client.get_workspace.call_args}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-17, TS-02-18: get_workspace API error exits
+# REQ-3.12 (HubForbiddenError) and REQ-3.E4 (HubConnectionError)
+# ---------------------------------------------------------------------------
+
+
+class TestCwdValidationGetWorkspaceErrors:
+    """Verify the startup helper exits with code 1 and writes diagnostic
+    errors to stderr when get_workspace raises hub API exceptions.
+
+    Requirements: 02-REQ-3.2, 02-REQ-3.3, 02-REQ-3.12, 02-REQ-3.E4
+    Test IDs: TS-02-17, TS-02-18
+    """
+
+    def test_hub_auth_error_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 with stderr diagnostic when get_workspace raises HubAuthError.
+
+        TS-02-17 / 02-REQ-3.2
+        """
+        mock_client = _mock_hub_client(
+            get_workspace_raises=HubAuthError(
+                status_code=401,
+                message="invalid token",
+                error_type="unauthorized",
+            ),
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        stderr_lower = captured.err.lower()
+        assert "pat" in stderr_lower or "permission" in stderr_lower or "auth" in stderr_lower, (
+            f"Expected stderr to mention PAT, permission, or auth; got: {captured.err!r}"
+        )
+
+    def test_hub_not_found_error_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 with stderr diagnostic when get_workspace raises HubNotFoundError.
+
+        TS-02-18 / 02-REQ-3.3
+        """
+        mock_client = _mock_hub_client(
+            get_workspace_raises=HubNotFoundError(
+                status_code=404,
+                message="workspace not found",
+                error_type="not_found",
+            ),
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        stderr_lower = captured.err.lower()
+        assert "not found" in stderr_lower or "slug" in stderr_lower, (
+            f"Expected stderr to mention 'not found' or 'slug'; got: {captured.err!r}"
+        )
+
+    def test_hub_forbidden_error_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 with stderr diagnostic when get_workspace raises HubForbiddenError.
+
+        02-REQ-3.12 (additional coverage beyond TS-02-17/18)
+        """
+        mock_client = _mock_hub_client(
+            get_workspace_raises=HubForbiddenError(
+                status_code=403,
+                message="insufficient scope",
+                error_type="forbidden",
+            ),
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        stderr_lower = captured.err.lower()
+        assert "scope" in stderr_lower or "permission" in stderr_lower or "forbidden" in stderr_lower, (
+            f"Expected stderr to mention scope/permission/forbidden; got: {captured.err!r}"
+        )
+
+    def test_hub_connection_error_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 with stderr diagnostic when get_workspace raises HubConnectionError.
+
+        02-REQ-3.E4 (edge case: network-level failure)
+        """
+        mock_client = _mock_hub_client(
+            get_workspace_raises=HubConnectionError(
+                status_code=0,
+                message="Connection refused",
+                error_type="connection_error",
+            ),
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        stderr_lower = captured.err.lower()
+        assert "connect" in stderr_lower or "network" in stderr_lower, (
+            f"Expected stderr to mention connection/network failure; got: {captured.err!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-19, TS-02-20: workspace_mode and clone_status validation
+# REQ-3.E2 (pending), REQ-3.E3 (failed)
+# ---------------------------------------------------------------------------
+
+
+class TestCwdValidationWorkspaceChecks:
+    """Verify the startup helper exits with code 1 when workspace_mode or
+    clone_status do not match expected values.
+
+    Requirements: 02-REQ-3.4, 02-REQ-3.5, 02-REQ-3.E2, 02-REQ-3.E3
+    Test IDs: TS-02-19, TS-02-20
+    """
+
+    def test_wrong_workspace_mode_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 with stderr when workspace_mode is not 'carry_patch'.
+
+        TS-02-19 / 02-REQ-3.4
+        """
+        workspace = _valid_workspace(workspace_mode="standard")
+        mock_client = _mock_hub_client(get_workspace_returns=workspace)
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        assert "carry_patch" in captured.err or "carry-patch" in captured.err, (
+            f"Expected stderr to mention carry_patch/carry-patch mode; got: {captured.err!r}"
+        )
+
+    def test_clone_status_not_ready_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 with stderr showing actual clone_status when not 'ready'.
+
+        TS-02-20 / 02-REQ-3.5
+        """
+        workspace = _valid_workspace(clone_status="cloning")
+        mock_client = _mock_hub_client(get_workspace_returns=workspace)
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        assert "cloning" in captured.err, (
+            f"Expected stderr to show actual clone_status 'cloning'; got: {captured.err!r}"
+        )
+
+    def test_clone_status_pending_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 when clone_status is 'pending'.
+
+        02-REQ-3.E2
+        """
+        workspace = _valid_workspace(clone_status="pending")
+        mock_client = _mock_hub_client(get_workspace_returns=workspace)
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        assert "pending" in captured.err, (
+            f"Expected stderr to show clone_status 'pending'; got: {captured.err!r}"
+        )
+
+    def test_clone_status_failed_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 when clone_status is 'failed'.
+
+        02-REQ-3.E3
+        """
+        workspace = _valid_workspace(clone_status="failed")
+        mock_client = _mock_hub_client(get_workspace_returns=workspace)
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        assert "failed" in captured.err, (
+            f"Expected stderr to show clone_status 'failed'; got: {captured.err!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-21, TS-02-22, TS-02-23, TS-02-24: git subprocess behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestCwdValidationGitSubprocess:
+    """Verify the startup helper invokes subprocess.run correctly and handles
+    git binary errors (missing, timeout, non-zero exit).
+
+    Requirements: 02-REQ-3.6, 02-REQ-3.7, 02-REQ-3.8, 02-REQ-3.9
+    Test IDs: TS-02-21, TS-02-22, TS-02-23, TS-02-24
+    """
+
+    def test_subprocess_called_with_correct_args(self) -> None:
+        """subprocess.run is invoked with the correct git command and kwargs.
+
+        TS-02-21 / 02-REQ-3.6
+        """
+        mock_client = _mock_hub_client()
+        mock_git = _git_result(
+            returncode=0,
+            stdout=_VALID_GIT_URL.encode() + b"\n",
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            patch(
+                "subprocess.run",
+                return_value=mock_git,
+            ) as mock_run,
+        ):
+            _run_startup()
+
+        assert mock_run.call_count >= 1, "subprocess.run was not called"
+        call_args = mock_run.call_args
+        assert call_args.args[0] == ["git", "remote", "get-url", "origin"], (
+            f"Expected git remote get-url origin command; got: {call_args.args[0]}"
+        )
+        assert call_args.kwargs.get("stdout") == subprocess.PIPE
+        assert call_args.kwargs.get("stderr") == subprocess.PIPE
+        assert call_args.kwargs.get("timeout") == 10
+
+    def test_git_not_installed_exits_with_exact_message(
+        self,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Exit 1 with exact message when git binary is not found.
+
+        TS-02-22 / 02-REQ-3.7
+        """
+        mock_client = _mock_hub_client()
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            patch(
+                "subprocess.run",
+                side_effect=FileNotFoundError("No such file"),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        assert captured.err.strip() == (
+            "git is not installed or not in PATH; nightshift requires git"
+        ), f"Expected exact git-not-found message; got: {captured.err!r}"
+
+    def test_git_timeout_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 with timeout message when git subprocess times out.
+
+        TS-02-23 / 02-REQ-3.8
+        """
+        mock_client = _mock_hub_client()
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            patch(
+                "subprocess.run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["git", "remote", "get-url", "origin"],
+                    timeout=10,
+                ),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        stderr_lower = captured.err.lower()
+        assert "timed out" in stderr_lower or "timeout" in stderr_lower, (
+            f"Expected stderr to mention timeout; got: {captured.err!r}"
+        )
+
+    def test_git_nonzero_exit_exits_with_stderr(
+        self,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Exit 1 with captured git stderr when subprocess returns non-zero.
+
+        TS-02-24 / 02-REQ-3.9
+        """
+        mock_client = _mock_hub_client()
+        mock_git = _git_result(
+            returncode=128,
+            stderr=b"fatal: not a git repository",
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            patch(
+                "subprocess.run",
+                return_value=mock_git,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        assert "fatal: not a git repository" in captured.err, (
+            f"Expected git stderr to appear in output; got: {captured.err!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-25, TS-02-26: origin URL comparison and validation success
+# REQ-3.E1 (trailing whitespace), REQ-3.E5 (empty git_url)
+# ---------------------------------------------------------------------------
+
+
+class TestCwdValidationOriginUrl:
+    """Verify origin URL comparison, mismatch exit behaviour, trailing
+    whitespace handling, and the success path (logging.info).
+
+    Requirements: 02-REQ-3.10, 02-REQ-3.11, 02-REQ-3.E1, 02-REQ-3.E5
+    Test IDs: TS-02-25, TS-02-26
+    """
+
+    def test_origin_url_mismatch_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Exit 1 showing both URLs and a cd instruction when they differ.
+
+        TS-02-25 / 02-REQ-3.10
+        """
+        workspace = _valid_workspace(
+            git_url="https://git.example.com/correct-repo.git",
+        )
+        mock_client = _mock_hub_client(get_workspace_returns=workspace)
+        mock_git = _git_result(
+            returncode=0,
+            stdout=b"https://git.example.com/wrong-repo.git\n",
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            patch(
+                "subprocess.run",
+                return_value=mock_git,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        assert "https://git.example.com/wrong-repo.git" in captured.err, (
+            f"Expected local URL in stderr; got: {captured.err!r}"
+        )
+        assert "https://git.example.com/correct-repo.git" in captured.err, (
+            f"Expected workspace git_url in stderr; got: {captured.err!r}"
+        )
+        assert "cd" in captured.err, (
+            f"Expected 'cd' instruction in stderr; got: {captured.err!r}"
+        )
+
+    def test_validation_success_logs_and_continues(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """logging.info emitted and execution continues when all checks pass.
+
+        TS-02-26 / 02-REQ-3.11
+        """
+        mock_client = _mock_hub_client()
+        mock_git = _git_result(
+            returncode=0,
+            stdout=_VALID_GIT_URL.encode() + b"\n",
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            patch(
+                "subprocess.run",
+                return_value=mock_git,
+            ),
+            caplog.at_level(logging.INFO),
+        ):
+            _run_startup()
+
+        info_messages = [
+            r.message for r in caplog.records if r.levelname == "INFO"
+        ]
+        assert any(
+            "valid" in m.lower() or "success" in m.lower() or "pass" in m.lower()
+            for m in info_messages
+        ), (
+            f"Expected an INFO log indicating CWD validation succeeded; "
+            f"got messages: {info_messages}"
+        )
+
+    def test_trailing_whitespace_stripped_before_comparison(self) -> None:
+        """Trailing whitespace/newline is stripped before URL comparison.
+
+        02-REQ-3.E1: no false mismatch when git output has trailing newline.
+        """
+        mock_client = _mock_hub_client()
+        # stdout has trailing whitespace — should still match
+        mock_git = _git_result(
+            returncode=0,
+            stdout=_VALID_GIT_URL.encode() + b"\n  \n",
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            patch(
+                "subprocess.run",
+                return_value=mock_git,
+            ),
+        ):
+            # Should NOT raise SystemExit — validation passes
+            _run_startup()
+
+    def test_empty_git_url_mismatch_exits(
+        self,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """Empty workspace git_url treated as mismatch against any local URL.
+
+        02-REQ-3.E5
+        """
+        workspace = _valid_workspace(git_url="")
+        mock_client = _mock_hub_client(get_workspace_returns=workspace)
+        mock_git = _git_result(
+            returncode=0,
+            stdout=b"https://git.example.com/repo.git\n",
+        )
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            patch(
+                "subprocess.run",
+                return_value=mock_git,
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _run_startup()
+
+        assert exc_info.value.code == 1
+        captured = capfd.readouterr()
+        assert "cd" in captured.err, (
+            f"Expected URL mismatch error with 'cd' instruction; got: {captured.err!r}"
         )

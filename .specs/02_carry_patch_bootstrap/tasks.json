@@ -167,7 +167,7 @@
     {
       "id": 3,
       "kind": "tests",
-      "title": "Write tests for CWD validation sequence steps 1\u20135 (REQ-3)",
+      "title": "Write tests for CWD validation sequence steps 1–5 (REQ-3)",
       "subtasks": [
         {
           "id": "3.1",
@@ -184,12 +184,12 @@
           "requirement_refs": [
             "02-REQ-3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
           "id": "3.2",
-          "title": "Write tests for workspace_mode and clone_status validation exits (REQ-3 steps 2\u20133)",
+          "title": "Write tests for workspace_mode and clone_status validation exits (REQ-3 steps 2–3)",
           "details": [
             "Write `test_wrong_workspace_mode_exits`: mock `get_workspace` returning `workspace_mode='standard'`; assert exit with error (TS-02-18)",
             "Write `test_clone_status_pending_exits`: mock `clone_status='pending'`; assert exit with error indicating clone not ready (TS-02-19)",
@@ -203,7 +203,7 @@
           "requirement_refs": [
             "02-REQ-3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -222,12 +222,12 @@
           "requirement_refs": [
             "02-REQ-3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
           "id": "3.4",
-          "title": "Write tests for origin URL mismatch and validation success (REQ-3 steps 5\u20136)",
+          "title": "Write tests for origin URL mismatch and validation success (REQ-3 steps 5–6)",
           "details": [
             "Write `test_origin_url_mismatch_exits`: mock subprocess returning a URL different from `workspace.git_url`; assert exit with error showing both URLs and `cd` instruction (TS-02-24)",
             "Write `test_validation_success_logs_and_continues`: mock all checks passing; assert `logging.info` is called and execution continues past validation (TS-02-25, TS-02-26)"
@@ -240,7 +240,7 @@
           "requirement_refs": [
             "02-REQ-3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
@@ -376,7 +376,7 @@
           "details": [
             "In `packages/agentfox/agentfox/core/config_gen.py`, add `[hub]` and `[carry_patch]` sections to the global default AgentFoxConfig comment-annotated TOML template",
             "Include all `CarryPatchConfig` fields with their defaults and inline comments explaining each field",
-            "This is the global template shown when no config file exists at all \u2014 distinct from the workspace-level `.nightshift/config.toml` written in REQ-4"
+            "This is the global template shown when no config file exists at all — distinct from the workspace-level `.nightshift/config.toml` written in REQ-4"
           ],
           "test_spec_refs": [
             "TS-02-6"
@@ -483,11 +483,11 @@
         },
         {
           "id": "7.2",
-          "title": "Implement workspace API validation steps (steps 1\u20133)",
+          "title": "Implement workspace API validation steps (steps 1–3)",
           "details": [
-            "Call `workspace = await hub_client.get_workspace(resolved_slug)`; catch `HubAuthError` and `HubNotFoundError` \u2192 `click.echo(..., err=True)` + `sys.exit(1)` with diagnostic message",
-            "Check `workspace.workspace_mode == 'carry_patch'`; if not \u2192 `click.echo(..., err=True)` + `sys.exit(1)`",
-            "Check `workspace.clone_status == 'ready'`; if not \u2192 `click.echo(..., err=True)` + `sys.exit(1)` indicating clone not ready"
+            "Call `workspace = await hub_client.get_workspace(resolved_slug)`; catch `HubAuthError` and `HubNotFoundError` → `click.echo(..., err=True)` + `sys.exit(1)` with diagnostic message",
+            "Check `workspace.workspace_mode == 'carry_patch'`; if not → `click.echo(..., err=True)` + `sys.exit(1)`",
+            "Check `workspace.clone_status == 'ready'`; if not → `click.echo(..., err=True)` + `sys.exit(1)` indicating clone not ready"
           ],
           "test_spec_refs": [
             "TS-02-16",
@@ -507,9 +507,9 @@
           "title": "Implement git subprocess origin URL check (step 4)",
           "details": [
             "Call `subprocess.run(['git', 'remote', 'get-url', 'origin'], stdout=PIPE, stderr=PIPE, timeout=10)` (blocking)",
-            "Catch `FileNotFoundError` \u2192 emit verbatim message `'git is not installed or not in PATH; nightshift requires git'` via `click.echo(..., err=True)` + `sys.exit(1)`",
-            "Catch `subprocess.TimeoutExpired` \u2192 `click.echo(..., err=True)` with timeout message + `sys.exit(1)`",
-            "If returncode != 0 \u2192 `click.echo(stderr_output, err=True)` + `sys.exit(1)`"
+            "Catch `FileNotFoundError` → emit verbatim message `'git is not installed or not in PATH; nightshift requires git'` via `click.echo(..., err=True)` + `sys.exit(1)`",
+            "Catch `subprocess.TimeoutExpired` → `click.echo(..., err=True)` with timeout message + `sys.exit(1)`",
+            "If returncode != 0 → `click.echo(stderr_output, err=True)` + `sys.exit(1)`"
           ],
           "test_spec_refs": [
             "TS-02-21",
@@ -524,11 +524,11 @@
         },
         {
           "id": "7.4",
-          "title": "Implement origin URL comparison and success logging (steps 5\u20136)",
+          "title": "Implement origin URL comparison and success logging (steps 5–6)",
           "details": [
             "Strip trailing whitespace from subprocess stdout and compare to `workspace.git_url`",
-            "If mismatch \u2192 `click.echo(f'Local origin URL {local_url!r} does not match workspace git_url {workspace.git_url!r}. cd into the correct directory.', err=True)` + `sys.exit(1)`",
-            "If all checks pass \u2192 `logging.info('CWD validation succeeded for workspace %s', resolved_slug)` and continue",
+            "If mismatch → `click.echo(f'Local origin URL {local_url!r} does not match workspace git_url {workspace.git_url!r}. cd into the correct directory.', err=True)` + `sys.exit(1)`",
+            "If all checks pass → `logging.info('CWD validation succeeded for workspace %s', resolved_slug)` and continue",
             "Wire the async helper invocation: `asyncio.run(_carry_patch_startup(...))` from synchronous `main()` before `DaemonRunner.run()`"
           ],
           "test_spec_refs": [
@@ -794,7 +794,7 @@
           "id": "11.3",
           "title": "Verify return value propagation and cross-spec call sites",
           "details": [
-            "Confirm `resolve_hub_url()` return value is used as `resolved_hub_url` and passed to `HubClient(endpoint_url=...)` \u2014 not discarded",
+            "Confirm `resolve_hub_url()` return value is used as `resolved_hub_url` and passed to `HubClient(endpoint_url=...)` — not discarded",
             "Confirm `hub_client.get_workspace()` return value (`Workspace`) is used for `workspace_mode`, `clone_status`, `git_url`, and `integration_branch` checks",
             "Confirm `HubClient` is imported from `afhub` (Spec 01_afhub_client) and not re-implemented locally",
             "Confirm `set_variable` is called on the same `HubClient` instance used for `get_workspace`"
