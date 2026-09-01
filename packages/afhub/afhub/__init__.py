@@ -10,8 +10,22 @@ from afhub.errors import (
     HubNoActivePatchesError,
     HubNotFoundError,
 )
+from afhub.models import (
+    Patch,
+    PatchDetail,
+    PatchResult,
+    PatchStatusDashboard,
+    PatchSummary,
+    RebuildJob,
+    RebuildPreview,
+    RebuildPreviewPatchResult,
+    RerereEntry,
+    SyncResult,
+    Workspace,
+)
 
 __all__ = [
+    # Error classes
     "HubAuthError",
     "HubConflictError",
     "HubConnectionError",
@@ -20,4 +34,16 @@ __all__ = [
     "HubModeError",
     "HubNoActivePatchesError",
     "HubNotFoundError",
+    # Model classes
+    "Patch",
+    "PatchDetail",
+    "PatchResult",
+    "PatchStatusDashboard",
+    "PatchSummary",
+    "RebuildJob",
+    "RebuildPreview",
+    "RebuildPreviewPatchResult",
+    "RerereEntry",
+    "SyncResult",
+    "Workspace",
 ]
