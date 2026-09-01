@@ -10,10 +10,13 @@ import sys
 from pathlib import Path
 
 import click
+from afhub.auth import resolve_hub_pat, resolve_hub_url
 from agentfox.core.config import ThemeConfig, load_config
 from agentfox.core.logging import setup_logging
 from agentfox.io import AgentFoxGroup, OutputManager, common_options, exit_codes
 from agentfox.ui.display import create_theme, render_banner
+
+from nightshift._carry_patch_startup import startup_helper as _carry_patch_startup
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +25,12 @@ logger = logging.getLogger(__name__)
 @click.group(cls=AgentFoxGroup, invoke_without_command=True)
 @click.version_option(version=None, package_name="nightshift")
 @click.option("--json/--no-json", "json_flag", default=None, help="Enable/disable JSON output mode")
+@click.option("--hub-url", default=None, help="Hub API base URL")
+@click.option("--workspace", default=None, help="Hub workspace slug")
+@click.option("--token", default=None, help="Hub PAT")
 @common_options
 @click.pass_context
-def main(ctx: click.Context, json_flag: bool | None = None, **kwargs) -> None:  # noqa: ARG001
+def main(ctx: click.Context, json_flag=None, hub_url=None, workspace=None, token=None, **kwargs) -> None:  # noqa: ARG001
     """Run the nightshift autonomous fix daemon.
 
     Polls for issues labelled ``af:fix`` and processes them through the
@@ -46,6 +52,18 @@ def main(ctx: click.Context, json_flag: bool | None = None, **kwargs) -> None:  
     if not om.json_mode and not om.quiet:
         render_banner(create_theme(getattr(config, "theme", None) or ThemeConfig()), quiet=om.quiet)
     if ctx.invoked_subcommand is None:
+        # 3-tier resolution for carry-patch mode
+        r_url = resolve_hub_url(hub_url_flag=hub_url, config_url=config.hub.endpoint_url) or ""
+        r_slug = workspace or os.environ.get("AF_WORKSPACE", "") or config.carry_patch.workspace
+        r_pat = token if token else (resolve_hub_pat() or "")
+        if r_slug and not r_pat:
+            click.echo("Error: PAT is required for carry-patch mode (--token / AF_HUB_TOKEN)", err=True)
+            sys.exit(1)
+        if r_slug and r_pat:
+            if not r_url:
+                click.echo("Error: hub URL required for carry-patch mode (--hub-url / AF_HUB_URL)", err=True)
+                sys.exit(1)
+            asyncio.run(_carry_patch_startup(hub_url=r_url, pat=r_pat, slug=r_slug, config=config))
         _run_daemon(ctx, om, config)
 
 

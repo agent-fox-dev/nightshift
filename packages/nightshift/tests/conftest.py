@@ -42,6 +42,8 @@ def _make_mock_config() -> MagicMock:
     config.night_shift.issue_check_interval = 900
     config.night_shift.push_fix_branch = False
     config.platform.type = "github"
+    config.hub.endpoint_url = ""
+    config.carry_patch.workspace = ""
     return config
 
 
@@ -63,6 +65,21 @@ def _mock_config_loading():
     trying to read ``.agent-fox/config.toml`` from the filesystem.
     """
     with patch("nightshift.app.load_config", return_value=_make_mock_config()):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _mock_hub_auth():
+    """Mock hub auth resolution so carry-patch resolution does not hit stubs.
+
+    Without this, tests that invoke the CLI would call the real
+    resolve_hub_url / resolve_hub_pat stubs that raise NotImplementedError.
+    Returning empty strings ensures carry-patch mode stays inactive by default.
+    """
+    with (
+        patch("nightshift.app.resolve_hub_url", return_value=""),
+        patch("nightshift.app.resolve_hub_pat", return_value=""),
+    ):
         yield
 
 
@@ -95,9 +112,10 @@ def cli_runner() -> CliRunner:
 
 @pytest.fixture
 def cli_runner_separated() -> CliRunner:
-    """Provide a Click CLI test runner with separated stdout/stderr.
+    """Provide a Click CLI test runner.
 
-    Uses ``mix_stderr=False`` so that ``result.output`` captures stdout
-    and ``result.stderr`` captures stderr independently.
+    Click 8.3+ always captures stderr separately, so this is identical
+    to ``cli_runner``. Kept for backward-compatibility with test code
+    that explicitly requests the separated variant.
     """
-    return CliRunner(mix_stderr=False)
+    return CliRunner()
