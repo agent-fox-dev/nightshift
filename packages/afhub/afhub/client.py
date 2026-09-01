@@ -1,8 +1,8 @@
 """HubClient -- async client for the af-hub carry-patch REST API.
 
-Implements retry logic (group 12), error handling (group 9), and
-workspace/patch response parsing (group 13).
-Rebuild, rerere, variable, and secret response parsing pending (group 14).
+Implements retry logic (group 12), error handling (group 9),
+workspace/patch response parsing (group 13), and rebuild/rerere/
+variable/secret response parsing (group 14).
 """
 
 from __future__ import annotations
@@ -12,8 +12,16 @@ from typing import Any
 import httpx
 
 from afhub._http import DEFAULT_TIMEOUT, request_with_retry
-from afhub.errors import _raise_for_status
-from afhub.models import Patch, PatchStatusDashboard, SyncResult, Workspace
+from afhub.errors import HubError, _raise_for_status
+from afhub.models import (
+    Patch,
+    PatchStatusDashboard,
+    RebuildJob,
+    RebuildPreview,
+    RerereEntry,
+    SyncResult,
+    Workspace,
+)
 
 
 class HubClient:
@@ -169,7 +177,7 @@ class HubClient:
         *,
         strategy: str | None = None,
         fail_mode: str | None = None,
-    ) -> Any:
+    ) -> RebuildJob:
         body: dict[str, Any] = {}
         if strategy is not None:
             body["strategy"] = strategy
@@ -181,63 +189,71 @@ class HubClient:
             json=body,
         )
         _raise_for_status(resp)
-        return resp.json()
+        return RebuildJob(**resp.json())
 
-    async def get_rebuild(self, slug: str, job_id: str) -> Any:
+    async def get_rebuild(self, slug: str, job_id: str) -> RebuildJob:
         resp = await request_with_retry(
             self._http_client.get,
             f"/api/v1/workspaces/{slug}/rebuilds/{job_id}",
         )
         _raise_for_status(resp)
-        return resp.json()
+        return RebuildJob(**resp.json())
 
-    async def list_rebuilds(self, slug: str) -> Any:
+    async def list_rebuilds(self, slug: str) -> list[RebuildJob]:
         resp = await request_with_retry(
             self._http_client.get, f"/api/v1/workspaces/{slug}/rebuilds"
         )
         _raise_for_status(resp)
-        return resp.json()
+        return [RebuildJob(**j) for j in resp.json()["jobs"]]
 
-    async def cancel_rebuild(self, slug: str, job_id: str) -> Any:
+    async def cancel_rebuild(self, slug: str, job_id: str) -> RebuildJob:
         resp = await request_with_retry(
             self._http_client.delete,
             f"/api/v1/workspaces/{slug}/rebuilds/{job_id}",
         )
         _raise_for_status(resp)
-        return resp.json()
+        return RebuildJob(**resp.json())
 
-    async def requeue_rebuild(self, slug: str, job_id: str) -> Any:
+    async def requeue_rebuild(self, slug: str, job_id: str) -> RebuildJob:
         resp = await request_with_retry(
             self._http_client.post,
             f"/api/v1/workspaces/{slug}/rebuilds/{job_id}/requeue",
         )
         _raise_for_status(resp)
-        return resp.json()
+        return RebuildJob(**resp.json())
 
-    async def rollback_rebuild(self, slug: str, job_id: str) -> Any:
+    async def rollback_rebuild(self, slug: str, job_id: str) -> str:
         resp = await request_with_retry(
             self._http_client.post,
             f"/api/v1/workspaces/{slug}/rebuilds/{job_id}/rollback",
         )
         _raise_for_status(resp)
-        return resp.json()
+        data = resp.json()
+        key = "previous_integration_head_sha"
+        if key not in data:
+            raise HubError(
+                status_code=200,
+                error_type="missing_field",
+                message=f"Response missing expected key: {key}",
+            )
+        return data[key]
 
-    async def get_rebuild_preview(self, slug: str) -> Any:
+    async def get_rebuild_preview(self, slug: str) -> RebuildPreview:
         resp = await request_with_retry(
             self._http_client.get,
             f"/api/v1/workspaces/{slug}/rebuild-preview",
         )
         _raise_for_status(resp)
-        return resp.json()
+        return RebuildPreview(**resp.json())
 
     # -- Rerere operations ---------------------------------------------------
 
-    async def list_rerere(self, slug: str) -> Any:
+    async def list_rerere(self, slug: str) -> list[RerereEntry]:
         resp = await request_with_retry(
             self._http_client.get, f"/api/v1/workspaces/{slug}/rerere"
         )
         _raise_for_status(resp)
-        return resp.json()
+        return [RerereEntry(**e) for e in resp.json()["resolutions"]]
 
     async def forget_rerere(self, slug: str, pathspec: str) -> None:
         resp = await request_with_retry(
@@ -278,7 +294,7 @@ class HubClient:
         )
         _raise_for_status(resp)
 
-    async def get_resolved_variables(self, slug: str) -> Any:
+    async def get_resolved_variables(self, slug: str) -> dict[str, str]:
         resp = await request_with_retry(
             self._http_client.get,
             f"/api/v1/workspaces/{slug}/vars/resolved",

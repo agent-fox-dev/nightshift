@@ -83,7 +83,7 @@ def _raise_for_status(response: Any) -> None:
     3. If JSON parsing fails, fall back to ``response.text[:200]``
        (01-REQ-6.E1).
     """
-    if response.is_success:
+    if 200 <= response.status_code < 300:
         return
 
     status_code: int = response.status_code
