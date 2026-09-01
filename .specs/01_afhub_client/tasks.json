@@ -223,7 +223,7 @@
           "details": [
             "Write async test for create_variable(slug, key, value) calling POST /vars (201) and returning None",
             "Write async test for update_variable(slug, key, value) calling PATCH /vars/:key (200) and returning None",
-            "Write async test for set_variable(slug, key, value): PATCH succeeds \u2192 returns None; PATCH returns 404 \u2192 falls back to POST /vars \u2192 returns None",
+            "Write async test for set_variable(slug, key, value): PATCH succeeds → returns None; PATCH returns 404 → falls back to POST /vars → returns None",
             "Write async test for delete_variable(slug, key) calling DELETE /vars/:key (204) and returning None"
           ],
           "test_spec_refs": [
@@ -288,7 +288,7 @@
           "requirement_refs": [
             "01-REQ-5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -308,7 +308,7 @@
           "requirement_refs": [
             "01-REQ-5"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
@@ -331,7 +331,7 @@
           "title": "Write tests for HubError base class and HTTP-status-mapped subclasses",
           "details": [
             "In packages/afhub/tests/test_errors.py, write tests for HubError carrying status_code, message, error_type",
-            "Write tests verifying 401 \u2192 HubAuthError, 403 \u2192 HubForbiddenError, 404 \u2192 HubNotFoundError, 409 \u2192 HubConflictError (with error_type stored)",
+            "Write tests verifying 401 → HubAuthError, 403 → HubForbiddenError, 404 → HubNotFoundError, 409 → HubConflictError (with error_type stored)",
             "Write tests verifying HubConflictError.error_type is accessible to callers"
           ],
           "test_spec_refs": [
@@ -350,9 +350,9 @@
           "id": "6.2",
           "title": "Write tests for 400 error_type dispatch and HubConnectionError",
           "details": [
-            "Write tests verifying 400 + error_type='workspace_mode_mismatch' \u2192 HubModeError",
-            "Write tests verifying 400 + error_type='no_active_patches' \u2192 HubNoActivePatchesError",
-            "Write tests verifying 400 + unknown error_type \u2192 HubError (base class)",
+            "Write tests verifying 400 + error_type='workspace_mode_mismatch' → HubModeError",
+            "Write tests verifying 400 + error_type='no_active_patches' → HubNoActivePatchesError",
+            "Write tests verifying 400 + unknown error_type → HubError (base class)",
             "Write tests verifying HubConnectionError is raised after network-level failures",
             "Write tests verifying all error classes are subclasses of HubError"
           ],
@@ -520,7 +520,7 @@
           "details": [
             "In afhub/errors.py, implement HubError(Exception) with __init__(self, *, status_code: int, message: str, error_type: str = '')",
             "Implement HubAuthError(HubError) for 401, HubForbiddenError(HubError) for 403, HubNotFoundError(HubError) for 404",
-            "Implement HubConflictError(HubError) for 409 \u2014 store error_type for caller inspection",
+            "Implement HubConflictError(HubError) for 409 — store error_type for caller inspection",
             "Implement HubConnectionError(HubError) for network-level failures"
           ],
           "test_spec_refs": [
@@ -599,7 +599,7 @@
             "Implement PatchResult, SyncResult, and RerereEntry with extra='ignore'",
             "Implement PatchStatusDashboard with nested PatchDetail and PatchSummary (total_rerere_resolutions defaults to 0)",
             "Implement RebuildPreview with nested RebuildPreviewPatchResult",
-            "Ensure no Variable model is defined \u2014 variable responses are opaque"
+            "Ensure no Variable model is defined — variable responses are opaque"
           ],
           "test_spec_refs": [
             "TS-01-34",
@@ -617,7 +617,7 @@
         "id": "10.V",
         "checks": [
           "Model tests pass: `pytest packages/afhub/tests/test_models.py -q`",
-          "All models use ConfigDict(extra='ignore') \u2014 verify with grep or AST inspection",
+          "All models use ConfigDict(extra='ignore') — verify with grep or AST inspection",
           "No linter warnings: `ruff check packages/afhub/afhub/models.py`",
           "Requirements 01-REQ-5 acceptance criteria met"
         ]
@@ -633,10 +633,10 @@
           "title": "Implement resolve_hub_pat and resolve_hub_url",
           "details": [
             "In afhub/auth.py, implement resolve_hub_pat(*, token_flag: str | None = None, env_var: str = 'AF_HUB_TOKEN') -> str | None",
-            "Priority: token_flag \u2192 os.environ.get(env_var) \u2192 None",
+            "Priority: token_flag → os.environ.get(env_var) → None",
             "Implement resolve_hub_url(*, hub_url_flag: str | None = None, config_url: str = '', env_var: str = 'AF_HUB_URL') -> str | None",
-            "Priority: hub_url_flag \u2192 os.environ.get(env_var) \u2192 non-empty config_url \u2192 None",
-            "Do NOT read any config file inside resolve_hub_url \u2014 config_url is pre-resolved by caller"
+            "Priority: hub_url_flag → os.environ.get(env_var) → non-empty config_url → None",
+            "Do NOT read any config file inside resolve_hub_url — config_url is pre-resolved by caller"
           ],
           "test_spec_refs": [
             "TS-01-46",
@@ -697,7 +697,7 @@
     {
       "id": 13,
       "kind": "standard",
-      "title": "Implement HubClient \u2014 workspace and patch operations (client.py)",
+      "title": "Implement HubClient — workspace and patch operations (client.py)",
       "subtasks": [
         {
           "id": "13.1",
@@ -784,7 +784,7 @@
     {
       "id": 14,
       "kind": "standard",
-      "title": "Implement HubClient \u2014 rebuild, rerere, variables, and secrets (client.py)",
+      "title": "Implement HubClient — rebuild, rerere, variables, and secrets (client.py)",
       "subtasks": [
         {
           "id": "14.1",
@@ -903,7 +903,7 @@
         "id": "15.V",
         "checks": [
           "Polling tests pass: `pytest packages/afhub/tests/test_polling.py -q`",
-          "asyncio.sleep is patched in tests \u2014 no real delays occur",
+          "asyncio.sleep is patched in tests — no real delays occur",
           "No linter warnings: `ruff check packages/afhub/afhub/polling.py`",
           "Requirements 01-REQ-8 acceptance criteria met"
         ]
@@ -1067,10 +1067,10 @@
           "id": "18.3",
           "title": "Stub and dead-code audit",
           "details": [
-            "Search for `raise NotImplementedError` in all afhub/*.py files \u2014 must find zero occurrences",
-            "Search for bare `pass` in non-abstract method bodies \u2014 must find zero occurrences",
+            "Search for `raise NotImplementedError` in all afhub/*.py files — must find zero occurrences",
+            "Search for bare `pass` in non-abstract method bodies — must find zero occurrences",
             "Search for TODO/FIXME comments indicating unfinished implementation",
-            "Verify set_variable fallback path (PATCH \u2192 404 \u2192 POST) is wired and not dead code",
+            "Verify set_variable fallback path (PATCH → 404 → POST) is wired and not dead code",
             "Verify poll_rebuild and poll_clone_ready are importable from afhub and callable"
           ],
           "test_spec_refs": [
@@ -1109,8 +1109,8 @@
           "id": "18.5",
           "title": "Run smoke tests and full regression suite",
           "details": [
-            "Run full test suite: `pytest packages/afhub/tests/ -q` \u2014 must exit 0",
-            "Run linter: `ruff check packages/afhub/` \u2014 must exit 0",
+            "Run full test suite: `pytest packages/afhub/tests/ -q` — must exit 0",
+            "Run linter: `ruff check packages/afhub/` — must exit 0",
             "Verify asyncio_mode=auto is configured and no PytestUnraisableExceptionWarning appears",
             "Confirm all 57 test cases (TS-01-1 through TS-01-57) pass"
           ],
