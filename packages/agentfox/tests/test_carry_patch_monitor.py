@@ -834,3 +834,476 @@ class TestFailedConflictResolution:
         assert monitor._retry_counter.get(("ws-1", "p1"), 0) == 1, (
             "retry counter for ('ws-1', 'p1') must be 1 after first failure"
         )
+
+
+# ---------------------------------------------------------------------------
+# 3.1 — TS-03-15: Conflict resolution context assembly
+# ---------------------------------------------------------------------------
+
+
+class TestConflictResolutionContext:
+    """TS-03-15: Context dict passed to coder session during conflict resolution.
+
+    Requirements: 03-REQ-4.1
+    Test ID: TS-03-15
+    """
+
+    async def test_context_dict_has_all_required_keys(self) -> None:
+        """Context dict contains patch_description, conflict_files,
+        upstream_context, and rerere_resolutions.
+
+        Requirements: 03-REQ-4.1
+        Test ID: TS-03-15
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                description="Fix auth bug",
+                conflict_files=["auth.py"],
+            )
+        ]
+        hub_client = _make_hub_client(
+            patches=patches,
+            rerere_entries=[_RerereEntry(path="auth.py", recorded_at="2026-01-01")],
+        )
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(
+            hub_client=hub_client, config=config, engine=engine
+        )
+
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "agentfox.workspace.git.run_git",
+                AsyncMock(return_value=(0, "diff --git a/auth.py ...", "")),
+            ),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        # After implementation, coder session must receive the context dict:
+        engine._run_coder_session.assert_called_once()
+        call_kwargs = engine._run_coder_session.call_args
+        assert call_kwargs is not None
+
+        # Extract context dict from call args or kwargs
+        all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
+        ctx_candidates = [v for v in all_values if isinstance(v, dict)]
+        assert ctx_candidates, (
+            "coder session must receive a context dict argument"
+        )
+        ctx = ctx_candidates[0]
+
+        assert ctx["patch_description"] == "Fix auth bug", (
+            "patch_description must come from PatchDetail.description"
+        )
+        assert ctx["conflict_files"] == ["auth.py"], (
+            "conflict_files must come from PatchDetail.conflict_files"
+        )
+        assert "diff" in ctx["upstream_context"], (
+            "upstream_context must contain git diff output"
+        )
+        assert ctx["rerere_resolutions"] == ["auth.py"], (
+            "rerere_resolutions must be path strings extracted from RerereEntry"
+        )
+
+    async def test_rerere_resolutions_are_path_strings_not_objects(self) -> None:
+        """rerere_resolutions contains plain path strings, not RerereEntry objects.
+
+        Requirements: 03-REQ-4.1
+        Test ID: TS-03-15
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                description="Desc",
+                conflict_files=["a.py"],
+            )
+        ]
+        entries = [
+            _RerereEntry(path="a.py", recorded_at="2026-01-01"),
+            _RerereEntry(path="b.py", recorded_at="2026-01-02"),
+        ]
+        hub_client = _make_hub_client(patches=patches, rerere_entries=entries)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(
+            hub_client=hub_client, config=config, engine=engine
+        )
+
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "agentfox.workspace.git.run_git",
+                AsyncMock(return_value=(0, "", "")),
+            ),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        engine._run_coder_session.assert_called_once()
+        call_kwargs = engine._run_coder_session.call_args
+        all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
+        ctx = next(v for v in all_values if isinstance(v, dict))
+
+        # Path strings, NOT RerereEntry objects
+        assert ctx["rerere_resolutions"] == ["a.py", "b.py"]
+        for item in ctx["rerere_resolutions"]:
+            assert isinstance(item, str), (
+                f"rerere_resolutions items must be str, got {type(item)}"
+            )
+
+    async def test_patch_description_defaults_to_empty_string_when_none(
+        self,
+    ) -> None:
+        """When PatchDetail.description is None, patch_description is empty string.
+
+        Requirements: 03-REQ-4.E3
+        Test ID: TS-03-15
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                description="",
+                conflict_files=[],
+            )
+        ]
+        # Override description to None to test the None → "" conversion
+        patches[0].description = None  # type: ignore[assignment]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(
+            hub_client=hub_client, config=config, engine=engine
+        )
+
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "agentfox.workspace.git.run_git",
+                AsyncMock(return_value=(0, "", "")),
+            ),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        engine._run_coder_session.assert_called_once()
+        call_kwargs = engine._run_coder_session.call_args
+        all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
+        ctx = next(v for v in all_values if isinstance(v, dict))
+        assert ctx["patch_description"] == "", (
+            "patch_description must be '' when description is None"
+        )
+
+    async def test_list_rerere_exception_passes_empty_list(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When list_rerere raises, rerere_resolutions is [] and coder proceeds.
+
+        Requirements: 03-REQ-4.E1
+        Test ID: TS-03-15
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                description="Desc",
+                conflict_files=["a.py"],
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        hub_client.list_rerere = AsyncMock(
+            side_effect=ConnectionError("rerere service down")
+        )
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(
+            hub_client=hub_client, config=config, engine=engine
+        )
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "agentfox.workspace.git.run_git",
+                AsyncMock(return_value=(0, "some diff", "")),
+            ),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        # Coder session must still be invoked (not aborted)
+        engine._run_coder_session.assert_called_once()
+        call_kwargs = engine._run_coder_session.call_args
+        all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
+        ctx = next(v for v in all_values if isinstance(v, dict))
+        assert ctx["rerere_resolutions"] == [], (
+            "rerere_resolutions must be [] when list_rerere raises"
+        )
+
+        # Warning logged
+        assert any(
+            "rerere" in r.message.lower()
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        ), "warning about rerere failure must be logged"
+
+    async def test_git_diff_failure_passes_empty_upstream_context(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When git diff fails, upstream_context is '' and coder proceeds.
+
+        Requirements: 03-REQ-4.E2
+        Test ID: TS-03-15
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                description="Desc",
+                conflict_files=["a.py"],
+            )
+        ]
+        hub_client = _make_hub_client(
+            patches=patches,
+            rerere_entries=[_RerereEntry(path="a.py")],
+        )
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(
+            hub_client=hub_client, config=config, engine=engine
+        )
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "agentfox.workspace.git.run_git",
+                AsyncMock(return_value=(1, "", "fatal: bad ref")),
+            ),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        engine._run_coder_session.assert_called_once()
+        call_kwargs = engine._run_coder_session.call_args
+        all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
+        ctx = next(v for v in all_values if isinstance(v, dict))
+        assert ctx["upstream_context"] == "", (
+            "upstream_context must be '' when git diff fails"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 3.1 — TS-03-16: Rerere state is never modified (read-only)
+# ---------------------------------------------------------------------------
+
+
+class TestRerereReadOnly:
+    """TS-03-16: run_cycle only reads rerere state; no write/mutation calls.
+
+    Requirements: 03-REQ-4.2
+    Test ID: TS-03-16
+    """
+
+    async def test_only_list_rerere_called_no_write_methods(self) -> None:
+        """hub_client.list_rerere is called; no write_rerere or mutation call.
+
+        Requirements: 03-REQ-4.2
+        Test ID: TS-03-16
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                conflict_files=["a.py"],
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches, rerere_entries=[])
+        # Add hypothetical write methods to verify they're never called
+        hub_client.write_rerere = AsyncMock()
+        hub_client.delete_rerere = AsyncMock()
+        hub_client.update_rerere = AsyncMock()
+
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(
+            hub_client=hub_client, config=config, engine=engine
+        )
+
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "agentfox.workspace.git.run_git",
+                AsyncMock(return_value=(0, "", "")),
+            ),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        # list_rerere must be called (read-only)
+        hub_client.list_rerere.assert_called()
+
+        # No write/mutation rerere calls
+        hub_client.write_rerere.assert_not_called()
+        hub_client.delete_rerere.assert_not_called()
+        hub_client.update_rerere.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 3.6 — TS-03-24: CONFLICT_DETECTED and MERGED_DETECTED audit events
+# ---------------------------------------------------------------------------
+
+
+class TestConflictDetectedAndMergedDetectedAuditEvents:
+    """TS-03-24: Audit events for conflict detection and merged patch detection.
+
+    Requirements: 03-REQ-8.2
+    Test ID: TS-03-24
+    """
+
+    async def test_conflict_detected_audit_event_emitted(self) -> None:
+        """CARRY_PATCH_CONFLICT_DETECTED emitted when a conflict patch is found.
+
+        Requirements: 03-REQ-8.2
+        Test ID: TS-03-24
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(
+            hub_client=hub_client, config=config, engine=engine
+        )
+
+        emitted_types: list[str] = []
+
+        def capture_emit(
+            sink: object, run_id: str, event_type: object, **kwargs: object
+        ) -> None:
+            emitted_types.append(str(event_type))
+
+        with (
+            patch("afaudit.emit.emit_audit_event", side_effect=capture_emit),
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "agentfox.workspace.git.run_git",
+                AsyncMock(return_value=(0, "", "")),
+            ),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        from afaudit.events import AuditEventType  # noqa: PLC0415
+
+        assert str(AuditEventType.CARRY_PATCH_CONFLICT_DETECTED) in emitted_types, (
+            "CARRY_PATCH_CONFLICT_DETECTED audit event must be emitted "
+            "when a conflict patch is found"
+        )
+
+    async def test_merged_detected_audit_event_emitted(self) -> None:
+        """CARRY_PATCH_MERGED_DETECTED emitted for merged_upstream patches.
+
+        Requirements: 03-REQ-8.2
+        Test ID: TS-03-24
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="merged_upstream", branch_name="fix/p1")
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config()
+        monitor = _make_monitor(hub_client=hub_client, config=config)
+
+        emitted_types: list[str] = []
+
+        def capture_emit(
+            sink: object, run_id: str, event_type: object, **kwargs: object
+        ) -> None:
+            emitted_types.append(str(event_type))
+
+        with patch("afaudit.emit.emit_audit_event", side_effect=capture_emit):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        from afaudit.events import AuditEventType  # noqa: PLC0415
+
+        assert str(AuditEventType.CARRY_PATCH_MERGED_DETECTED) in emitted_types, (
+            "CARRY_PATCH_MERGED_DETECTED audit event must be emitted "
+            "for merged_upstream patches"
+        )
+
+    async def test_audit_event_emission_failure_does_not_abort_cycle(
+        self,
+    ) -> None:
+        """emit_audit_event failure does not abort the monitor cycle.
+
+        Requirements: 03-REQ-8.E1
+        Test ID: TS-03-24
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(
+            hub_client=hub_client, config=config, engine=engine
+        )
+
+        with (
+            patch(
+                "afaudit.emit.emit_audit_event",
+                side_effect=RuntimeError("audit sink down"),
+            ),
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "agentfox.workspace.git.run_git",
+                AsyncMock(return_value=(0, "", "")),
+            ),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            # After implementation, this must return normally even though
+            # emit_audit_event raises.
+            result = await monitor.run_cycle()
+
+        assert isinstance(result, MonitorCycleResult), (
+            "run_cycle must return MonitorCycleResult even when "
+            "audit emission fails"
+        )
