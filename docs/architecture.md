@@ -10,7 +10,7 @@ knowledge-accumulating coding sessions.
 Night Shift is a fix-only daemon that polls for `af:fix`-labelled issues and
 processes each through a multi-stage pipeline: triage analysis, coder session,
 reviewer session, and harvest. It reuses the session infrastructure from the
-`agentfox` library — agents running in isolated git worktrees — but generates
+`afcore` library — agents running in isolated git worktrees — but generates
 lightweight in-memory specs from issues rather than reading human-authored
 spec files.
 

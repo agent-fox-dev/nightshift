@@ -1,9 +1,9 @@
 """End-to-end tests: produce all three audit file types using only afaudit imports.
 
-TS-01-45: All three file types produced without any agentfox import
-TS-01-SMOKE-1: Smoke test — agentfox not in sys.modules after production
+TS-01-45: All three file types produced without any afcore import
+TS-01-SMOKE-1: Smoke test — afcore not in sys.modules after production
 
-These tests verify that afaudit alone (without agentfox installed or imported)
+These tests verify that afaudit alone (without afcore installed or imported)
 can produce audit_*.jsonl, agent_*.jsonl, and postmortem_*.json files.
 """
 
@@ -159,7 +159,7 @@ class TestAllThreeFileTypesProduced:
     """TS-01-45 + TS-01-SMOKE-1: Full end-to-end file production.
 
     Produce all three audit file types in a single test using only afaudit
-    imports — verifying that agentfox is not needed.
+    imports — verifying that afcore is not needed.
 
     Requirement: 01-REQ-12.1
     """
@@ -205,25 +205,25 @@ class TestAllThreeFileTypesProduced:
             assert len(agent_files) >= 1, f"Expected >=1 agent_*.jsonl, found {len(agent_files)}"
             assert len(pm_files) == 1, f"Expected 1 postmortem_*.json, found {len(pm_files)}"
 
-    def test_no_agentfox_in_sys_modules(self) -> None:
-        """After producing all three file types, agentfox must not be in sys.modules.
+    def test_no_afcore_in_sys_modules(self) -> None:
+        """After producing all three file types, afcore must not be in sys.modules.
 
-        This verifies that afaudit itself does not transitively import agentfox.
-        Note: If agentfox IS installed and other tests imported it earlier in
+        This verifies that afaudit itself does not transitively import afcore.
+        Note: If afcore IS installed and other tests imported it earlier in
         the same process, it will already be in sys.modules. This test is most
-        meaningful when run in an isolated environment without agentfox.
+        meaningful when run in an isolated environment without afcore.
         """
-        # Record which agentfox modules were loaded BEFORE our imports.
-        # The afaudit package modules should NOT pull in any new agentfox modules.
-        agentfox_modules_before = {k for k in sys.modules if k == "agentfox" or k.startswith("agentfox.")}
+        # Record which afcore modules were loaded BEFORE our imports.
+        # The afaudit package modules should NOT pull in any new afcore modules.
+        afcore_modules_before = {k for k in sys.modules if k == "afcore" or k.startswith("afcore.")}
 
         # Re-import and use afaudit to trigger any lazy imports
         import afaudit.events  # noqa: F811, F401
         import afaudit.postmortem  # noqa: F811, F401
         import afaudit.trace  # noqa: F811, F401
 
-        agentfox_modules_after = {k for k in sys.modules if k == "agentfox" or k.startswith("agentfox.")}
+        afcore_modules_after = {k for k in sys.modules if k == "afcore" or k.startswith("afcore.")}
 
-        # afaudit should not have added any new agentfox modules
-        new_agentfox_modules = agentfox_modules_after - agentfox_modules_before
-        assert not new_agentfox_modules, f"Importing afaudit modules pulled in agentfox modules: {new_agentfox_modules}"
+        # afaudit should not have added any new afcore modules
+        new_afcore_modules = afcore_modules_after - afcore_modules_before
+        assert not new_afcore_modules, f"Importing afaudit modules pulled in afcore modules: {new_afcore_modules}"

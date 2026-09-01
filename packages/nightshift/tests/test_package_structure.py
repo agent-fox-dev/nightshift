@@ -68,12 +68,12 @@ class TestDirectDependencies:
     Requirements: 07-REQ-2.3
     """
 
-    def test_agentfox_dependency(self) -> None:
+    def test_afcore_dependency(self) -> None:
         config = _load_nightshift_toml()
         deps = config["project"]["dependencies"]
-        assert any("agentfox" in d for d in deps)
-        _af_ver = get_version("agentfox")
-        assert any("agentfox" in d and _af_ver in d for d in deps)
+        assert any("afcore" in d for d in deps)
+        _af_ver = get_version("afcore")
+        assert any("afcore" in d and _af_ver in d for d in deps)
 
     def test_click_dependency(self) -> None:
         config = _load_nightshift_toml()

@@ -145,7 +145,7 @@
           "text": "What are the minimum pyproject.toml requirements for this package \u2014 specifically the pinned or minimum versions of httpx and pydantic, and the package version?",
           "context": "Without dependency constraints in pyproject.toml, the CI environment may resolve incompatible versions of httpx or pydantic, breaking the package silently.",
           "options": [
-            "Match whatever versions afissues/agentfox already pin in the monorepo",
+            "Match whatever versions afissues/afcore already pin in the monorepo",
             "Specify minimums: httpx>=0.27, pydantic>=2.0",
             "Leave unconstrained and let the monorepo lock file manage versions"
           ],
@@ -261,7 +261,7 @@
         "q2": "Split into create_variable (POST /vars, 201) and update_variable (PATCH /vars/:key, 200), both returning None. The set_variable convenience method tries PATCH first, and if the hub returns 404 (variable does not exist), falls back to POST. This is the simplest upsert that does not require a prior GET.",
         "q3": "Raise HubError with status_code=0, error_type='clone_failed', message taken from workspace.clone_error if non-empty, otherwise 'Workspace clone failed'.",
         "q4": "Propagate immediately. HubClient's own retry (REQ-9) handles transient failures. A permanent network failure after retries should abort the poll and surface to the caller.",
-        "q5": "Match the monorepo: httpx>=0.27, pydantic>=2.0. Pin the same lower bounds as afissues and agentfox to avoid incompatibilities.",
+        "q5": "Match the monorepo: httpx>=0.27, pydantic>=2.0. Pin the same lower bounds as afissues and afcore to avoid incompatibilities.",
         "q6": "Keep as two separate methods. add_patch for single (most common), add_patches_batch for batch (initial bootstrap). Explicit is better than a dispatching heuristic."
       },
       "timestamp": "2026-09-01T10:16:07.713302+00:00"

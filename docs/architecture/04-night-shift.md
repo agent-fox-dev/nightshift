@@ -7,7 +7,7 @@ processing `af:fix`-labelled issues without human intervention. It works with
 any configured platform — GitHub, GitLab, or Gitea. It picks up issues filed
 against the codebase and generates the fixes needed to resolve them.
 
-The fix pipeline reuses the session infrastructure from the `agentfox`
+The fix pipeline reuses the session infrastructure from the `afcore`
 library — agents in isolated workspaces — but with automatically generated
 specs rather than human-authored ones.
 

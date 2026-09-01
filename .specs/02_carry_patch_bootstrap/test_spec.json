@@ -10,7 +10,7 @@
       "kind": "unit",
       "description": "AgentFoxConfig instantiated without a [hub] section populates config.hub with HubConfig defaults, including endpoint_url as empty string.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py contains HubConfig and AgentFoxConfig with hub field",
+        "packages/afcore/afcore/core/config.py contains HubConfig and AgentFoxConfig with hub field",
         "No [hub] section is present in the TOML input"
       ],
       "input": "AgentFoxConfig parsed from a TOML string that omits the [hub] section entirely",
@@ -23,7 +23,7 @@
       "kind": "unit",
       "description": "AgentFoxConfig instantiated without a [carry_patch] section populates config.carry_patch with all documented defaults.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig and AgentFoxConfig with carry_patch field",
+        "packages/afcore/afcore/core/config.py contains CarryPatchConfig and AgentFoxConfig with carry_patch field",
         "No [carry_patch] section is present in the TOML input"
       ],
       "input": "AgentFoxConfig parsed from a TOML string that omits the [carry_patch] section entirely",
@@ -36,7 +36,7 @@
       "kind": "unit",
       "description": "CarryPatchConfig silently clamps check_interval below 60 to exactly 60 using the Clamped annotated-type utility.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=60) on check_interval"
+        "packages/afcore/afcore/core/config.py contains CarryPatchConfig with Clamped(ge=60) on check_interval"
       ],
       "input": "CarryPatchConfig(check_interval=10)",
       "expected": "config.carry_patch.check_interval == 60; no ValidationError is raised",
@@ -48,7 +48,7 @@
       "kind": "unit",
       "description": "CarryPatchConfig silently clamps rebuild_poll_interval below 2 to exactly 2 using the Clamped annotated-type utility.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=2) on rebuild_poll_interval"
+        "packages/afcore/afcore/core/config.py contains CarryPatchConfig with Clamped(ge=2) on rebuild_poll_interval"
       ],
       "input": "CarryPatchConfig(rebuild_poll_interval=0)",
       "expected": "config.carry_patch.rebuild_poll_interval == 2; no ValidationError is raised",
@@ -60,7 +60,7 @@
       "kind": "unit",
       "description": "CarryPatchConfig silently clamps max_resolve_retries above 10 to exactly 10 using the Clamped annotated-type utility.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=0, le=10) on max_resolve_retries"
+        "packages/afcore/afcore/core/config.py contains CarryPatchConfig with Clamped(ge=0, le=10) on max_resolve_retries"
       ],
       "input": "CarryPatchConfig(max_resolve_retries=99)",
       "expected": "config.carry_patch.max_resolve_retries == 10; no ValidationError is raised",
@@ -72,11 +72,11 @@
       "kind": "unit",
       "description": "AgentFoxConfig loads successfully when [hub] or [carry_patch] sections contain unknown keys, silently dropping them per extra='ignore'.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py has HubConfig and CarryPatchConfig with model_config = ConfigDict(extra='ignore')"
+        "packages/afcore/afcore/core/config.py has HubConfig and CarryPatchConfig with model_config = ConfigDict(extra='ignore')"
       ],
       "input": "TOML string with [hub] containing unknown_key='foo' and [carry_patch] containing unknown_field=42",
       "expected": "AgentFoxConfig loads without raising ValidationError; unknown keys are absent from the resulting model",
-      "assertion_pseudocode": "toml_str = '[hub]\\nunknown_key = \"foo\"\\n[carry_patch]\\nunknown_field = 42'; config = parse_agentfox_config(toml_str); assert not hasattr(config.hub, 'unknown_key'); assert not hasattr(config.carry_patch, 'unknown_field')"
+      "assertion_pseudocode": "toml_str = '[hub]\\nunknown_key = \"foo\"\\n[carry_patch]\\nunknown_field = 42'; config = parse_afcore_config(toml_str); assert not hasattr(config.hub, 'unknown_key'); assert not hasattr(config.carry_patch, 'unknown_field')"
     },
     {
       "id": "TS-02-7",
@@ -559,7 +559,7 @@
       "kind": "unit",
       "description": "CarryPatchConfig accepts max_resolve_retries=0 as-is without clamping, since 0 is the declared minimum.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=0, le=10) on max_resolve_retries"
+        "packages/afcore/afcore/core/config.py contains CarryPatchConfig with Clamped(ge=0, le=10) on max_resolve_retries"
       ],
       "input": "CarryPatchConfig(max_resolve_retries=0)",
       "expected": "config.carry_patch.max_resolve_retries == 0; no ValidationError is raised",
@@ -571,7 +571,7 @@
       "kind": "unit",
       "description": "CarryPatchConfig accepts check_interval=60 as-is without clamping, since 60 is the declared minimum boundary.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=60) on check_interval"
+        "packages/afcore/afcore/core/config.py contains CarryPatchConfig with Clamped(ge=60) on check_interval"
       ],
       "input": "CarryPatchConfig(check_interval=60)",
       "expected": "config.carry_patch.check_interval == 60; no ValidationError is raised",
@@ -583,11 +583,11 @@
       "kind": "unit",
       "description": "An existing config file without [hub] or [carry_patch] sections loads successfully with defaults, confirming backward compatibility.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py has AgentFoxConfig with hub and carry_patch fields using default_factory"
+        "packages/afcore/afcore/core/config.py has AgentFoxConfig with hub and carry_patch fields using default_factory"
       ],
       "input": "TOML string representing a pre-existing config file with only legacy sections (e.g. [nightshift]) and no [hub] or [carry_patch]",
       "expected": "AgentFoxConfig loads without error; config.carry_patch.enabled == False; config.hub.endpoint_url == ''",
-      "assertion_pseudocode": "toml_str = '[nightshift]\\nsome_key = \"value\"'; config = parse_agentfox_config(toml_str); assert config.carry_patch.enabled == False; assert config.hub.endpoint_url == ''"
+      "assertion_pseudocode": "toml_str = '[nightshift]\\nsome_key = \"value\"'; config = parse_afcore_config(toml_str); assert config.carry_patch.enabled == False; assert config.hub.endpoint_url == ''"
     },
     {
       "id": "TS-02-E4",
@@ -746,11 +746,11 @@
       "kind": "unit",
       "description": "The global AgentFoxConfig TOML template in config_gen.py includes [hub] and [carry_patch] sections with comment annotations.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config_gen.py exists and contains the global default TOML template"
+        "packages/afcore/afcore/core/config_gen.py exists and contains the global default TOML template"
       ],
       "input": "Read the global TOML template string from config_gen.py",
       "expected": "template string contains '[hub]' and '[carry_patch]' sections",
-      "assertion_pseudocode": "from agentfox.core.config_gen import DEFAULT_CONFIG_TEMPLATE; assert '[hub]' in DEFAULT_CONFIG_TEMPLATE; assert '[carry_patch]' in DEFAULT_CONFIG_TEMPLATE"
+      "assertion_pseudocode": "from afcore.core.config_gen import DEFAULT_CONFIG_TEMPLATE; assert '[hub]' in DEFAULT_CONFIG_TEMPLATE; assert '[carry_patch]' in DEFAULT_CONFIG_TEMPLATE"
     },
     {
       "id": "TS-02-E16",
@@ -813,7 +813,7 @@
       "kind": "unit",
       "description": "CarryPatchConfig silently clamps rebuild_timeout of 0 to 1 using the Clamped annotated-type utility.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=1) on rebuild_timeout"
+        "packages/afcore/afcore/core/config.py contains CarryPatchConfig with Clamped(ge=1) on rebuild_timeout"
       ],
       "input": "CarryPatchConfig(rebuild_timeout=0)",
       "expected": "config.carry_patch.rebuild_timeout == 1; no ValidationError is raised",
@@ -825,7 +825,7 @@
       "kind": "unit",
       "description": "CarryPatchConfig silently clamps a negative rebuild_timeout to 1 using the Clamped annotated-type utility.",
       "preconditions": [
-        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=1) on rebuild_timeout"
+        "packages/afcore/afcore/core/config.py contains CarryPatchConfig with Clamped(ge=1) on rebuild_timeout"
       ],
       "input": "CarryPatchConfig(rebuild_timeout=-100)",
       "expected": "config.carry_patch.rebuild_timeout == 1; no ValidationError is raised",
@@ -871,7 +871,7 @@
         "nightshift CLI (packages/nightshift/nightshift/app.py)",
         "async startup helper",
         "nightshift config generator",
-        "AgentFoxConfig (packages/agentfox/agentfox/core/config.py)"
+        "AgentFoxConfig (packages/afcore/afcore/core/config.py)"
       ],
       "mockable": [
         "HubClient.get_workspace (returns Workspace with workspace_mode='carry_patch', clone_status='ready', git_url matching local origin)",
@@ -920,7 +920,7 @@
       "trigger": "Invoke nightshift with no --workspace, --token, or --hub-url flags and no corresponding environment variables or config values",
       "real_components": [
         "nightshift CLI (packages/nightshift/nightshift/app.py)",
-        "AgentFoxConfig (packages/agentfox/agentfox/core/config.py)",
+        "AgentFoxConfig (packages/afcore/afcore/core/config.py)",
         "DaemonRunner"
       ],
       "mockable": [
@@ -962,7 +962,7 @@
       "real_components": [
         "nightshift CLI (packages/nightshift/nightshift/app.py)",
         "async startup helper",
-        "AgentFoxConfig (packages/agentfox/agentfox/core/config.py)"
+        "AgentFoxConfig (packages/afcore/afcore/core/config.py)"
       ],
       "mockable": [
         "HubClient.get_workspace (returns valid Workspace with workspace_mode='carry_patch', clone_status='ready')",

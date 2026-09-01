@@ -40,7 +40,7 @@
           "text": "Where does `checkout_branch()` (used in REQ-3 step 4b) come from? Please specify its package, module path, and signature so it can be referenced correctly in the implementation.",
           "context": "REQ-3 instructs implementers to call `checkout_branch()` after `fetch_remote()`, but unlike `fetch_remote()` and `push_to_remote()`, `checkout_branch` is not listed in the Tech Stack or Files Modified sections. Its absence could cause implementers to create a new utility unnecessarily or call the wrong function.",
           "options": [
-            "It is an existing utility in agentfox (please provide module path)",
+            "It is an existing utility in afcore (please provide module path)",
             "It needs to be created as part of this spec (add to Files Modified)",
             "It is a thin wrapper around `run_git(['checkout', branch_name])` and should be inlined"
           ],
@@ -53,7 +53,7 @@
           "options": [
             "pytest + pytest-asyncio + unittest.mock (standard project setup)",
             "pytest + pytest-asyncio + pytest-mock",
-            "Follow existing test conventions in the agentfox package \u2014 no change needed"
+            "Follow existing test conventions in the afcore package \u2014 no change needed"
           ],
           "required": false
         }

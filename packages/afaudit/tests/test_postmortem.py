@@ -172,10 +172,10 @@ class TestBuildPostmortemWithStubs:
         result = postmortem.build_postmortem(_StubPostmortemInput())
         assert "run_id" in result
 
-    def test_no_agentfox_import_error(self) -> None:
-        """build_postmortem must not require agentfox types."""
+    def test_no_afcore_import_error(self) -> None:
+        """build_postmortem must not require afcore types."""
         # If we got here without ImportError, the function works
-        # with protocol-only stubs — no agentfox dependency.
+        # with protocol-only stubs — no afcore dependency.
         result = postmortem.build_postmortem(_StubPostmortemInput())
         assert result is not None
 

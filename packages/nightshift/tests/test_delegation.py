@@ -18,15 +18,15 @@ def _read_app_source() -> str:
 
 
 class TestAppDelegation:
-    """TS-07-32: app.py delegates to agentfox.nightshift.
+    """TS-07-32: app.py delegates to afcore.nightshift.
 
     Requirements: 07-REQ-7.1
     """
 
-    def test_imports_agentfox_nightshift(self) -> None:
-        """app.py imports from agentfox.nightshift or agentfox."""
+    def test_imports_afcore_nightshift(self) -> None:
+        """app.py imports from afcore.nightshift or afcore."""
         source = _read_app_source()
-        assert "agentfox" in source, "app.py must import from agentfox"
+        assert "afcore" in source, "app.py must import from afcore"
 
     def test_thin_wrapper_line_count(self) -> None:
         """app.py is a thin delegation layer (< 150 lines)."""
@@ -41,7 +41,7 @@ class TestAppUsesAgentFoxGroup:
     Requirements: 07-REQ-7.2, 07-REQ-3.11
     """
 
-    def test_source_references_agentfox_group(self) -> None:
+    def test_source_references_afcore_group(self) -> None:
         """app.py source contains 'AgentFoxGroup'."""
         source = _read_app_source()
         assert "AgentFoxGroup" in source, "app.py must use AgentFoxGroup"
@@ -49,20 +49,20 @@ class TestAppUsesAgentFoxGroup:
     def test_source_references_common_options(self) -> None:
         """app.py source contains 'common_options'."""
         source = _read_app_source()
-        assert "common_options" in source, "app.py must use common_options from agentfox.io"
+        assert "common_options" in source, "app.py must use common_options from afcore.io"
 
-    def test_source_references_agentfox_io(self) -> None:
-        """app.py imports from agentfox.io."""
+    def test_source_references_afcore_io(self) -> None:
+        """app.py imports from afcore.io."""
         source = _read_app_source()
-        assert "agentfox.io" in source, "app.py must import from agentfox.io"
+        assert "afcore.io" in source, "app.py must import from afcore.io"
 
-    def test_main_is_agentfox_group_runtime(self) -> None:
+    def test_main_is_afcore_group_runtime(self) -> None:
         """Runtime check: main is an AgentFoxGroup instance.
 
         TS-07-19: isinstance(main, AgentFoxGroup) or
         type(main).__name__ == 'AgentFoxGroup'.
         """
-        from agentfox.io import AgentFoxGroup
+        from afcore.io import AgentFoxGroup
         from nightshift.app import main
 
         assert isinstance(main, AgentFoxGroup) or type(main).__name__ == "AgentFoxGroup", (
@@ -76,7 +76,7 @@ class TestNoDaemonLogicReimplementation:
     Requirements: 07-REQ-7.1, 07-REQ-7.2
     """
 
-    # Business logic function names from agentfox.nightshift that must NOT
+    # Business logic function names from afcore.nightshift that must NOT
     # be re-implemented in the thin wrapper.
     BANNED_FUNCTION_NAMES = {
         "run_fix_pipeline",
@@ -90,7 +90,7 @@ class TestNoDaemonLogicReimplementation:
     }
 
     def test_no_reimplemented_functions(self) -> None:
-        """app.py defines no functions that duplicate agentfox.nightshift logic."""
+        """app.py defines no functions that duplicate afcore.nightshift logic."""
         source = _read_app_source()
         tree = ast.parse(source)
         defined_names = set()
@@ -102,7 +102,7 @@ class TestNoDaemonLogicReimplementation:
 
 
 class TestNoCopyPastedLogic:
-    """TS-07-E8: No copy-pasted business logic from agentfox.nightshift.
+    """TS-07-E8: No copy-pasted business logic from afcore.nightshift.
 
     Requirements: 07-REQ-7.1, 07-REQ-7.E1
     """
@@ -111,7 +111,7 @@ class TestNoCopyPastedLogic:
         """app.py does not contain subprocess calls (business logic)."""
         source = _read_app_source()
         for pattern in ["subprocess.run", "Popen", "asyncio.create_subprocess"]:
-            assert pattern not in source, f"app.py contains {pattern!r}; business logic should stay in agentfox"
+            assert pattern not in source, f"app.py contains {pattern!r}; business logic should stay in afcore"
 
     def test_no_daemon_runner_reimplementation(self) -> None:
         """app.py does not reimplement DaemonRunner or NightShiftEngine."""

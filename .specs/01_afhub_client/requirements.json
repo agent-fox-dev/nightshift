@@ -952,7 +952,7 @@
       "user_story": {
         "role": "developer integrating the afhub package into a monorepo",
         "goal": "have a well-structured package that targets hub API v1 exclusively and declares compatible dependency bounds",
-        "benefit": "I can install afhub alongside afissues and agentfox without version conflicts"
+        "benefit": "I can install afhub alongside afissues and afcore without version conflicts"
       },
       "acceptance_criteria": [
         {
@@ -967,7 +967,7 @@
           "ears_pattern": "ubiquitous",
           "system": "afhub pyproject.toml",
           "action": "declare runtime dependencies as httpx>=0.27 and pydantic>=2.0, and dev/test dependencies as pytest and pytest-asyncio, with Python >=3.12",
-          "return_contract": "the package installs successfully in a Python 3.12+ environment alongside afissues and agentfox without dependency conflicts"
+          "return_contract": "the package installs successfully in a Python 3.12+ environment alongside afissues and afcore without dependency conflicts"
         },
         {
           "id": "01-REQ-10.3",

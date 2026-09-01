@@ -1,6 +1,6 @@
 """JSONL progress event tests for nightshift (migrated from af).
 
-These tests validate that ProgressDisplay and OutputManager from agentfox.io
+These tests validate that ProgressDisplay and OutputManager from afcore.io
 correctly emit JSONL progress events for nightshift daemon operations.
 
 Test Spec: TS-04-10, TS-04-11, TS-04-12, TS-04-13, TS-04-E3, TS-04-E4
@@ -22,7 +22,7 @@ class TestNightShiftTaskStartedEvent:
 
     def test_emit_progress_called_with_task_started(self) -> None:
         """task_started('1.1') calls emit_progress with correct event."""
-        from agentfox.io import ProgressDisplay
+        from afcore.io import ProgressDisplay
 
         om = MagicMock()
         pd = ProgressDisplay(output_manager=om, json_mode=True)
@@ -41,7 +41,7 @@ class TestNightShiftTaskCompletedEvent:
 
     def test_emit_progress_called_with_task_completed(self) -> None:
         """task_completed('1.1') includes duration_s as non-negative float."""
-        from agentfox.io import ProgressDisplay
+        from afcore.io import ProgressDisplay
 
         om = MagicMock()
         pd = ProgressDisplay(output_manager=om, json_mode=True)
@@ -62,7 +62,7 @@ class TestNightShiftTaskFailedEvent:
 
     def test_emit_progress_called_with_task_failed(self) -> None:
         """task_failed('1.2', error='...') includes error field."""
-        from agentfox.io import ProgressDisplay
+        from afcore.io import ProgressDisplay
 
         om = MagicMock()
         pd = ProgressDisplay(output_manager=om, json_mode=True)
@@ -80,7 +80,7 @@ class TestNoEmitProgressInTextMode:
 
     def test_emit_progress_not_called_when_json_mode_false(self) -> None:
         """json_mode=False: emit_progress is never called."""
-        from agentfox.io import ProgressDisplay
+        from afcore.io import ProgressDisplay
 
         om = MagicMock()
         om.json_mode = False
@@ -106,7 +106,7 @@ class TestNightShiftJsonlEvents:
         stdout_buf = io.StringIO()
         stderr_buf = io.StringIO()
 
-        from agentfox.io import OutputManager
+        from afcore.io import OutputManager
 
         om = OutputManager(json_mode=True, stdout=stdout_buf, stderr=stderr_buf)
         om.emit({"status": "stopped", "issues_fixed": 0, "total_cost": 0.0})
@@ -123,7 +123,7 @@ class TestBrokenPipeSuppressed:
 
     def test_broken_pipe_does_not_raise(self) -> None:
         """BrokenPipeError on stderr write is suppressed."""
-        from agentfox.io import OutputManager
+        from afcore.io import OutputManager
 
         class BrokenStderr:
             def write(self, data: str) -> None:
@@ -152,7 +152,7 @@ class TestNullNodeId:
 
     def test_null_node_id_emits_with_warning(self) -> None:
         """task_started(node_id=None) emits with node_id=null and warns on stderr."""
-        from agentfox.io import ProgressDisplay
+        from afcore.io import ProgressDisplay
 
         om = MagicMock()
         stderr_capture = io.StringIO()

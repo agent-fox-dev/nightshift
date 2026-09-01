@@ -65,7 +65,7 @@ with four packages:
 | Package | Description |
 |---------|-------------|
 | `packages/nightshift/` | CLI entry point (`nightshift` command) |
-| `packages/agentfox/` | Core library — session infrastructure, knowledge system, archetypes |
+| `packages/afcore/` | Core library — session infrastructure, knowledge system, archetypes |
 | `packages/afissues/` | Platform abstraction — GitHub, GitLab, Gitea integration |
 | `packages/afaudit/` | Audit infrastructure — structured events, sinks, traces |
 

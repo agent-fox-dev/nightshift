@@ -27,7 +27,7 @@ Do not implement anything before completing these steps.
 
 ```
 packages/nightshift/    # CLI entry point (nightshift command)
-packages/agentfox/      # Core library (sessions, knowledge, archetypes)
+packages/afcore/      # Core library (sessions, knowledge, archetypes)
 packages/afissues/      # Platform abstraction (GitHub, GitLab, Gitea)
 packages/afaudit/       # Audit infrastructure (events, sinks, traces)
 docs/                   # Documentation

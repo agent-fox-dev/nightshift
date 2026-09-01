@@ -2,7 +2,7 @@
 
 Verifies that platform test files are relocated to packages/afissues/tests/,
 conftest.py references only afissues imports, property tests are relocated,
-and the old agentfox platform test directory is deleted.
+and the old afcore platform test directory is deleted.
 
 Requirements: 03-REQ-9.1, 03-REQ-9.2, 03-REQ-9.3, 03-REQ-9.4
 
@@ -13,7 +13,7 @@ Drift errata:
     bringing the current total to 12.  Tests below use >= 9 as the minimum
     bound for core platform tests.
   - 03-REQ-9.2: conftest.py fixture ``platform_config`` imports from
-    ``agentfox.core.config`` (not afissues) and is unused by all test files.
+    ``afcore.core.config`` (not afissues) and is unused by all test files.
     It can be dropped or left with its original import during relocation.
 """
 
@@ -30,7 +30,7 @@ _WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 _AFISSUES_TESTS = Path(__file__).resolve().parents[1]  # packages/afissues/tests/
 _AFISSUES_UNIT = _AFISSUES_TESTS / "unit"
 _AFISSUES_PROPERTY = _AFISSUES_TESTS / "property"
-_OLD_PLATFORM_DIR = _WORKSPACE_ROOT / "packages" / "agentfox" / "tests" / "unit" / "platform"
+_OLD_PLATFORM_DIR = _WORKSPACE_ROOT / "packages" / "afcore" / "tests" / "unit" / "platform"
 
 
 # ── TS-03-31: Test directory structure ───────────────────────────────
@@ -89,13 +89,13 @@ class TestMigrationDirectoryStructure:
 class TestConftestImports:
     """TS-03-32: Relocated conftest.py uses only afissues imports."""
 
-    def test_no_agentfox_platform_in_conftest(self) -> None:
-        """conftest.py must not reference agentfox.platform."""
+    def test_no_afcore_platform_in_conftest(self) -> None:
+        """conftest.py must not reference afcore.platform."""
         conftest_path = _AFISSUES_UNIT / "conftest.py"
         if not conftest_path.exists():
             pytest.skip("conftest.py not yet relocated")
         content = conftest_path.read_text()
-        assert "agentfox.platform" not in content, "conftest.py still references agentfox.platform"
+        assert "afcore.platform" not in content, "conftest.py still references afcore.platform"
 
     def test_conftest_references_afissues_or_is_empty(self) -> None:
         """conftest.py references afissues or is minimal (empty/no imports)."""
@@ -103,7 +103,7 @@ class TestConftestImports:
         if not conftest_path.exists():
             pytest.skip("conftest.py not yet relocated")
         content = conftest_path.read_text()
-        # The fixture imports from agentfox.core.config which stays in agentfox.
+        # The fixture imports from afcore.core.config which stays in afcore.
         # Either the file imports afissues, or the unused fixture was removed.
         has_afissues_ref = "afissues" in content
         is_minimal = content.strip() == "" or "import" not in content
@@ -116,13 +116,13 @@ class TestConftestImports:
 class TestPropertyTestImports:
     """TS-03-33: Relocated test_overhaul_props.py uses afissues imports."""
 
-    def test_no_agentfox_platform_in_property_test(self) -> None:
-        """Property test must not reference agentfox.platform."""
+    def test_no_afcore_platform_in_property_test(self) -> None:
+        """Property test must not reference afcore.platform."""
         prop_path = _AFISSUES_PROPERTY / "test_overhaul_props.py"
         if not prop_path.exists():
             pytest.skip("test_overhaul_props.py not yet relocated")
         content = prop_path.read_text()
-        assert "agentfox.platform" not in content, "test_overhaul_props.py still references agentfox.platform"
+        assert "afcore.platform" not in content, "test_overhaul_props.py still references afcore.platform"
 
     def test_property_test_imports_afissues(self) -> None:
         """Property test imports from afissues."""
@@ -137,7 +137,7 @@ class TestPropertyTestImports:
 
 
 class TestOldPlatformDirDeleted:
-    """TS-03-34: packages/agentfox/tests/unit/platform/ is removed."""
+    """TS-03-34: packages/afcore/tests/unit/platform/ is removed."""
 
     def test_old_platform_dir_does_not_exist(self) -> None:
         """The old platform test directory must be deleted after relocation."""

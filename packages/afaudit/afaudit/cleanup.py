@@ -4,9 +4,9 @@ Provides :func:`purge_stale_audit_files` for best-effort removal of
 ephemeral audit files at startup, and :func:`enforce_file_retention` for
 deleting the oldest audit run file sets beyond a configured maximum.
 
-Migrated from ``agentfox.workspace.audit_cleanup`` (purge) and the
+Migrated from ``afcore.workspace.audit_cleanup`` (purge) and the
 file-only half of the former ``enforce_audit_retention`` (retention).
-The DB-retention half remains in the agentfox package.
+The DB-retention half remains in the afcore package.
 """
 
 from __future__ import annotations

@@ -45,7 +45,7 @@
           "text": "What is the source and behavior of the `Clamped` validator used in REQ-1 (e.g., `Annotated[int, Clamped(ge=60)]`)? Is this a custom pydantic v2 annotated type, a third-party library, or should it be replaced with `Field(ge=60)` validation?",
           "context": "Pydantic v2 does not have a built-in `Clamped` type. Using `Field(ge=60)` raises a `ValidationError` on out-of-range values, while a clamping approach silently adjusts them. The distinction matters for user-facing config error behavior and needs an import reference for code generation.",
           "options": [
-            "It is a custom annotated type defined in agentfox.core.validators \u2014 reference that module.",
+            "It is a custom annotated type defined in afcore.core.validators \u2014 reference that module.",
             "Replace with standard pydantic Field(ge=..., le=...) \u2014 validation error on bad values is acceptable.",
             "It is a thin wrapper to be added as part of this spec \u2014 document it here."
           ],
@@ -203,7 +203,7 @@
           "text": "In REQ-4, the generated `[workspace]` section includes `merge_strategy = \"direct\"`. Is `merge_strategy` a field that already exists in an existing Pydantic model (e.g., a `WorkspaceConfig`), or does this spec need to add it? If it already exists, which model owns it?",
           "context": "The spec defines HubConfig and CarryPatchConfig explicitly, but does not mention a WorkspaceConfig model. If merge_strategy needs a new model, it should be listed as a requirement. If it is already defined elsewhere, a cross-reference would make the spec self-contained.",
           "options": [
-            "merge_strategy already exists in an existing WorkspaceConfig model in agentfox.core.config \u2014 no new model needed",
+            "merge_strategy already exists in an existing WorkspaceConfig model in afcore.core.config \u2014 no new model needed",
             "A new WorkspaceConfig Pydantic model needs to be defined in this spec and added to AgentFoxConfig",
             "merge_strategy is written to the TOML file as a static default string only and does not correspond to any Pydantic model field"
           ],
@@ -271,7 +271,7 @@
         {
           "id": "q4",
           "text": "What is the expected logging mechanism for warnings and success messages in this spec (e.g. Python standard `logging` module, `click.echo`, or a project-specific structured logger)?",
-          "context": "REQ-3 Step 6 says 'log success' and REQ-4/REQ-5 say 'log a warning'. Consistency with the existing nightshift/agentfox logging pattern is important. If the project uses a structured logger (e.g. structlog or a custom wrapper), the implementer should use it rather than ad-hoc click.echo calls.",
+          "context": "REQ-3 Step 6 says 'log success' and REQ-4/REQ-5 say 'log a warning'. Consistency with the existing nightshift/afcore logging pattern is important. If the project uses a structured logger (e.g. structlog or a custom wrapper), the implementer should use it rather than ad-hoc click.echo calls.",
           "options": [
             "Python standard logging module",
             "click.echo (stderr for warnings, stdout for info)",
@@ -294,7 +294,7 @@
         {
           "id": "q6",
           "text": "What changes are expected in `config_gen.py` (listed in Files Modified but not described in any requirement)?",
-          "context": "The Files Modified table lists packages/agentfox/agentfox/core/config_gen.py with 'Add hub and carry_patch sections to generated default config', but no requirement describes this file's role, its existing behavior, or what exactly should be added. Without this, the implementer may duplicate or conflict with REQ-4's config generation logic.",
+          "context": "The Files Modified table lists packages/afcore/afcore/core/config_gen.py with 'Add hub and carry_patch sections to generated default config', but no requirement describes this file's role, its existing behavior, or what exactly should be added. Without this, the implementer may duplicate or conflict with REQ-4's config generation logic.",
           "options": [
             "config_gen.py generates the default AgentFoxConfig (not the .nightshift/config.toml); it needs hub and carry_patch sections added to match new models",
             "config_gen.py is the implementation of REQ-4's config writing logic; the Files Modified entry is just clarifying where that code lives",
@@ -391,7 +391,7 @@
       "answers": {
         "q1": "Yes \u2014 HubNotFoundError is a confirmed export of afhub_client. It maps to HTTP 404 responses. The afhub_client spec's error hierarchy lists it as: class HubNotFoundError(HubError): 404 - workspace/patch/rebuild not found.",
         "q2": "afhub_client spec (01_afhub_client) documents the full Workspace model. Cross-reference: Workspace fields used in this spec: workspace_mode (str), clone_status (str, values: pending/cloning/ready/failed), git_url (str, required), integration_branch (str | None = None). set_variable signature: set_variable(slug: str, key: str, value: str) -> None, uses PATCH-then-POST upsert as documented in 01_afhub_client REQ-4.",
-        "q3": "Clamped is a custom annotated type already defined in agentfox.core.config itself (the same file being modified). It is an internal utility class in the existing config.py file used throughout NightShiftConfig and other existing models. The import is local \u2014 no new module needed. It silently clamps values rather than raising ValidationError, matching the existing pattern in the codebase.",
+        "q3": "Clamped is a custom annotated type already defined in afcore.core.config itself (the same file being modified). It is an internal utility class in the existing config.py file used throughout NightShiftConfig and other existing models. The import is local \u2014 no new module needed. It silently clamps values rather than raising ValidationError, matching the existing pattern in the codebase.",
         "q4": "No \u2014 the source reference to docs/proposals/carry_patch_support.md is sufficient. The spec is focused on implementation, not motivation.",
         "q5": "Any exception from set_variable is non-fatal \u2014 log warning and continue regardless. The daemon can function correctly even if these variables are not set, because it handles concurrent rebuild (409) gracefully.",
         "q6": "Owner: nightshift (Michael Kuehl / candlekeep)"
@@ -415,7 +415,7 @@
       "answers": {
         "q1": "Silently skip carry-patch and run normally. --hub-url alone is insufficient to activate carry-patch mode. Only when both --workspace and --token (from any source) are resolved does carry-patch mode activate. --hub-url is only used when carry-patch mode is active.",
         "q2": "Leave the exact wording to the implementer \u2014 any clear message is acceptable.",
-        "q3": "merge_strategy already exists in the existing WorkspaceConfig model in agentfox.core.config. The WorkspaceConfig class has a merge_strategy field with Literal['direct', 'branch', 'pr'] = 'direct'. No new model needed.",
+        "q3": "merge_strategy already exists in the existing WorkspaceConfig model in afcore.core.config. The WorkspaceConfig class has a merge_strategy field with Literal['direct', 'branch', 'pr'] = 'direct'. No new model needed.",
         "q4": "Leave naming to the implementer \u2014 the PRD describes behavior sufficiently."
       },
       "timestamp": "2026-09-01T10:32:21.302759+00:00"

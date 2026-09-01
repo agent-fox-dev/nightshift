@@ -21,8 +21,8 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["packages/agentfox/tests", "packages/afaudit/tests", "packages/afissues/tests", "packages/nightshift/tests"]
-pythonpath = ["packages/agentfox"]
+testpaths = ["packages/afcore/tests", "packages/afaudit/tests", "packages/afissues/tests", "packages/nightshift/tests"]
+pythonpath = ["packages/afcore"]
 asyncio_mode = "auto"
 addopts = "-n auto --dist=loadfile --timeout=15 -m 'not smoke' --import-mode=importlib"
 markers = [
@@ -38,7 +38,7 @@ members = ["packages/*"]
 [tool.uv.sources]
 afaudit = { workspace = true }
 afissues = { workspace = true }
-agentfox = { workspace = true }
+afcore = { workspace = true }
 afhub = { workspace = true }
 nightshift = { workspace = true }
 
@@ -51,26 +51,26 @@ exclude = [".claude/worktrees"]
 select = ["E", "F", "W", "I", "UP", "TID251"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"agentfox.knowledge.embeddings".msg = "Removed in spec 114"
-"agentfox.knowledge.search".msg = "Removed in spec 114"
-"agentfox.knowledge.retrieval".msg = "Removed in spec 114"
-"agentfox.knowledge.causal".msg = "Removed in spec 114"
-"agentfox.knowledge.lifecycle".msg = "Removed in spec 114"
-"agentfox.knowledge.contradiction".msg = "Removed in spec 114"
-"agentfox.knowledge.consolidation".msg = "Removed in spec 114"
-"agentfox.knowledge.compaction".msg = "Removed in spec 114"
-"agentfox.knowledge.entity_linker".msg = "Removed in spec 114"
-"agentfox.knowledge.entity_query".msg = "Removed in spec 114"
-"agentfox.knowledge.entity_store".msg = "Removed in spec 114"
-"agentfox.knowledge.entities".msg = "Removed in spec 114"
-"agentfox.knowledge.static_analysis".msg = "Removed in spec 114"
-"agentfox.knowledge.sleep_compute".msg = "Removed in spec 114"
-"agentfox.knowledge.rendering".msg = "Removed in spec 114"
-"agentfox.knowledge.store".msg = "Removed in spec 114"
-"agentfox.knowledge.facts".msg = "Removed in spec 114"
-"agentfox.knowledge.ingest".msg = "Removed in spec 114"
-"agentfox.knowledge.onboard".msg = "Removed in spec 114"
-"agentfox.engine.knowledge_harvest".msg = "Removed in spec 114"
+"afcore.knowledge.embeddings".msg = "Removed in spec 114"
+"afcore.knowledge.search".msg = "Removed in spec 114"
+"afcore.knowledge.retrieval".msg = "Removed in spec 114"
+"afcore.knowledge.causal".msg = "Removed in spec 114"
+"afcore.knowledge.lifecycle".msg = "Removed in spec 114"
+"afcore.knowledge.contradiction".msg = "Removed in spec 114"
+"afcore.knowledge.consolidation".msg = "Removed in spec 114"
+"afcore.knowledge.compaction".msg = "Removed in spec 114"
+"afcore.knowledge.entity_linker".msg = "Removed in spec 114"
+"afcore.knowledge.entity_query".msg = "Removed in spec 114"
+"afcore.knowledge.entity_store".msg = "Removed in spec 114"
+"afcore.knowledge.entities".msg = "Removed in spec 114"
+"afcore.knowledge.static_analysis".msg = "Removed in spec 114"
+"afcore.knowledge.sleep_compute".msg = "Removed in spec 114"
+"afcore.knowledge.rendering".msg = "Removed in spec 114"
+"afcore.knowledge.store".msg = "Removed in spec 114"
+"afcore.knowledge.facts".msg = "Removed in spec 114"
+"afcore.knowledge.ingest".msg = "Removed in spec 114"
+"afcore.knowledge.onboard".msg = "Removed in spec 114"
+"afcore.engine.knowledge_harvest".msg = "Removed in spec 114"
 
 [tool.mypy]
 python_version = "3.12"

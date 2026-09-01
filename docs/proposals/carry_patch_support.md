@@ -324,12 +324,12 @@ instances. Today there are two streams:
   failure/review feedback (only active when `merge_strategy="pr"`)
 
 Streams are registered in `build_streams()` at
-`packages/agentfox/agentfox/nightshift/streams.py`. Each stream wraps an engine
+`packages/afcore/afcore/nightshift/streams.py`. Each stream wraps an engine
 method via `EngineWorkStream`, which delegates to `NightShiftEngine` methods.
 
 ### Fix Pipeline Flow
 
-The `FixPipeline` in `packages/agentfox/agentfox/nightshift/fix_pipeline.py`
+The `FixPipeline` in `packages/afcore/afcore/nightshift/fix_pipeline.py`
 orchestrates per-issue processing:
 
 1. Build `InMemorySpec` from issue
@@ -342,7 +342,7 @@ orchestrates per-issue processing:
 
 ### Git Operations Layer
 
-The workspace package (`packages/agentfox/agentfox/workspace/`) provides:
+The workspace package (`packages/afcore/afcore/workspace/`) provides:
 
 - `git.py`: Low-level async git wrappers (`run_git()`, `validate_ref_name()`,
   `create_branch()`, etc.)
@@ -957,10 +957,10 @@ communication, data models, and authentication.
 **Rationale**: Separation of concerns. The hub client has its own authentication
 model (PAT with scopes, passed via `Authorization: Bearer <token>`), its own
 error types (including the hub's `error_type` field for machine-readable error
-classification), and its own data models. Placing it in `agentfox` would violate
+classification), and its own data models. Placing it in `afcore` would violate
 the existing package boundaries.
 
-**Alternative considered**: Adding hub client to `agentfox/nightshift/`. Rejected
+**Alternative considered**: Adding hub client to `afcore/nightshift/`. Rejected
 because the hub client is a general-purpose API layer, not nightshift-specific
 logic.
 
@@ -1357,7 +1357,7 @@ def resolve_hub_url(
 
 Files to modify:
 
-- `packages/agentfox/agentfox/core/config.py` -- Add `HubConfig` and
+- `packages/afcore/afcore/core/config.py` -- Add `HubConfig` and
   `CarryPatchConfig` models
 
 ```python
@@ -1391,7 +1391,7 @@ carry_patch: CarryPatchConfig = Field(default_factory=CarryPatchConfig)
 
 Files to modify:
 
-- `packages/agentfox/pyproject.toml` -- Add `afhub` as an optional dependency
+- `packages/afcore/pyproject.toml` -- Add `afhub` as an optional dependency
 - `packages/nightshift/pyproject.toml` -- Add `afhub` as a dependency
 
 #### 1.4 Tests for Phase 1
@@ -1484,7 +1484,7 @@ Hub variables that nightshift reads but does not set:
 
 Files to modify:
 
-- `packages/agentfox/agentfox/nightshift/fix_pipeline.py` -- Replace
+- `packages/afcore/afcore/nightshift/fix_pipeline.py` -- Replace
   harvest/integration with patch registration in carry-patch mode
 
 When `carry_patch.enabled` is true, after the fix branch is created and the
@@ -1537,7 +1537,7 @@ rebuild submission.
 
 Files to create:
 
-- `packages/agentfox/agentfox/nightshift/carry_patch_monitor.py`
+- `packages/afcore/afcore/nightshift/carry_patch_monitor.py`
 
 ```python
 class CarryPatchMonitor:
@@ -1601,11 +1601,11 @@ Key behaviors:
 
 Files to modify:
 
-- `packages/agentfox/agentfox/nightshift/streams.py` -- Add carry-patch stream
+- `packages/afcore/afcore/nightshift/streams.py` -- Add carry-patch stream
   to `build_streams()`
-- `packages/agentfox/agentfox/nightshift/engine.py` -- Add
+- `packages/afcore/afcore/nightshift/engine.py` -- Add
   `_run_carry_patch_monitor()` method that delegates to `CarryPatchMonitor`
-- `packages/agentfox/agentfox/nightshift/daemon.py` -- Add `"carry-patch"` to
+- `packages/afcore/afcore/nightshift/daemon.py` -- Add `"carry-patch"` to
   `_STREAM_DISPLAY_NAMES` and `_STREAM_ACTIVE_LABELS`
 
 #### 2.5 Hub client initialization in daemon startup
@@ -1680,11 +1680,11 @@ CARRY_PATCH_MERGED_DETECTED = "carry_patch_merged_detected"
 
 Files to create:
 
-- `packages/agentfox/tests/test_carry_patch_monitor.py` -- Monitor logic tests
+- `packages/afcore/tests/test_carry_patch_monitor.py` -- Monitor logic tests
   with mocked HubClient
-- `packages/agentfox/tests/test_carry_patch_registration.py` -- Patch
+- `packages/afcore/tests/test_carry_patch_registration.py` -- Patch
   registration in fix pipeline
-- `packages/agentfox/tests/test_carry_patch_stream.py` -- Stream registration
+- `packages/afcore/tests/test_carry_patch_stream.py` -- Stream registration
   and enablement
 
 Key test scenarios:
@@ -1725,7 +1725,7 @@ agent the right context and instructions for carry-patch conflicts.
 
 Files to modify:
 
-- `packages/agentfox/agentfox/archetypes.py` -- Add `carry-patch` mode to coder
+- `packages/afcore/afcore/archetypes.py` -- Add `carry-patch` mode to coder
   archetype
 
 ```python
@@ -1743,7 +1743,7 @@ Files to modify:
 
 Files to create:
 
-- `packages/agentfox/agentfox/_templates/profiles/coder_carry-patch.md`
+- `packages/afcore/afcore/_templates/profiles/coder_carry-patch.md`
 
 Profile content should instruct the agent:
 
@@ -1778,7 +1778,7 @@ pipeline.
 
 Files to modify (if needed):
 
-- `packages/agentfox/agentfox/session/context.py` -- Add carry-patch to
+- `packages/afcore/afcore/session/context.py` -- Add carry-patch to
   `_ARCHETYPE_ARTIFACTS`
 
 #### 3.4 Tests for Phase 3
@@ -1787,7 +1787,7 @@ Files to modify (if needed):
 
 Files to create:
 
-- `packages/agentfox/tests/test_carry_patch_profile.py` -- Profile loading and
+- `packages/afcore/tests/test_carry_patch_profile.py` -- Profile loading and
   content tests
 
 ---
@@ -1802,7 +1802,7 @@ Files to create:
 
 - `packages/afhub/tests/test_integration.py` -- Integration tests against a mock
   hub server (httpx mock transport)
-- `packages/agentfox/tests/test_carry_patch_e2e.py` -- End-to-end pipeline tests
+- `packages/afcore/tests/test_carry_patch_e2e.py` -- End-to-end pipeline tests
 
 Test scenarios:
 
@@ -1838,9 +1838,9 @@ Test scenarios:
 
 Files to modify:
 
-- `packages/agentfox/agentfox/nightshift/carry_patch_monitor.py` -- Add
+- `packages/afcore/afcore/nightshift/carry_patch_monitor.py` -- Add
   comprehensive error handling
-- `packages/agentfox/agentfox/nightshift/fix_pipeline.py` -- Harden patch
+- `packages/afcore/afcore/nightshift/fix_pipeline.py` -- Harden patch
   registration error paths
 
 Key error paths to harden:
@@ -1911,25 +1911,25 @@ Document the following known limitations:
 
 | File | Package | Purpose |
 |------|---------|---------|
-| `agentfox/nightshift/carry_patch_monitor.py` | agentfox | Conflict monitoring stream |
-| `agentfox/_templates/profiles/coder_carry-patch.md` | agentfox | Agent profile |
+| `afcore/nightshift/carry_patch_monitor.py` | afcore | Conflict monitoring stream |
+| `afcore/_templates/profiles/coder_carry-patch.md` | afcore | Agent profile |
 
 ### Modified files
 
 | File | Change |
 |------|--------|
-| `agentfox/core/config.py` | Add HubConfig, CarryPatchConfig |
-| `agentfox/archetypes.py` | Add carry-patch ModeConfig to coder |
-| `agentfox/nightshift/fix_pipeline.py` | Add patch registration step with polling |
-| `agentfox/nightshift/engine.py` | Add `_run_carry_patch_monitor()` |
-| `agentfox/nightshift/streams.py` | Register carry-patch stream |
-| `agentfox/nightshift/daemon.py` | Display names for carry-patch stream |
-| `agentfox/session/context.py` | Carry-patch artifact filtering (if needed) |
+| `afcore/core/config.py` | Add HubConfig, CarryPatchConfig |
+| `afcore/archetypes.py` | Add carry-patch ModeConfig to coder |
+| `afcore/nightshift/fix_pipeline.py` | Add patch registration step with polling |
+| `afcore/nightshift/engine.py` | Add `_run_carry_patch_monitor()` |
+| `afcore/nightshift/streams.py` | Register carry-patch stream |
+| `afcore/nightshift/daemon.py` | Display names for carry-patch stream |
+| `afcore/session/context.py` | Carry-patch artifact filtering (if needed) |
 | `afaudit/events.py` | Add carry-patch audit event types |
 | `nightshift/app.py` | `--hub-url` and `--token` flags, hub client init, CWD validation, variable initialization |
-| `agentfox/pyproject.toml` | Add afhub dependency |
+| `afcore/pyproject.toml` | Add afhub dependency |
 | `nightshift/pyproject.toml` | Add afhub dependency |
-| `agentfox/core/config_gen.py` | Add hub/carry_patch to visible sections |
+| `afcore/core/config_gen.py` | Add hub/carry_patch to visible sections |
 
 ### Effort Estimates
 

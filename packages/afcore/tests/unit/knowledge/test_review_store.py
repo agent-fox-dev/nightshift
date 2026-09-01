@@ -1,0 +1,530 @@
+"""Unit tests for review_store.py: schema, CRUD, supersession.
+
+Test Spec: TS-27-1, TS-27-2, TS-27-6, TS-27-7, TS-27-8, TS-27-E1, TS-27-E2, TS-27-E5
+Requirements: 27-REQ-1.1, 27-REQ-1.E1, 27-REQ-2.1, 27-REQ-2.E1,
+              27-REQ-4.1, 27-REQ-4.2, 27-REQ-4.3, 27-REQ-4.E1
+
+Issue #553: observation/minor findings are stored but never retrieved.
+"""
+
+from __future__ import annotations
+
+import uuid
+from unittest.mock import patch
+
+import duckdb
+import pytest
+from afcore.core.errors import KnowledgeStoreError
+from afcore.knowledge.migrations import Migration
+from afcore.knowledge.review_store import (
+    DriftFinding,
+    ReviewFinding,
+    insert_drift_findings,
+    insert_findings,
+    query_active_drift_findings,
+    query_active_findings,
+    query_cross_spec_drift_findings,
+    query_findings_by_session,
+)
+
+
+def _make_finding(
+    *,
+    severity: str = "major",
+    description: str = "Test finding",
+    spec_name: str = "test_spec",
+    task_group: str = "1",
+    session_id: str = "session-1",
+    requirement_ref: str | None = None,
+) -> ReviewFinding:
+    return ReviewFinding(
+        id=str(uuid.uuid4()),
+        severity=severity,
+        description=description,
+        requirement_ref=requirement_ref,
+        spec_name=spec_name,
+        task_group=task_group,
+        session_id=session_id,
+    )
+
+
+class TestReviewFindingsTableCreated:
+    """TS-27-1: review_findings table exists after schema creation."""
+
+    def test_review_findings_table_created(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """review_findings table exists with expected columns."""
+        rows = schema_conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'review_findings' ORDER BY ordinal_position"
+        ).fetchall()
+        columns = [r[0] for r in rows]
+        assert "id" in columns
+        assert "severity" in columns
+        assert "description" in columns
+        assert "requirement_ref" in columns
+        assert "spec_name" in columns
+        assert "task_group" in columns
+        assert "session_id" in columns
+        assert "superseded_by" in columns
+        assert "created_at" in columns
+
+
+# TS-27-2 (verification_results table) removed in spec 10 — table dropped by migration v26.
+
+
+class TestInsertFindingsSupersession:
+    """TS-27-6: insert findings with supersession."""
+
+    def test_insert_findings_supersession(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """New findings supersede existing active records for same spec/task_group."""
+        # Insert first batch
+        f1 = _make_finding(description="First finding", session_id="s1")
+        insert_findings(schema_conn, [f1])
+
+        # Verify first batch is active
+        active = query_active_findings(schema_conn, "test_spec")
+        assert len(active) == 1
+        assert active[0].description == "First finding"
+
+        # Insert second batch (supersedes first)
+        f2 = _make_finding(description="Second finding", session_id="s2")
+        insert_findings(schema_conn, [f2])
+
+        # Verify only second batch is active
+        active = query_active_findings(schema_conn, "test_spec")
+        assert len(active) == 1
+        assert active[0].description == "Second finding"
+
+        # Verify first batch is superseded
+        all_rows = schema_conn.execute(
+            "SELECT description, superseded_by FROM review_findings ORDER BY description"
+        ).fetchall()
+        assert len(all_rows) == 2
+        first = next(r for r in all_rows if r[0] == "First finding")
+        assert first[1] is not None  # superseded_by is set
+
+
+# TS-27-7 removed in spec 10.
+
+
+class TestNoRecordsToSupersede:
+    """TS-27-E5: no existing records to supersede."""
+
+    def test_no_records_to_supersede(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """Insert works cleanly when no prior records exist."""
+        f1 = _make_finding(description="First ever finding")
+        count = insert_findings(schema_conn, [f1])
+        assert count == 1
+
+        active = query_active_findings(schema_conn, "test_spec")
+        assert len(active) == 1
+
+
+class TestMigrationFailureRaises:
+    """TS-27-E1: migration failure raises KnowledgeStoreError."""
+
+    def test_migration_failure_raises(self) -> None:
+        """KnowledgeStoreError raised if migration fails."""
+        from afcore.knowledge.migrations import apply_pending_migrations
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("""
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                description TEXT
+            );
+            INSERT INTO schema_version (version, description) VALUES (1, 'initial');
+        """)
+
+        def _failing_migration(c: duckdb.DuckDBPyConnection) -> None:
+            raise RuntimeError("Simulated migration failure")
+
+        with patch(
+            "afcore.knowledge.migrations.MIGRATIONS",
+            [
+                Migration(
+                    version=2,
+                    description="failing migration",
+                    apply=_failing_migration,
+                )
+            ],
+        ):
+            with pytest.raises(KnowledgeStoreError, match="Migration to version 2 failed"):
+                apply_pending_migrations(conn)
+
+        conn.close()
+
+
+class TestMigrationAlreadyAppliedSkips:
+    """TS-27-E2: migration already applied skips without error."""
+
+    def test_migration_already_applied_skips(self) -> None:
+        """Running migration twice does not error."""
+        from afcore.knowledge.migrations import apply_pending_migrations
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("""
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                description TEXT
+            );
+            INSERT INTO schema_version (version, description) VALUES (1, 'initial');
+        """)
+
+        # Run migration twice — second run should be a no-op
+        apply_pending_migrations(conn)
+        apply_pending_migrations(conn)
+
+        # Verify version is recorded
+        version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        assert version is not None
+        assert version[0] == 26
+        conn.close()
+
+
+class TestQueryBySession:
+    """Query findings/verdicts by session_id for convergence."""
+
+    def test_query_findings_by_session(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """Findings can be queried by session_id."""
+        f1 = _make_finding(description="Finding 1", session_id="s1")
+        f2 = _make_finding(description="Finding 2", session_id="s2")
+        insert_findings(schema_conn, [f1])
+        # Need different task_group to avoid supersession
+        f2b = ReviewFinding(
+            id=f2.id,
+            severity=f2.severity,
+            description=f2.description,
+            requirement_ref=f2.requirement_ref,
+            spec_name=f2.spec_name,
+            task_group="2",
+            session_id=f2.session_id,
+        )
+        insert_findings(schema_conn, [f2b])
+
+        results = query_findings_by_session(schema_conn, "s1")
+        assert len(results) == 1
+        assert results[0].description == "Finding 1"
+
+    # TS-27-verdict-query removed in spec 10.
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for issue #188: table name allowlist validation
+# ---------------------------------------------------------------------------
+
+
+class TestTableNameValidation:
+    """Validate that SQL helper functions reject disallowed table names."""
+
+    def test_validate_table_name_accepts_allowed(self) -> None:
+        from afcore.knowledge.review_store import _validate_table_name
+
+        for name in ("review_findings", "drift_findings"):
+            _validate_table_name(name)  # should not raise
+
+    def test_validate_table_name_rejects_unknown(self) -> None:
+        from afcore.knowledge.review_store import _validate_table_name
+
+        with pytest.raises(ValueError, match="not in the allowed set"):
+            _validate_table_name("users; DROP TABLE --")
+
+    def test_supersede_rejects_bad_table(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        from afcore.knowledge.review_store import _supersede_active_records
+
+        with pytest.raises(ValueError, match="not in the allowed set"):
+            _supersede_active_records(schema_conn, "evil_table", "spec", "1", "marker")
+
+    def test_insert_with_supersession_rejects_bad_table(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        from afcore.knowledge.review_store import _insert_with_supersession
+
+        with pytest.raises(ValueError, match="not in the allowed set"):
+            _insert_with_supersession(
+                schema_conn,
+                table="evil_table",
+                columns="id",
+                records=[],
+                value_extractor=lambda r: [],
+                record_type_label="test",
+            )
+
+
+# ---------------------------------------------------------------------------
+# AC-4: _insert_with_supersession supersedes per task_group, not just the
+# first record's task_group.
+# ---------------------------------------------------------------------------
+
+
+class TestInsertWithSupersessionPerTaskGroup:
+    """AC-4: multi-group batch supersedes all matching prior records."""
+
+    def test_cross_group_batch_supersedes_both_task_groups(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """A batch spanning task_group='1' and '2' supersedes prior records
+        for BOTH groups, not just the first record's group."""
+        # Seed: one active finding per group from 'old' session
+        old_g1 = _make_finding(
+            description="Old group-1 finding",
+            task_group="1",
+            session_id="old",
+        )
+        old_g2 = _make_finding(
+            description="Old group-2 finding",
+            task_group="2",
+            session_id="old",
+        )
+        insert_findings(schema_conn, [old_g1])
+        insert_findings(schema_conn, [old_g2])
+
+        # Verify both are active before the new insert
+        active_before = query_active_findings(schema_conn, "test_spec")
+        assert len(active_before) == 2
+
+        # New batch spans both groups, session='new'
+        new_g1 = _make_finding(
+            description="New group-1 finding",
+            task_group="1",
+            session_id="new",
+        )
+        new_g2 = _make_finding(
+            description="New group-2 finding",
+            task_group="2",
+            session_id="new",
+        )
+        insert_findings(schema_conn, [new_g1, new_g2])
+
+        # Only the two new findings should be active
+        active_after = query_active_findings(schema_conn, "test_spec")
+        assert len(active_after) == 2
+        descriptions = {f.description for f in active_after}
+        assert descriptions == {"New group-1 finding", "New group-2 finding"}
+
+        # Both old findings must be superseded by 'new'
+        all_rows = schema_conn.execute(
+            "SELECT description, superseded_by FROM review_findings ORDER BY description"
+        ).fetchall()
+        old_rows = [r for r in all_rows if r[0].startswith("Old")]
+        assert len(old_rows) == 2, "Both old findings should be present"
+        for row in old_rows:
+            assert row[1] == "new", f"Old finding '{row[0]}' should have superseded_by='new', got '{row[1]}'"
+
+
+# ---------------------------------------------------------------------------
+# Issue #553: observation/minor findings must not reach review_findings table
+# ---------------------------------------------------------------------------
+
+
+class TestInsertFindingsDropsNonActionable:
+    """AC-1: insert_findings() silently drops observation/minor findings.
+
+    Only critical and major findings are written to the database.
+    The return value equals the count of actionable findings only.
+    """
+
+    def test_returns_only_actionable_count(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """insert_findings() with mixed severities returns count of actionable only."""
+        findings = [
+            _make_finding(severity="critical", description="critical finding", task_group="c1"),
+            _make_finding(severity="major", description="major finding", task_group="m1"),
+            _make_finding(severity="minor", description="minor finding", task_group="mi1"),
+            _make_finding(severity="observation", description="observation finding", task_group="o1"),
+        ]
+        count = insert_findings(schema_conn, findings)
+        assert count == 2, f"Expected 2 actionable findings inserted, got {count}"
+
+    def test_observation_and_minor_not_in_db(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """No observation or minor rows appear in review_findings after insert."""
+        findings = [
+            _make_finding(severity="critical", description="critical finding", task_group="c1"),
+            _make_finding(severity="major", description="major finding", task_group="m1"),
+            _make_finding(severity="minor", description="minor finding", task_group="mi1"),
+            _make_finding(severity="observation", description="observation finding", task_group="o1"),
+        ]
+        insert_findings(schema_conn, findings)
+
+        dead_rows = schema_conn.execute(
+            "SELECT COUNT(*) FROM review_findings WHERE severity IN ('minor', 'observation')"
+        ).fetchone()
+        assert dead_rows[0] == 0, f"Expected 0 minor/observation rows in DB, found {dead_rows[0]}"
+
+    def test_all_non_actionable_returns_zero(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """insert_findings() with only observation/minor findings returns 0."""
+        findings = [
+            _make_finding(severity="minor", description="minor finding", task_group="mi1"),
+            _make_finding(severity="observation", description="obs finding", task_group="o1"),
+        ]
+        count = insert_findings(schema_conn, findings)
+        assert count == 0
+
+        total = schema_conn.execute("SELECT COUNT(*) FROM review_findings").fetchone()
+        assert total[0] == 0
+
+
+class TestQueryActiveFindingsExcludesNonActionable:
+    """AC-2: query_active_findings() never returns observation/minor findings.
+
+    This holds even when such rows are present in the DB (legacy data).
+    """
+
+    def test_legacy_observation_minor_excluded_from_query(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """Legacy observation/minor rows in DB are excluded from query results."""
+        # Insert legacy rows directly via SQL (bypassing insert_findings filter)
+        for sev in ("observation", "minor"):
+            schema_conn.execute(
+                "INSERT INTO review_findings "
+                "(id, severity, description, spec_name, task_group, session_id, created_at) "
+                "VALUES (gen_random_uuid(), ?, ?, 'spec_01', 'tg_legacy', 'legacy', CURRENT_TIMESTAMP)",
+                [sev, f"Legacy {sev} finding"],
+            )
+
+        # Also insert an active critical finding via normal path
+        crit = _make_finding(
+            severity="critical",
+            description="Real critical finding",
+            spec_name="spec_01",
+            task_group="tg_crit",
+        )
+        insert_findings(schema_conn, [crit])
+
+        results = query_active_findings(schema_conn, "spec_01")
+        severities = {f.severity for f in results}
+        assert "observation" not in severities, "observation finding leaked into query results"
+        assert "minor" not in severities, "minor finding leaked into query results"
+        assert any(f.description == "Real critical finding" for f in results), "Expected critical finding to be present"
+
+    def test_only_observation_minor_returns_empty(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """When only legacy observation/minor rows exist, query returns empty list."""
+        for sev in ("observation", "minor"):
+            schema_conn.execute(
+                "INSERT INTO review_findings "
+                "(id, severity, description, spec_name, task_group, session_id, created_at) "
+                "VALUES (gen_random_uuid(), ?, ?, 'spec_01', 'tg_legacy', 'legacy', CURRENT_TIMESTAMP)",
+                [sev, f"Legacy {sev} finding"],
+            )
+
+        results = query_active_findings(schema_conn, "spec_01")
+        assert results == [], f"Expected empty list, got {results}"
+
+
+# ===========================================================================
+# Cross-spec drift findings (issue #677)
+# ===========================================================================
+
+
+def _make_drift_finding(
+    *,
+    spec_name: str = "test_spec",
+    description: str = "Drift finding",
+    artifact_ref: str | None = None,
+    severity: str = "critical",
+) -> DriftFinding:
+    return DriftFinding(
+        id=str(uuid.uuid4()),
+        severity=severity,
+        description=description,
+        spec_ref=None,
+        artifact_ref=artifact_ref,
+        spec_name=spec_name,
+        task_group="0",
+        session_id="drift-session",
+    )
+
+
+class TestCrossSpecDriftFindings:
+    """Issue #677: query_cross_spec_drift_findings returns drift findings
+    from other specs whose artifact_ref matches the file footprint."""
+
+    def test_returns_matching_drift_from_other_spec(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        f = _make_drift_finding(spec_name="spec_other", description="API mismatch", artifact_ref="src/api.py")
+        insert_drift_findings(schema_conn, [f])
+
+        results = query_cross_spec_drift_findings(schema_conn, "spec_mine", ["src/api.py"])
+        assert len(results) == 1
+        assert results[0].description == "API mismatch"
+        assert results[0].spec_name == "spec_other"
+
+    def test_excludes_same_spec(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        own = _make_drift_finding(spec_name="spec_mine", description="own drift", artifact_ref="src/x.py")
+        other = _make_drift_finding(spec_name="spec_other", description="other drift", artifact_ref="src/x.py")
+        insert_drift_findings(schema_conn, [own, other])
+
+        results = query_cross_spec_drift_findings(schema_conn, "spec_mine", ["src/x.py"])
+        descriptions = [r.description for r in results]
+        assert "other drift" in descriptions
+        assert "own drift" not in descriptions
+
+    def test_excludes_superseded(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        f = _make_drift_finding(spec_name="spec_other", description="old drift", artifact_ref="src/a.py")
+        insert_drift_findings(schema_conn, [f])
+        schema_conn.execute(
+            "UPDATE drift_findings SET superseded_by = 'some-session' WHERE id = ?::UUID",
+            [f.id],
+        )
+
+        results = query_cross_spec_drift_findings(schema_conn, "spec_mine", ["src/a.py"])
+        assert len(results) == 0
+
+    def test_empty_footprint_returns_empty(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        f = _make_drift_finding(spec_name="spec_other", description="drift", artifact_ref="src/a.py")
+        insert_drift_findings(schema_conn, [f])
+
+        assert query_cross_spec_drift_findings(schema_conn, "spec_mine", []) == []
+
+    def test_no_overlap_returns_empty(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        f = _make_drift_finding(spec_name="spec_other", description="drift", artifact_ref="src/unrelated.py")
+        insert_drift_findings(schema_conn, [f])
+
+        results = query_cross_spec_drift_findings(schema_conn, "spec_mine", ["src/different.py"])
+        assert len(results) == 0
+
+    def test_filters_to_actionable_severities(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        crit = _make_drift_finding(
+            spec_name="spec_a", description="critical drift", artifact_ref="f.py", severity="critical"
+        )
+        obs = _make_drift_finding(
+            spec_name="spec_a", description="observation drift", artifact_ref="f.py", severity="observation"
+        )
+        insert_drift_findings(schema_conn, [crit, obs])
+
+        results = query_cross_spec_drift_findings(schema_conn, "spec_b", ["f.py"])
+        descriptions = [r.description for r in results]
+        assert "critical drift" in descriptions
+        assert "observation drift" not in descriptions
+
+
+class TestDriftFindingAgeFilter:
+    """Issue #676: max_age_days parameter filters old drift findings."""
+
+    def test_max_age_days_excludes_old_findings(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """Findings older than max_age_days are excluded."""
+        schema_conn.execute(
+            "INSERT INTO drift_findings "
+            "(id, severity, description, spec_name, task_group, session_id, created_at) "
+            "VALUES (gen_random_uuid(), 'critical', 'old finding', 'spec_age', '0', 's1', "
+            "CURRENT_TIMESTAMP - INTERVAL 60 DAY)",
+        )
+        schema_conn.execute(
+            "INSERT INTO drift_findings "
+            "(id, severity, description, spec_name, task_group, session_id, created_at) "
+            "VALUES (gen_random_uuid(), 'critical', 'recent finding', 'spec_age', '0', 's2', "
+            "CURRENT_TIMESTAMP - INTERVAL 5 DAY)",
+        )
+
+        results = query_active_drift_findings(schema_conn, "spec_age", max_age_days=30)
+        descriptions = [r.description for r in results]
+        assert "recent finding" in descriptions
+        assert "old finding" not in descriptions
+
+    def test_max_age_days_none_returns_all(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
+        """When max_age_days is None, all findings are returned regardless of age."""
+        schema_conn.execute(
+            "INSERT INTO drift_findings "
+            "(id, severity, description, spec_name, task_group, session_id, created_at) "
+            "VALUES (gen_random_uuid(), 'critical', 'ancient finding', 'spec_noage', '0', 's1', "
+            "CURRENT_TIMESTAMP - INTERVAL 365 DAY)",
+        )
+
+        results = query_active_drift_findings(schema_conn, "spec_noage", max_age_days=None)
+        assert len(results) == 1
+        assert results[0].description == "ancient finding"

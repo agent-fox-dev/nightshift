@@ -77,9 +77,9 @@ class TestAgentFoxGroupSmoke:
     Requirements: 07-REQ-3.11
     """
 
-    def test_main_uses_agentfox_group(self) -> None:
+    def test_main_uses_afcore_group(self) -> None:
         """nightshift main Click group is AgentFoxGroup instance."""
-        from agentfox.io import AgentFoxGroup
+        from afcore.io import AgentFoxGroup
         from nightshift.app import main
 
         assert isinstance(main, AgentFoxGroup)

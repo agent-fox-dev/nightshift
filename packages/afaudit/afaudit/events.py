@@ -3,7 +3,7 @@
 Provides the AuditEvent dataclass, AuditEventType and AuditSeverity enums,
 run ID generation, serialization helpers, and the AuditJsonlSink class.
 
-Migrated from agentfox.knowledge.audit with behaviour preserved.
+Migrated from afcore.knowledge.audit with behaviour preserved.
 """
 
 from __future__ import annotations

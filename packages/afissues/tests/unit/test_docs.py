@@ -27,16 +27,16 @@ class TestPackagesReadme:
         assert "afissues" in content, "afissues not found in packages/README.md"
 
     def test_dependency_arrow_in_packages_readme(self) -> None:
-        """Dependency edge from agentfox to afissues must appear in graph."""
+        """Dependency edge from afcore to afissues must appear in graph."""
         readme_path = _WORKSPACE_ROOT / "packages" / "README.md"
         content = readme_path.read_text()
         # Check for dependency arrow notation (any common format)
         has_arrow = (
-            "agentfox" in content
+            "afcore" in content
             and "afissues" in content
             and any(arrow in content for arrow in ("──▶", "-->", "→", "──►"))
         )
-        assert has_arrow, "Dependency edge 'agentfox ──▶ afissues' not found in packages/README.md"
+        assert has_arrow, "Dependency edge 'afcore ──▶ afissues' not found in packages/README.md"
 
 
 # ── TS-03-40: root README.md includes afissues ──────────────────────

@@ -1,4 +1,4 @@
-"""Standalone nightshift CLI — delegates to agentfox.nightshift."""
+"""Standalone nightshift CLI — delegates to afcore.nightshift."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ import sys
 from pathlib import Path
 
 import click
+from afcore.core.config import ThemeConfig, load_config
+from afcore.core.logging import setup_logging
+from afcore.io import AgentFoxGroup, OutputManager, common_options, exit_codes
+from afcore.ui.display import create_theme, render_banner
 from afhub.auth import resolve_hub_pat, resolve_hub_url
-from agentfox.core.config import ThemeConfig, load_config
-from agentfox.core.logging import setup_logging
-from agentfox.io import AgentFoxGroup, OutputManager, common_options, exit_codes
-from agentfox.ui.display import create_theme, render_banner
 
 from nightshift._carry_patch_startup import startup_helper as _carry_patch_startup
 
@@ -73,17 +73,17 @@ def main(ctx: click.Context, json_flag=None, hub_url=None, workspace=None, token
 
 
 def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
-    """Assemble and run the daemon from agentfox.nightshift modules."""
-    from afissues.errors import IntegrationError
-    from agentfox.nightshift.daemon import DaemonRunner, SharedBudget
-    from agentfox.nightshift.engine import (
+    """Assemble and run the daemon from afcore.nightshift modules."""
+    from afcore.nightshift.daemon import DaemonRunner, SharedBudget
+    from afcore.nightshift.engine import (
         NightShiftEngine,
         validate_night_shift_prerequisites,
     )
-    from agentfox.nightshift.platform_factory import create_platform
-    from agentfox.nightshift.streams import build_streams
-    from agentfox.ui.progress import ProgressDisplay
-    from agentfox.workspace.merge_lock import cleanup_stale_merge_lock
+    from afcore.nightshift.platform_factory import create_platform
+    from afcore.nightshift.streams import build_streams
+    from afcore.ui.progress import ProgressDisplay
+    from afcore.workspace.merge_lock import cleanup_stale_merge_lock
+    from afissues.errors import IntegrationError
 
     from nightshift._startup import init_knowledge, wrap_task_callback
 

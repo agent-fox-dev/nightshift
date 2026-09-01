@@ -4,9 +4,9 @@
   "spec_name": "carry_patch_bootstrap",
   "schema_version": 1,
   "test_commands": {
-    "spec_tests": "pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v",
+    "spec_tests": "pytest packages/afcore/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v",
     "all_tests": "pytest packages/ -q",
-    "linter": "ruff check packages/agentfox/agentfox/core/config.py packages/nightshift/nightshift/app.py"
+    "linter": "ruff check packages/afcore/afcore/core/config.py packages/nightshift/nightshift/app.py"
   },
   "dependencies": [
     {
@@ -27,7 +27,7 @@
           "id": "1.1",
           "title": "Write tests for HubConfig defaults and field validation",
           "details": [
-            "In `packages/agentfox/tests/test_carry_patch_config.py`, write tests for `HubConfig`",
+            "In `packages/afcore/tests/test_carry_patch_config.py`, write tests for `HubConfig`",
             "Test that `HubConfig()` instantiates with `endpoint_url=''` by default (TS-02-1)",
             "Test that `HubConfig(endpoint_url='https://hub.example.com')` stores the value correctly (TS-02-2)",
             "Test that extra fields are silently ignored via `extra='ignore'` (TS-02-5)"
@@ -84,8 +84,8 @@
       "verification": {
         "id": "1.V",
         "checks": [
-          "All tests in `packages/agentfox/tests/test_carry_patch_config.py` are collected and pass: `pytest packages/agentfox/tests/test_carry_patch_config.py -v`",
-          "No linter warnings in the test file: `ruff check packages/agentfox/tests/test_carry_patch_config.py`",
+          "All tests in `packages/afcore/tests/test_carry_patch_config.py` are collected and pass: `pytest packages/afcore/tests/test_carry_patch_config.py -v`",
+          "No linter warnings in the test file: `ruff check packages/afcore/tests/test_carry_patch_config.py`",
           "TS-02-1 through TS-02-6 are all covered by at least one test function"
         ]
       }
@@ -333,9 +333,9 @@
       "subtasks": [
         {
           "id": "5.1",
-          "title": "Add HubConfig model to agentfox/core/config.py",
+          "title": "Add HubConfig model to afcore/core/config.py",
           "details": [
-            "In `packages/agentfox/agentfox/core/config.py`, define `HubConfig(BaseModel)` with `model_config = ConfigDict(extra='ignore')` and `endpoint_url: str = Field(default='', description='Hub API base URL')`",
+            "In `packages/afcore/afcore/core/config.py`, define `HubConfig(BaseModel)` with `model_config = ConfigDict(extra='ignore')` and `endpoint_url: str = Field(default='', description='Hub API base URL')`",
             "Ensure `Annotated` and `ConfigDict` imports are present (already used by existing models)",
             "Add `hub: HubConfig = Field(default_factory=HubConfig)` to `AgentFoxConfig`"
           ],
@@ -351,7 +351,7 @@
         },
         {
           "id": "5.2",
-          "title": "Add CarryPatchConfig model to agentfox/core/config.py",
+          "title": "Add CarryPatchConfig model to afcore/core/config.py",
           "details": [
             "Define `CarryPatchConfig(BaseModel)` with `model_config = ConfigDict(extra='ignore')`",
             "Add all fields: `enabled: bool = Field(default=False)`, `workspace: str = Field(default='')`, `check_interval: Annotated[int, Clamped(ge=60)] = Field(default=300)`, `auto_resolve: bool = Field(default=True)`, `rebuild_timeout: int = Field(default=600)`, `rebuild_poll_interval: Annotated[int, Clamped(ge=2)] = Field(default=5)`, `max_resolve_retries: Annotated[int, Clamped(ge=0, le=10)] = Field(default=2)`",
@@ -374,7 +374,7 @@
           "id": "5.3",
           "title": "Update config_gen.py with hub and carry_patch TOML template sections",
           "details": [
-            "In `packages/agentfox/agentfox/core/config_gen.py`, add `[hub]` and `[carry_patch]` sections to the global default AgentFoxConfig comment-annotated TOML template",
+            "In `packages/afcore/afcore/core/config_gen.py`, add `[hub]` and `[carry_patch]` sections to the global default AgentFoxConfig comment-annotated TOML template",
             "Include all `CarryPatchConfig` fields with their defaults and inline comments explaining each field",
             "This is the global template shown when no config file exists at all — distinct from the workspace-level `.nightshift/config.toml` written in REQ-4"
           ],
@@ -391,8 +391,8 @@
       "verification": {
         "id": "5.V",
         "checks": [
-          "All REQ-1 model tests pass: `pytest packages/agentfox/tests/test_carry_patch_config.py -v`",
-          "No linter warnings in modified files: `ruff check packages/agentfox/agentfox/core/config.py packages/agentfox/agentfox/core/config_gen.py`",
+          "All REQ-1 model tests pass: `pytest packages/afcore/tests/test_carry_patch_config.py -v`",
+          "No linter warnings in modified files: `ruff check packages/afcore/afcore/core/config.py packages/afcore/afcore/core/config_gen.py`",
           "02-REQ-1 acceptance criteria met: HubConfig and CarryPatchConfig instantiate with correct defaults, Clamped clamping works, extra fields ignored, AgentFoxConfig backward-compatible"
         ]
       }
@@ -408,7 +408,7 @@
           "details": [
             "In `packages/nightshift/nightshift/app.py`, add `@click.option('--hub-url', default=None, help='Hub API base URL')`, `@click.option('--workspace', default=None, help='Hub workspace slug')`, `@click.option('--token', default=None, help='Hub PAT')`",
             "Import `resolve_hub_url`, `resolve_hub_pat` from `afhub.auth` and `HubAuthError`, `HubNotFoundError`, `HubConnectionError`, `HubForbiddenError` from `afhub`",
-            "Add `afhub` as a dependency in `packages/nightshift/pyproject.toml` and as an optional dependency in `packages/agentfox/pyproject.toml`"
+            "Add `afhub` as a dependency in `packages/nightshift/pyproject.toml` and as an optional dependency in `packages/afcore/pyproject.toml`"
           ],
           "test_spec_refs": [
             "TS-02-7",
@@ -664,9 +664,9 @@
       "subtasks": [
         {
           "id": "10.1",
-          "title": "Run full agentfox and nightshift test suites and confirm all pass",
+          "title": "Run full afcore and nightshift test suites and confirm all pass",
           "details": [
-            "Run `pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v` and confirm all 35 test cases pass",
+            "Run `pytest packages/afcore/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v` and confirm all 35 test cases pass",
             "Run `pytest packages/ -q` to confirm no regressions in existing tests",
             "Confirm TS-02-1 through TS-02-35 are all green"
           ],
@@ -701,8 +701,8 @@
           "id": "10.2",
           "title": "Run linter across all modified files and confirm no warnings",
           "details": [
-            "Run `ruff check packages/agentfox/agentfox/core/config.py packages/agentfox/agentfox/core/config_gen.py packages/nightshift/nightshift/app.py`",
-            "Run `ruff check packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py`",
+            "Run `ruff check packages/afcore/afcore/core/config.py packages/afcore/afcore/core/config_gen.py packages/nightshift/nightshift/app.py`",
+            "Run `ruff check packages/afcore/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py`",
             "Fix any warnings before proceeding to wiring verification"
           ],
           "test_spec_refs": [
@@ -736,9 +736,9 @@
       "verification": {
         "id": "10.V",
         "checks": [
-          "Full spec test suite passes: `pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v`",
+          "Full spec test suite passes: `pytest packages/afcore/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v`",
           "No regressions: `pytest packages/ -q` exits with code 0",
-          "No linter warnings across all modified and test files: `ruff check packages/agentfox/ packages/nightshift/`"
+          "No linter warnings across all modified and test files: `ruff check packages/afcore/ packages/nightshift/`"
         ]
       }
     },
@@ -816,10 +816,10 @@
           "id": "11.4",
           "title": "Run smoke tests and full regression suite",
           "details": [
-            "Run all spec tests: `pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v`",
+            "Run all spec tests: `pytest packages/afcore/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v`",
             "Run full package suite: `pytest packages/ -q`",
             "Confirm TS-02-1 through TS-02-35 all pass with no skips",
-            "Confirm `pyproject.toml` for both `nightshift` and `agentfox` packages declare `afhub` as a dependency"
+            "Confirm `pyproject.toml` for both `nightshift` and `afcore` packages declare `afhub` as a dependency"
           ],
           "test_spec_refs": [
             "TS-02-7",
@@ -843,9 +843,9 @@
       "verification": {
         "id": "11.V",
         "checks": [
-          "All 35 spec tests pass: `pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v`",
+          "All 35 spec tests pass: `pytest packages/afcore/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v`",
           "No regressions in full suite: `pytest packages/ -q` exits 0",
-          "No linter warnings: `ruff check packages/agentfox/ packages/nightshift/`",
+          "No linter warnings: `ruff check packages/afcore/ packages/nightshift/`",
           "Stub audit clean: no `raise NotImplementedError`, bare `pass`, or unimplemented stubs found in `config.py`, `config_gen.py`, or `app.py`",
           "Cross-spec wiring confirmed: `HubClient`, `resolve_hub_url`, `resolve_hub_pat` are imported from `afhub` and called from production `app.py` code",
           "02-REQ-1 through 02-REQ-5 acceptance criteria all met as verified by the test suite",

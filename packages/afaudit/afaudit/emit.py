@@ -1,8 +1,8 @@
 """Convenience function for emitting a single audit event to a sink.
 
-Migrated from ``agentfox.engine.audit_helpers`` — only
+Migrated from ``afcore.engine.audit_helpers`` — only
 :func:`emit_audit_event` is here; ``calculate_session_cost`` remains in
-agentfox because it depends on agentfox-internal pricing models.
+afcore because it depends on afcore-internal pricing models.
 """
 
 from __future__ import annotations

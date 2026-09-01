@@ -5,7 +5,7 @@
   "schema_version": 1,
   "introduction": "This spec defines the carry-patch pipeline monitor for nightshift: it extends the fix pipeline to register completed fix branches as hub patches and trigger hub rebuilds, and introduces a `CarryPatchMonitor` work stream that polls for conflicting patches and resolves them using the coder archetype in carry-patch mode. Note: requirements referencing afhub and afaudit APIs are based on PRD assumptions and should be cross-checked against the installed library versions before implementation.",
   "glossary": {
-    "AgentFoxConfig": "The top-level Pydantic configuration object for the agentfox application, containing `CarryPatchConfig` under `carry_patch`.",
+    "AgentFoxConfig": "The top-level Pydantic configuration object for the afcore application, containing `CarryPatchConfig` under `carry_patch`.",
     "AuditEventType": "An enum or constants class in `afaudit/events.py` that enumerates all audit event type strings emitted by the system.",
     "CarryPatchConfig": "A Pydantic config model (from Spec 02) nested under `AgentFoxConfig` that holds carry-patch settings such as `enabled`, `auto_resolve`, `check_interval`, and `max_resolve_retries`.",
     "CarryPatchMonitor": "A nightshift work stream class that polls the hub for patches in conflict status and resolves them using the coder archetype.",
@@ -13,22 +13,22 @@
     "HubClient": "The async HTTP client from the `afhub` package used to communicate with the af-hub carry-patch REST API.",
     "HubConflictError": "An exception raised by `hub_client.submit_rebuild()` when a concurrent rebuild is already in progress.",
     "HubNoActivePatchesError": "An exception raised by `hub_client.submit_rebuild()` when there are no active patches to rebuild.",
-    "ModeConfig": "A configuration dataclass in `agentfox/archetypes.py` that specifies model tier, max turns, thinking mode, and effort for an archetype mode.",
+    "ModeConfig": "A configuration dataclass in `afcore/archetypes.py` that specifies model tier, max turns, thinking mode, and effort for an archetype mode.",
     "MonitorCycleResult": "A dataclass returned by `CarryPatchMonitor.run_cycle()` summarising counts of conflicts detected, resolved, failed, patches merged, and whether a rebuild was triggered.",
-    "NightShiftEngine": "The core nightshift engine class defined in `agentfox/nightshift/engine.py` that orchestrates work streams and coder sessions.",
+    "NightShiftEngine": "The core nightshift engine class defined in `afcore/nightshift/engine.py` that orchestrates work streams and coder sessions.",
     "PatchDetail": "A model within `PatchStatusDashboard` describing a single patch, including its status, branch name, conflict files, and description.",
     "PatchStatusDashboard": "A model returned by `hub_client.get_patch_status(slug)` containing the list of `PatchDetail` objects for a workspace.",
     "RebuildJob": "A model returned by `hub_client.submit_rebuild()` or `hub_client.list_rebuilds()` representing a queued or active hub rebuild.",
-    "_STREAM_ACTIVE_LABELS": "A dict in `agentfox/nightshift/daemon.py` mapping stream name strings to active-state label strings.",
-    "_STREAM_DISPLAY_NAMES": "A dict in `agentfox/nightshift/daemon.py` mapping stream name strings to human-readable display names.",
+    "_STREAM_ACTIVE_LABELS": "A dict in `afcore/nightshift/daemon.py` mapping stream name strings to active-state label strings.",
+    "_STREAM_DISPLAY_NAMES": "A dict in `afcore/nightshift/daemon.py` mapping stream name strings to human-readable display names.",
     "_run_carry_patch_monitor": "A method on `NightShiftEngine` that delegates to `CarryPatchMonitor.run_cycle()` for a given workspace slug.",
     "add_patch": "A method on `HubClient` that registers a branch as a patch on the hub for a given workspace slug.",
     "auto_resolve": "A boolean field in `CarryPatchConfig` that controls whether the monitor automatically attempts to resolve detected conflicts.",
-    "build_streams": "A factory function in `agentfox/nightshift/streams.py` that constructs and returns the list of active work streams for the daemon.",
+    "build_streams": "A factory function in `afcore/nightshift/streams.py` that constructs and returns the list of active work streams for the daemon.",
     "carry-patch mode": "The `carry-patch` key within the `coder` archetype's mode registry, instructing the AI agent to preserve patch intent while adapting to upstream changes.",
     "carry_patch": "A nightshift operating mode in which fix branches are pushed to the hub git server and registered as patches rather than being squash-merged locally.",
     "check_interval": "A duration field in `CarryPatchConfig` specifying how frequently the `CarryPatchStream` polls the hub for patch status.",
-    "coder_carry-patch.md": "The profile template file at `agentfox/_templates/profiles/coder_carry-patch.md` that provides system-prompt instructions for the coder archetype in carry-patch mode.",
+    "coder_carry-patch.md": "The profile template file at `afcore/_templates/profiles/coder_carry-patch.md` that provides system-prompt instructions for the coder archetype in carry-patch mode.",
     "conflict": "A patch status indicating the patch cannot be applied cleanly to the current upstream and requires resolution.",
     "conflict_files": "A list of file paths in `PatchDetail` that are in conflict for a given patch.",
     "dead_letter": "A terminal rebuild status indicating the rebuild was permanently failed and moved to a dead-letter queue.",
@@ -65,7 +65,7 @@
     "SessionSink": "A class in `afaudit/sink.py` representing a single-session audit event sink.",
     "rebuild_id": "The string ID of a RebuildJob, used as the rebuild_id argument in poll_rebuild() calls. Corresponds to the RebuildJob.id field.",
     "patch_detail.description": "The description field on a PatchDetail object (added in Spec 01), holding the patch's human-readable description as a str or None.",
-    "resolve_effective_config": "An existing function in agentfox/archetypes.py that resolves the effective ModeConfig for a given archetype and mode string.",
+    "resolve_effective_config": "An existing function in afcore/archetypes.py that resolves the effective ModeConfig for a given archetype and mode string.",
     "self.sink": "Instance attribute on CarryPatchMonitor holding the SinkDispatcher or SessionSink for audit event emission.",
     "self.run_id": "Instance attribute on CarryPatchMonitor holding the session run_id string for audit event emission.",
     "self._carry_patch_monitor": "Instance attribute on NightShiftEngine holding the single reused CarryPatchMonitor instance.",
@@ -199,7 +199,7 @@
           "id": "03-REQ-2.1",
           "ears_pattern": "ubiquitous",
           "system": "CarryPatchMonitor",
-          "action": "expose a constructor `__init__(self, hub_client: HubClient, workspace_slug: str, config: AgentFoxConfig, engine: NightShiftEngine, sink: SinkDispatcher | SessionSink | None = None, run_id: str = '') -> None` and an async method `run_cycle(self) -> MonitorCycleResult` in `agentfox/nightshift/carry_patch_monitor.py`. The constructor stores `sink` and `run_id` as instance attributes for use in `emit_audit_event()` calls. `CarryPatchMonitor` does not own the HubClient lifecycle and must not call `hub_client.aclose()`; the client is closed by `main()` in a `finally` block on daemon shutdown.",
+          "action": "expose a constructor `__init__(self, hub_client: HubClient, workspace_slug: str, config: AgentFoxConfig, engine: NightShiftEngine, sink: SinkDispatcher | SessionSink | None = None, run_id: str = '') -> None` and an async method `run_cycle(self) -> MonitorCycleResult` in `afcore/nightshift/carry_patch_monitor.py`. The constructor stores `sink` and `run_id` as instance attributes for use in `emit_audit_event()` calls. `CarryPatchMonitor` does not own the HubClient lifecycle and must not call `hub_client.aclose()`; the client is closed by `main()` in a `finally` block on daemon shutdown.",
           "return_contract": "constructor returns None; `run_cycle()` returns a `MonitorCycleResult` instance"
         },
         {
@@ -207,7 +207,7 @@
           "ears_pattern": "ubiquitous",
           "system": "MonitorCycleResult",
           "action": "define `MonitorCycleResult` as a dataclass with fields: `conflicts_detected: int`, `conflicts_resolved: int`, `conflicts_failed: int`, `patches_merged: int`, `rebuild_triggered: bool`",
-          "return_contract": "dataclass is importable from `agentfox.nightshift.carry_patch_monitor`"
+          "return_contract": "dataclass is importable from `afcore.nightshift.carry_patch_monitor`"
         }
       ],
       "edge_cases": [
@@ -414,7 +414,7 @@
           "id": "03-REQ-5.1",
           "ears_pattern": "ubiquitous",
           "system": "coder archetype registry",
-          "action": "register a `\"carry-patch\"` key in the `coder` archetype's mode dict in `agentfox/archetypes.py` with a `ModeConfig` of `model_tier=\"STANDARD\"`, `max_turns=200`, `thinking_mode=\"adaptive\"`, `effort=\"high\"`",
+          "action": "register a `\"carry-patch\"` key in the `coder` archetype's mode dict in `afcore/archetypes.py` with a `ModeConfig` of `model_tier=\"STANDARD\"`, `max_turns=200`, `thinking_mode=\"adaptive\"`, `effort=\"high\"`",
           "return_contract": "the mode is accessible via the archetype registry at runtime"
         }
       ],
@@ -442,7 +442,7 @@
           "id": "03-REQ-6.1",
           "ears_pattern": "ubiquitous",
           "system": "profile template system",
-          "action": "create `agentfox/_templates/profiles/coder_carry-patch.md` containing instructions to: preserve the patch's original intent as described in `patch_description`; adapt only `conflict_files` to upstream changes without unrelated refactoring; use conventional commits of the form `fix: resolve conflict in <file>`; run available tests to verify the resolution; and explain the resolution in the commit message body",
+          "action": "create `afcore/_templates/profiles/coder_carry-patch.md` containing instructions to: preserve the patch's original intent as described in `patch_description`; adapt only `conflict_files` to upstream changes without unrelated refactoring; use conventional commits of the form `fix: resolve conflict in <file>`; run available tests to verify the resolution; and explain the resolution in the commit message body",
           "return_contract": "file exists and is loadable by the profile template system at runtime"
         }
       ],
@@ -488,14 +488,14 @@
           "id": "03-REQ-7.3",
           "ears_pattern": "ubiquitous",
           "system": "daemon display registry",
-          "action": "add `\"carry-patch\"` as a key in both `_STREAM_DISPLAY_NAMES` and `_STREAM_ACTIVE_LABELS` dicts in `agentfox/nightshift/daemon.py` with appropriate human-readable values",
+          "action": "add `\"carry-patch\"` as a key in both `_STREAM_DISPLAY_NAMES` and `_STREAM_ACTIVE_LABELS` dicts in `afcore/nightshift/daemon.py` with appropriate human-readable values",
           "return_contract": "the daemon renders the carry-patch stream name and active label correctly in its display output"
         },
         {
           "id": "03-REQ-7.4",
           "ears_pattern": "ubiquitous",
           "system": "NightShiftEngine",
-          "action": "add `_run_carry_patch_monitor(self, slug: str) -> MonitorCycleResult` to `NightShiftEngine` in `agentfox/nightshift/engine.py` that delegates to a single `CarryPatchMonitor` instance stored on the engine (e.g., as `self._carry_patch_monitor`). This method must reuse the same `CarryPatchMonitor` instance across all calls; creating a new instance per call resets the in-memory session retry counter, violating PROP-3.",
+          "action": "add `_run_carry_patch_monitor(self, slug: str) -> MonitorCycleResult` to `NightShiftEngine` in `afcore/nightshift/engine.py` that delegates to a single `CarryPatchMonitor` instance stored on the engine (e.g., as `self._carry_patch_monitor`). This method must reuse the same `CarryPatchMonitor` instance across all calls; creating a new instance per call resets the in-memory session retry counter, violating PROP-3.",
           "return_contract": "returns a `MonitorCycleResult` instance; the same `CarryPatchMonitor` instance is reused on every call"
         }
       ],

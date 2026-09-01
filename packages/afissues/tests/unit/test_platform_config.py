@@ -13,9 +13,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from agentfox.core.config import AgentFoxConfig, PlatformConfig
-from agentfox.core.config_gen import extract_schema, generate_config_template
-from agentfox.nightshift.platform_factory import create_platform
+from afcore.core.config import AgentFoxConfig, PlatformConfig
+from afcore.core.config_gen import extract_schema, generate_config_template
+from afcore.nightshift.platform_factory import create_platform
 
 from afissues.github import GitHubPlatform
 from afissues.protocol import PlatformProtocol
@@ -246,7 +246,7 @@ class TestConfigTemplateHasTypeAndUrl:
         schema still contains the correct fields even though the template omits
         the platform section.
         """
-        from agentfox.core.config_gen import extract_schema
+        from afcore.core.config_gen import extract_schema
 
         schema = extract_schema(AgentFoxConfig)
         platform_section = next((s for s in schema if s.path == "platform"), None)
