@@ -158,13 +158,101 @@ def _create_gitea(platform_cfg: object, project_root: Path) -> PlatformProtocol:
             owner, repo = project_id.split("/", 1)
 
     if not owner or not repo:
-        logger.error(
-            "Could not determine Gitea owner/repo. "
-            "Set platform.project_id in your config."
-        )
+        logger.error("Could not determine Gitea owner/repo. Set platform.project_id in your config.")
         sys.exit(1)
 
     return GiteaPlatform(owner=owner, repo=repo, token=token, url=url)
+
+
+def _try_create_platform(
+    config: object,
+    project_root: Path,
+    *,
+    fail_fast: bool,
+) -> PlatformProtocol | None:
+    """Shared platform-creation logic used by create_platform and create_platform_safe.
+
+    When *fail_fast* is True, unsatisfied preconditions emit an error log and
+    call sys.exit(1). When False, they emit a debug log and return None.
+    """
+    platform_cfg = getattr(config, "platform", None)
+    platform_type = getattr(platform_cfg, "type", "none")
+
+    if platform_type == "none":
+        if fail_fast:
+            logger.error("Night-shift requires a configured platform. Set [platform] type = 'github' in your config.")
+            sys.exit(1)
+        return None
+
+    if platform_type not in _SUPPORTED_PLATFORMS:
+        if fail_fast:
+            logger.error(
+                "Unsupported platform type '%s'. Supported types: %s",
+                platform_type,
+                ", ".join(sorted(_SUPPORTED_PLATFORMS)),
+            )
+            sys.exit(1)
+        logger.debug(
+            "create_platform_safe: unsupported platform type '%s'; returning None",
+            platform_type,
+        )
+        return None
+
+    # GitLab uses project_id (not owner/repo); handle separately.
+    if platform_type == "gitlab":
+        if fail_fast:
+            return _create_gitlab(platform_cfg, project_root)
+        from afissues.gitlab import GitLabPlatform
+
+        token = os.environ.get("GITLAB_TOKEN", "")
+        if not token:
+            logger.debug("create_platform_safe: GITLAB_TOKEN not set; returning None")
+            return None
+        project_id = _resolve_gitlab_remote(project_root)
+        if project_id is None:
+            project_id = getattr(platform_cfg, "project_id", None)
+        if not project_id:
+            logger.debug("create_platform_safe: no GitLab project identifier; returning None")
+            return None
+        url = getattr(platform_cfg, "url", "") or "gitlab.com"
+        return GitLabPlatform(project_id=project_id, token=token, url=url)
+
+    token_var = _TOKEN_ENV_VARS.get(platform_type, "")
+    if not token_var:
+        return None
+    token = os.environ.get(token_var, "")
+    if fail_fast:
+        if not token.strip():
+            logger.error("%s environment variable is required", token_var)
+            sys.exit(1)
+    else:
+        if not token:
+            logger.debug("create_platform_safe: %s not set; returning None", token_var)
+            return None
+
+    parse_fn = _REMOTE_PARSERS.get(platform_type)
+    if not parse_fn:
+        return None
+    owner, repo = _resolve_remote(project_root, parse_fn)
+
+    url = getattr(platform_cfg, "url", "") or _DEFAULT_URLS.get(platform_type, "")
+    if not url:
+        if fail_fast:
+            logger.error(
+                "Platform type '%s' requires a url in [platform] config",
+                platform_type,
+            )
+            sys.exit(1)
+        logger.debug(
+            "create_platform_safe: no url for platform type '%s'; returning None",
+            platform_type,
+        )
+        return None
+
+    if platform_type == "gitea":
+        return GiteaPlatform(owner=owner, repo=repo, token=token, url=url)
+    # Default: github
+    return GitHubPlatform(owner=owner, repo=repo, token=token, url=url)
 
 
 def create_platform(config: object, project_root: Path) -> PlatformProtocol:
@@ -173,49 +261,9 @@ def create_platform(config: object, project_root: Path) -> PlatformProtocol:
     Requirements: 61-REQ-8.3, 61-REQ-8.E1, 04-REQ-20.1, 04-REQ-20.2,
                   04-REQ-21.1, 05-REQ-18.1
     """
-    platform_cfg = getattr(config, "platform", None)
-    platform_type = getattr(platform_cfg, "type", "none")
-
-    if platform_type == "none":
-        logger.error(
-            "Night-shift requires a configured platform."
-            " Set [platform] type = 'github' in your config."
-        )
-        sys.exit(1)
-
-    if platform_type not in _SUPPORTED_PLATFORMS:
-        logger.error(
-            "Unsupported platform type '%s'. Supported types: %s",
-            platform_type,
-            ", ".join(sorted(_SUPPORTED_PLATFORMS)),
-        )
-        sys.exit(1)
-
-    # GitLab uses project_id (not owner/repo); handle separately.
-    if platform_type == "gitlab":
-        return _create_gitlab(platform_cfg, project_root)
-
-    token_var = _TOKEN_ENV_VARS[platform_type]
-    token = os.environ.get(token_var, "")
-    if not token.strip():
-        logger.error("%s environment variable is required", token_var)
-        sys.exit(1)
-
-    parse_fn = _REMOTE_PARSERS[platform_type]
-    owner, repo = _resolve_remote(project_root, parse_fn)
-
-    url = getattr(platform_cfg, "url", "") or _DEFAULT_URLS.get(platform_type, "")
-    if not url:
-        logger.error(
-            "Platform type '%s' requires a url in [platform] config",
-            platform_type,
-        )
-        sys.exit(1)
-
-    if platform_type == "gitea":
-        return GiteaPlatform(owner=owner, repo=repo, token=token, url=url)
-    # Default: github
-    return GitHubPlatform(owner=owner, repo=repo, token=token, url=url)
+    result = _try_create_platform(config, project_root, fail_fast=True)
+    assert result is not None  # fail_fast=True always exits or returns a platform
+    return result
 
 
 def create_platform_safe(config: object, project_root: Path) -> PlatformProtocol | None:
@@ -228,60 +276,4 @@ def create_platform_safe(config: object, project_root: Path) -> PlatformProtocol
 
     Requirements: 108-REQ-5.3, 04-REQ-20.2
     """
-    platform_cfg = getattr(config, "platform", None)
-    platform_type = getattr(platform_cfg, "type", "none")
-
-    if platform_type == "none":
-        return None
-
-    if platform_type not in _SUPPORTED_PLATFORMS:
-        logger.debug(
-            "create_platform_safe: unsupported platform type '%s'; returning None",
-            platform_type,
-        )
-        return None
-
-    # GitLab uses project_id (not owner/repo); handle separately.
-    if platform_type == "gitlab":
-        from afissues.gitlab import GitLabPlatform
-
-        token = os.environ.get("GITLAB_TOKEN", "")
-        if not token:
-            logger.debug("create_platform_safe: GITLAB_TOKEN not set; returning None")
-            return None
-        project_id = _resolve_gitlab_remote(project_root)
-        if project_id is None:
-            project_id = getattr(platform_cfg, "project_id", None)
-        if not project_id:
-            logger.debug(
-                "create_platform_safe: no GitLab project identifier; returning None",
-            )
-            return None
-        url = getattr(platform_cfg, "url", "") or "gitlab.com"
-        return GitLabPlatform(project_id=project_id, token=token, url=url)
-
-    token_var = _TOKEN_ENV_VARS.get(platform_type, "")
-    if not token_var:
-        return None
-    token = os.environ.get(token_var, "")
-    if not token:
-        logger.debug("create_platform_safe: %s not set; returning None", token_var)
-        return None
-
-    parse_fn = _REMOTE_PARSERS.get(platform_type)
-    if not parse_fn:
-        return None
-    owner, repo = _resolve_remote(project_root, parse_fn)
-
-    url = getattr(platform_cfg, "url", "") or _DEFAULT_URLS.get(platform_type, "")
-    if not url:
-        logger.debug(
-            "create_platform_safe: no url for platform type '%s'; returning None",
-            platform_type,
-        )
-        return None
-
-    if platform_type == "gitea":
-        return GiteaPlatform(owner=owner, repo=repo, token=token, url=url)
-    # Default: github
-    return GitHubPlatform(owner=owner, repo=repo, token=token, url=url)
+    return _try_create_platform(config, project_root, fail_fast=False)

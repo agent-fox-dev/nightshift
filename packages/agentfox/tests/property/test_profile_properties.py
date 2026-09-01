@@ -86,7 +86,6 @@ def test_default_completeness(archetype: str) -> None:
     assert len(content) > 0
 
 
-
 @given(st.sampled_from(["coder", "verifier"]))
 @settings(max_examples=2)
 def test_permission_inheritance(preset: str) -> None:

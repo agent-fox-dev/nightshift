@@ -12,12 +12,44 @@ Requirements: 56-REQ-1.*, 56-REQ-2.*, 56-REQ-4.*, 56-REQ-5.*
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
-from agentfox.archetypes import get_archetype
+from agentfox.archetypes import get_archetype, resolve_effective_config
 from agentfox.core.config import AgentFoxConfig, SecurityConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _cascade(
+    config: AgentFoxConfig,
+    archetype: str,
+    mode: str | None,
+    *,
+    attr: str,
+    default_fn: Callable[[Any], Any],
+) -> Any:
+    """3-step config cascade: mode override → archetype override → registry default.
+
+    Reads *attr* from the mode config (step 1) and archetype override (step 2).
+    Falls back to *default_fn(effective_entry)* from the registry (step 3).
+    Returns the first non-None value found.
+    """
+    override = config.archetypes.overrides.get(archetype)
+    if mode is not None and override is not None:
+        mode_cfg = override.modes.get(mode)
+        if mode_cfg is not None:
+            val = getattr(mode_cfg, attr, None)
+            if val is not None:
+                return val
+    if override is not None:
+        val = getattr(override, attr, None)
+        if val is not None:
+            return val
+    entry = get_archetype(archetype)
+    effective = resolve_effective_config(entry, mode)
+    return default_fn(effective)
 
 
 def resolve_max_turns(config: AgentFoxConfig, archetype: str, *, mode: str | None = None) -> int | None:
@@ -32,8 +64,6 @@ def resolve_max_turns(config: AgentFoxConfig, archetype: str, *, mode: str | Non
     Requirements: 56-REQ-1.1, 56-REQ-1.2, 56-REQ-1.4, 56-REQ-5.1, 207-REQ-2,
                   97-REQ-4.2, 97-REQ-3.3
     """
-    from agentfox.archetypes import resolve_effective_config
-
     override = config.archetypes.overrides.get(archetype)
 
     # 1. Mode-level config override (highest priority)
@@ -67,8 +97,6 @@ def resolve_thinking(config: AgentFoxConfig, archetype: str, *, mode: str | None
     Requirements: 56-REQ-4.1, 56-REQ-4.2, 56-REQ-4.3, 56-REQ-5.1, 207-REQ-2,
                   97-REQ-4.3, 97-REQ-3.3
     """
-    from agentfox.archetypes import resolve_effective_config
-
     override = config.archetypes.overrides.get(archetype)
 
     # 1. Mode-level config override (highest priority)
@@ -103,21 +131,7 @@ def resolve_effort(config: AgentFoxConfig, archetype: str, *, mode: str | None =
 
     Returns the effort string (low/medium/high/xhigh/max).
     """
-    from agentfox.archetypes import resolve_effective_config
-
-    override = config.archetypes.overrides.get(archetype)
-
-    if mode is not None and override is not None:
-        mode_cfg = override.modes.get(mode)
-        if mode_cfg is not None and mode_cfg.effort is not None:
-            return mode_cfg.effort
-
-    if override is not None and override.effort is not None:
-        return override.effort
-
-    entry = get_archetype(archetype)
-    effective = resolve_effective_config(entry, mode)
-    return effective.default_effort
+    return _cascade(config, archetype, mode, attr="effort", default_fn=lambda e: e.default_effort)
 
 
 def resolve_compaction(config: AgentFoxConfig, archetype: str, *, mode: str | None = None) -> bool:
@@ -133,24 +147,7 @@ def resolve_compaction(config: AgentFoxConfig, archetype: str, *, mode: str | No
 
     Requirements: NS-REQ-2.1
     """
-    from agentfox.archetypes import resolve_effective_config
-
-    override = config.archetypes.overrides.get(archetype)
-
-    # 1. Mode-level config override (highest priority)
-    if mode is not None and override is not None:
-        mode_cfg = override.modes.get(mode)
-        if mode_cfg is not None and mode_cfg.compaction is not None:
-            return mode_cfg.compaction
-
-    # 2. Unified per-archetype override table
-    if override is not None and override.compaction is not None:
-        return override.compaction
-
-    # 3. Registry default (via mode-resolved effective config)
-    entry = get_archetype(archetype)
-    effective = resolve_effective_config(entry, mode)
-    return effective.default_compaction
+    return _cascade(config, archetype, mode, attr="compaction", default_fn=lambda e: e.default_compaction)
 
 
 def resolve_max_budget(config: AgentFoxConfig, archetype: str | None = None) -> float | None:
@@ -232,8 +229,6 @@ def resolve_model_tier(config: AgentFoxConfig, archetype: str, *, mode: str | No
 
     Requirements: 26-REQ-4.4, 26-REQ-6.3, 207-REQ-2, 97-REQ-4.1, 97-REQ-3.3
     """
-    from agentfox.archetypes import resolve_effective_config
-
     override = config.archetypes.overrides.get(archetype)
 
     # 1. Mode-level config override (highest priority)
@@ -266,24 +261,13 @@ def resolve_model_variant(config: AgentFoxConfig, archetype: str, *, mode: str |
     Requirements: 14-REQ-6.1, 14-REQ-6.2, 14-REQ-6.3, 14-REQ-6.4,
                   14-REQ-6.5, 14-REQ-6.E1
     """
-    from agentfox.archetypes import resolve_effective_config
-
-    override = config.archetypes.overrides.get(archetype)
-
-    # 1. Mode-level config override (highest priority)
-    if mode is not None and override is not None:
-        mode_override = override.modes.get(mode)
-        if mode_override is not None and mode_override.model_variant is not None:
-            return mode_override.model_variant
-
-    # 2. Unified per-archetype override table
-    if override is not None and override.model_variant is not None:
-        return override.model_variant
-
-    # 3. Fall back to archetype registry default (via mode-resolved effective config)
-    entry = get_archetype(archetype)
-    effective = resolve_effective_config(entry, mode)
-    return effective.default_model_variant
+    return _cascade(
+        config,
+        archetype,
+        mode,
+        attr="model_variant",
+        default_fn=lambda e: e.default_model_variant,
+    )
 
 
 def resolve_security_config(
@@ -310,8 +294,6 @@ def resolve_security_config(
     Requirements: 26-REQ-3.4, 26-REQ-6.4, 207-REQ-2, 97-REQ-4.4, 97-REQ-3.3,
                   97-REQ-5.1, 97-REQ-5.2, 97-REQ-5.E1
     """
-    from agentfox.archetypes import resolve_effective_config
-
     override = config.archetypes.overrides.get(archetype)
 
     # 1. Mode-level config override (highest priority)

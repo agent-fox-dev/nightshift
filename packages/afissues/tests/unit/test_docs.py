@@ -50,4 +50,3 @@ class TestRootReadme:
         readme_path = _WORKSPACE_ROOT / "README.md"
         content = readme_path.read_text()
         assert "afissues" in content, "afissues not found in root README.md"
-

@@ -63,47 +63,33 @@ def build_afspec_from_triage(
     """
     criteria = triage_result.criteria
 
-    # --- Requirements mapping (01-REQ-2) ---
+    # Build requirements, test cases, and subtasks in a single pass (01-REQ-2, 01-REQ-3, 01-REQ-4)
     requirements: list[Requirement] = []
+    test_cases: list[TestCase] = []
+    subtasks: list[Subtask] = []
+
     for n, c in enumerate(criteria, start=1):
         desc = c.description if c.description else ""
         preconds = c.preconditions if c.preconditions else ""
         expected = c.expected if c.expected else ""
         assertion = c.assertion if c.assertion else ""
-
-        ac_criterion = Criterion(
-            id=f"NS-REQ-{n}.1",
-            condition=preconds,
-            action=expected,
-        )
 
         requirements.append(
             Requirement(
                 id=f"NS-REQ-{n}",
                 title=desc,
                 user_story=UserStory(goal=desc),
-                acceptance_criteria=[ac_criterion],
+                acceptance_criteria=[Criterion(id=f"NS-REQ-{n}.1", condition=preconds, action=expected)],
                 edge_cases=[],
             )
         )
-
-    # --- TestCase derivation (01-REQ-3) ---
-    test_cases: list[TestCase] = []
-    for n, c in enumerate(criteria, start=1):
-        desc = c.description if c.description else ""
-        preconds = c.preconditions if c.preconditions else ""
-        expected = c.expected if c.expected else ""
-        assertion = c.assertion if c.assertion else ""
-
-        # Convert preconditions string to list
-        preconditions_list: list[str] = [preconds] if preconds else []
 
         test_cases.append(
             TestCase(
                 id=f"TS-NS-{n}",
                 requirement_id=f"NS-REQ-{n}",
                 description=desc,
-                preconditions=preconditions_list,
+                preconditions=[preconds] if preconds else [],
                 expected=expected,
                 assertion_pseudocode=assertion,
                 input="",
@@ -111,34 +97,19 @@ def build_afspec_from_triage(
             )
         )
 
-    # --- TaskGroup and Subtask construction (01-REQ-4) ---
-    subtasks: list[Subtask] = []
-    if criteria:
-        for n, c in enumerate(criteria, start=1):
-            desc = c.description if c.description else ""
-            preconds = c.preconditions if c.preconditions else ""
-            expected = c.expected if c.expected else ""
-            assertion = c.assertion if c.assertion else ""
-
-            details: list[str] = []
-            if preconds:
-                details.append(preconds)
-            if expected:
-                details.append(expected)
-            if assertion:
-                details.append(assertion)
-
-            subtasks.append(
-                Subtask(
-                    id=f"1.{n}",
-                    title=desc,
-                    details=details,
-                    state=SubtaskState.PENDING,
-                    test_spec_refs=[f"TS-NS-{n}"],
-                    requirement_refs=[f"NS-REQ-{n}"],
-                )
+        details: list[str] = [x for x in (preconds, expected, assertion) if x]
+        subtasks.append(
+            Subtask(
+                id=f"1.{n}",
+                title=desc,
+                details=details,
+                state=SubtaskState.PENDING,
+                test_spec_refs=[f"TS-NS-{n}"],
+                requirement_refs=[f"NS-REQ-{n}"],
             )
-    else:
+        )
+
+    if not criteria:
         # 01-REQ-1.E1, 01-REQ-4.E1: fallback Subtask
         subtasks.append(
             Subtask(

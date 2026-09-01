@@ -438,9 +438,7 @@ class TestTemplateHeaderFooter:
     def test_footer_references_config_docs(self) -> None:
         """Template footer references config-reference.md."""
         template = generate_default_config()
-        assert "docs/config-reference.md" in template, (
-            "Template footer must reference docs/config-reference.md"
-        )
+        assert "docs/config-reference.md" in template, "Template footer must reference docs/config-reference.md"
 
     def test_footer_appears_exactly_once(self) -> None:
         """Footer appears exactly once at the end of the template."""

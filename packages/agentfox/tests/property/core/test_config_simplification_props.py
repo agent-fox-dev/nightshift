@@ -106,11 +106,7 @@ class TestPropMergePreservesValues:
     @settings(max_examples=20)
     def test_merge_preserves_active_values(self, max_budget, max_retries):
         """User values for max_budget_usd and max_retries survive merge."""
-        existing = (
-            f"[orchestrator]\n"
-            f"max_retries = {max_retries}\n"
-            f"max_budget_usd = {max_budget}\n"
-        )
+        existing = f"[orchestrator]\nmax_retries = {max_retries}\nmax_budget_usd = {max_budget}\n"
         result = merge_existing_config(existing)
         assert f"max_retries = {max_retries}" in result, f"max_retries = {max_retries} not preserved in merge result"
 
@@ -172,5 +168,3 @@ class TestPropFooterNonDuplication:
             content = merge_existing_config(content)
         count = content.count("docs/config-reference.md")
         assert count == 1, f"After {n} merges, footer appears {count} times, expected exactly 1"
-
-

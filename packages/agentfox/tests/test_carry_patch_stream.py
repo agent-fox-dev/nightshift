@@ -106,9 +106,7 @@ class TestBuildStreamsCarryPatchEnabled:
         streams = build_streams(config, hub_client=hub_client)
 
         carry_patch_streams = [s for s in streams if s.name == "carry-patch"]
-        assert len(carry_patch_streams) == 1, (
-            "Exactly one carry-patch stream must be registered when enabled"
-        )
+        assert len(carry_patch_streams) == 1, "Exactly one carry-patch stream must be registered when enabled"
 
     def test_carry_patch_stream_has_correct_name(self) -> None:
         """carry-patch stream has name='carry-patch'.
@@ -143,9 +141,7 @@ class TestBuildStreamsCarryPatchEnabled:
         carry_patch_streams = [s for s in streams if s.name == "carry-patch"]
         assert len(carry_patch_streams) == 1
         stream = carry_patch_streams[0]
-        assert stream.interval == 120, (
-            f"carry-patch stream interval must be 120, got {stream.interval}"
-        )
+        assert stream.interval == 120, f"carry-patch stream interval must be 120, got {stream.interval}"
 
     def test_carry_patch_stream_is_enabled(self) -> None:
         """carry-patch stream has enabled=True when carry_patch.enabled=True.
@@ -191,10 +187,7 @@ class TestBuildStreamsCarryPatchDisabled:
         streams = build_streams(config, hub_client=hub_client)
 
         carry_patch_streams = [s for s in streams if s.name == "carry-patch"]
-        assert len(carry_patch_streams) == 0, (
-            "carry-patch stream must NOT be registered when "
-            "carry_patch.enabled=False"
-        )
+        assert len(carry_patch_streams) == 0, "carry-patch stream must NOT be registered when carry_patch.enabled=False"
 
     def test_no_carry_patch_stream_when_hub_client_none(self) -> None:
         """build_streams omits carry-patch stream when hub_client=None.
@@ -209,9 +202,7 @@ class TestBuildStreamsCarryPatchDisabled:
         streams = build_streams(config, hub_client=None)
 
         carry_patch_streams = [s for s in streams if s.name == "carry-patch"]
-        assert len(carry_patch_streams) == 0, (
-            "carry-patch stream must NOT be registered when hub_client=None"
-        )
+        assert len(carry_patch_streams) == 0, "carry-patch stream must NOT be registered when hub_client=None"
 
     def test_no_carry_patch_stream_when_disabled_and_no_hub(self) -> None:
         """build_streams omits carry-patch when both disabled and no hub_client.
@@ -287,9 +278,7 @@ class TestDaemonDisplayRegistry:
         Test ID: TS-03-21
         Fails: 'carry-patch' not yet added to display names (group 9 pending)
         """
-        assert "carry-patch" in _STREAM_DISPLAY_NAMES, (
-            "'carry-patch' must be in _STREAM_DISPLAY_NAMES dict"
-        )
+        assert "carry-patch" in _STREAM_DISPLAY_NAMES, "'carry-patch' must be in _STREAM_DISPLAY_NAMES dict"
 
     def test_carry_patch_display_name_non_empty(self) -> None:
         """'carry-patch' display name is a non-empty string.
@@ -301,9 +290,7 @@ class TestDaemonDisplayRegistry:
         assert "carry-patch" in _STREAM_DISPLAY_NAMES
         display_name = _STREAM_DISPLAY_NAMES["carry-patch"]
         assert isinstance(display_name, str)
-        assert len(display_name) > 0, (
-            "'carry-patch' display name must be a non-empty string"
-        )
+        assert len(display_name) > 0, "'carry-patch' display name must be a non-empty string"
 
     def test_carry_patch_in_active_labels(self) -> None:
         """'carry-patch' is a key in _STREAM_ACTIVE_LABELS.
@@ -312,9 +299,7 @@ class TestDaemonDisplayRegistry:
         Test ID: TS-03-21
         Fails: 'carry-patch' not yet added to active labels (group 9 pending)
         """
-        assert "carry-patch" in _STREAM_ACTIVE_LABELS, (
-            "'carry-patch' must be in _STREAM_ACTIVE_LABELS dict"
-        )
+        assert "carry-patch" in _STREAM_ACTIVE_LABELS, "'carry-patch' must be in _STREAM_ACTIVE_LABELS dict"
 
     def test_carry_patch_active_label_non_empty(self) -> None:
         """'carry-patch' active label is a non-empty string.
@@ -326,9 +311,7 @@ class TestDaemonDisplayRegistry:
         assert "carry-patch" in _STREAM_ACTIVE_LABELS
         label = _STREAM_ACTIVE_LABELS["carry-patch"]
         assert isinstance(label, str)
-        assert len(label) > 0, (
-            "'carry-patch' active label must be a non-empty string"
-        )
+        assert len(label) > 0, "'carry-patch' active label must be a non-empty string"
 
 
 # ---------------------------------------------------------------------------
@@ -384,8 +367,7 @@ class TestEngineRunCarryPatchMonitor:
 
         # After implementation:
         assert result is mock_result, (
-            "_run_carry_patch_monitor must return the MonitorCycleResult "
-            "from CarryPatchMonitor.run_cycle()"
+            "_run_carry_patch_monitor must return the MonitorCycleResult from CarryPatchMonitor.run_cycle()"
         )
         mock_monitor.run_cycle.assert_called_once()
 
@@ -411,8 +393,7 @@ class TestEngineRunCarryPatchMonitor:
 
         # Same monitor must be used both times — 2 calls total
         assert mock_monitor.run_cycle.call_count == 2, (
-            "CarryPatchMonitor.run_cycle() must be called on the same "
-            "instance (reuse), not a fresh instance per call"
+            "CarryPatchMonitor.run_cycle() must be called on the same instance (reuse), not a fresh instance per call"
         )
 
     async def test_run_carry_patch_monitor_propagates_exception(self) -> None:
@@ -426,9 +407,7 @@ class TestEngineRunCarryPatchMonitor:
 
         engine = MagicMock(spec=NightShiftEngine)
         mock_monitor = MagicMock(spec=CarryPatchMonitor)
-        mock_monitor.run_cycle = AsyncMock(
-            side_effect=RuntimeError("unexpected monitor failure")
-        )
+        mock_monitor.run_cycle = AsyncMock(side_effect=RuntimeError("unexpected monitor failure"))
         engine._carry_patch_monitor = mock_monitor
 
         with pytest.raises(RuntimeError, match="unexpected monitor failure"):

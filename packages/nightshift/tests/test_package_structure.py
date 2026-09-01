@@ -20,7 +20,6 @@ def _load_nightshift_toml() -> dict:
         return tomllib.load(f)
 
 
-
 class TestPackageDirectoryStructure:
     """TS-07-4: All required files and directories exist.
 
@@ -61,7 +60,6 @@ class TestPyprojectMetadata:
     def test_build_backend(self) -> None:
         config = _load_nightshift_toml()
         assert config["build-system"]["build-backend"] == "hatchling.build"
-
 
 
 class TestDirectDependencies:

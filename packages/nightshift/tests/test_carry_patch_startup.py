@@ -169,20 +169,15 @@ class TestHubUrlResolution:
             f"Expected exit 0 with all flags provided; got {result.exit_code}.\n"
             f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
         )
-        assert mock_resolve_url.call_count == 1, (
-            "resolve_hub_url was not called; hub URL resolution logic is missing"
-        )
+        assert mock_resolve_url.call_count == 1, "resolve_hub_url was not called; hub URL resolution logic is missing"
         called_with = mock_resolve_url.call_args
         assert called_with is not None
         # The CLI flag value must be forwarded to resolve_hub_url
         all_passed = list(called_with.args) + list(called_with.kwargs.values())
         assert "https://hub.example.com" in str(all_passed), (
-            f"resolve_hub_url was not called with the CLI flag value. "
-            f"Call args: {called_with}"
+            f"resolve_hub_url was not called with the CLI flag value. Call args: {called_with}"
         )
-        assert mock_startup.call_count == 1, (
-            "Async startup helper was not called; carry-patch mode was not activated"
-        )
+        assert mock_startup.call_count == 1, "Async startup helper was not called; carry-patch mode was not activated"
 
     def test_hub_url_from_env(self, cli_runner: CliRunner) -> None:
         """AF_HUB_URL env var is used when --hub-url flag is absent (TS-02-8).
@@ -220,12 +215,8 @@ class TestHubUrlResolution:
             f"Expected exit 0 when AF_HUB_URL is set; got {result.exit_code}.\n"
             f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
         )
-        assert mock_resolve_url.call_count == 1, (
-            "resolve_hub_url was not called; hub URL resolution logic is missing"
-        )
-        assert mock_startup.call_count == 1, (
-            "Async startup helper was not called; carry-patch mode was not activated"
-        )
+        assert mock_resolve_url.call_count == 1, "resolve_hub_url was not called; hub URL resolution logic is missing"
+        assert mock_startup.call_count == 1, "Async startup helper was not called; carry-patch mode was not activated"
 
     def test_hub_url_from_config(self, cli_runner: CliRunner) -> None:
         """config.hub.endpoint_url is used when flag and env var are both absent (TS-02-9).
@@ -262,20 +253,15 @@ class TestHubUrlResolution:
             f"Expected exit 0 when config hub URL is set; got {result.exit_code}.\n"
             f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
         )
-        assert mock_resolve_url.call_count == 1, (
-            "resolve_hub_url was not called; hub URL resolution logic is missing"
-        )
+        assert mock_resolve_url.call_count == 1, "resolve_hub_url was not called; hub URL resolution logic is missing"
         called_with = mock_resolve_url.call_args
         assert called_with is not None
         # The config URL must be forwarded to resolve_hub_url
         all_passed = list(called_with.args) + list(called_with.kwargs.values())
         assert "https://config.hub.example.com" in str(all_passed), (
-            f"resolve_hub_url was not called with config.hub.endpoint_url. "
-            f"Call args: {called_with}"
+            f"resolve_hub_url was not called with config.hub.endpoint_url. Call args: {called_with}"
         )
-        assert mock_startup.call_count == 1, (
-            "Async startup helper was not called; carry-patch mode was not activated"
-        )
+        assert mock_startup.call_count == 1, "Async startup helper was not called; carry-patch mode was not activated"
 
     def test_hub_url_only_skips_carry_patch(self, cli_runner: CliRunner) -> None:
         """Resolving hub URL alone (no workspace, no token) does not activate carry-patch (TS-02-13).
@@ -363,9 +349,12 @@ class TestWorkspaceSlugResolution:
             result = cli_runner.invoke(
                 main,
                 [
-                    "--hub-url", "https://hub.example.com",
-                    "--workspace", "flag-slug",
-                    "--token", "myPAT",
+                    "--hub-url",
+                    "https://hub.example.com",
+                    "--workspace",
+                    "flag-slug",
+                    "--token",
+                    "myPAT",
                 ],
             )
 
@@ -373,16 +362,13 @@ class TestWorkspaceSlugResolution:
             f"Expected exit 0 when --workspace flag is provided; got {result.exit_code}.\n"
             f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
         )
-        assert mock_startup.call_count == 1, (
-            "Async startup helper was not called; carry-patch mode was not activated"
-        )
+        assert mock_startup.call_count == 1, "Async startup helper was not called; carry-patch mode was not activated"
         called_with = mock_startup.call_args
         assert called_with is not None
         # The flag slug must be used, not env-slug or config-slug
         all_passed = list(called_with.args) + list(called_with.kwargs.values())
         assert "flag-slug" in str(all_passed), (
-            f"Startup helper was not called with the flag slug 'flag-slug'. "
-            f"Call args: {called_with}"
+            f"Startup helper was not called with the flag slug 'flag-slug'. Call args: {called_with}"
         )
 
     def test_workspace_from_env(self, cli_runner: CliRunner) -> None:
@@ -424,15 +410,12 @@ class TestWorkspaceSlugResolution:
             f"Expected exit 0 when AF_WORKSPACE is set; got {result.exit_code}.\n"
             f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
         )
-        assert mock_startup.call_count == 1, (
-            "Async startup helper was not called; carry-patch mode was not activated"
-        )
+        assert mock_startup.call_count == 1, "Async startup helper was not called; carry-patch mode was not activated"
         called_with = mock_startup.call_args
         assert called_with is not None
         all_passed = list(called_with.args) + list(called_with.kwargs.values())
         assert "env-slug" in str(all_passed), (
-            f"Startup helper was not called with AF_WORKSPACE value 'env-slug'. "
-            f"Call args: {called_with}"
+            f"Startup helper was not called with AF_WORKSPACE value 'env-slug'. Call args: {called_with}"
         )
 
     def test_workspace_from_config(self, cli_runner: CliRunner) -> None:
@@ -473,15 +456,12 @@ class TestWorkspaceSlugResolution:
             f"Expected exit 0 when config workspace is set; got {result.exit_code}.\n"
             f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
         )
-        assert mock_startup.call_count == 1, (
-            "Async startup helper was not called; carry-patch mode was not activated"
-        )
+        assert mock_startup.call_count == 1, "Async startup helper was not called; carry-patch mode was not activated"
         called_with = mock_startup.call_args
         assert called_with is not None
         all_passed = list(called_with.args) + list(called_with.kwargs.values())
         assert "config-slug" in str(all_passed), (
-            f"Startup helper was not called with config.carry_patch.workspace value. "
-            f"Call args: {called_with}"
+            f"Startup helper was not called with config.carry_patch.workspace value. Call args: {called_with}"
         )
 
 
@@ -649,9 +629,7 @@ class TestCarryPatchModeActivation:
             f"Expected exit 0 with all flags provided; got {result.exit_code}.\n"
             f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
         )
-        assert mock_startup.call_count == 1, (
-            "Startup helper was not called; carry-patch mode was not activated"
-        )
+        assert mock_startup.call_count == 1, "Startup helper was not called; carry-patch mode was not activated"
         # When --token is provided on the CLI, the CLI value must be used
         # directly. resolve_hub_pat() should NOT be called.
         assert mock_resolve_pat.call_count == 0, (
@@ -694,9 +672,7 @@ class TestCarryPatchModeActivation:
             f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
         )
         stderr_lower = result.stderr.lower()
-        assert "hub" in stderr_lower and (
-            "url" in stderr_lower or "required" in stderr_lower
-        ), (
+        assert "hub" in stderr_lower and ("url" in stderr_lower or "required" in stderr_lower), (
             f"Expected error message mentioning hub URL in stderr; got: {result.stderr!r}"
         )
 
@@ -823,8 +799,7 @@ class TestCwdValidationHubClientConstruction:
 
         # Exactly one HubClient instance was created
         assert mock_cls.call_count == 1, (
-            f"Expected HubClient to be constructed exactly once; "
-            f"got {mock_cls.call_count} calls"
+            f"Expected HubClient to be constructed exactly once; got {mock_cls.call_count} calls"
         )
 
         # Constructed with the correct keyword arguments
@@ -832,18 +807,14 @@ class TestCwdValidationHubClientConstruction:
         assert call_kwargs.get("endpoint_url") == _VALID_HUB_URL, (
             f"Expected endpoint_url={_VALID_HUB_URL!r}; got {call_kwargs}"
         )
-        assert call_kwargs.get("pat") == _VALID_PAT, (
-            f"Expected pat={_VALID_PAT!r}; got {call_kwargs}"
-        )
+        assert call_kwargs.get("pat") == _VALID_PAT, f"Expected pat={_VALID_PAT!r}; got {call_kwargs}"
 
         # get_workspace called once with the slug
         assert mock_client.get_workspace.call_count == 1, (
-            f"Expected get_workspace to be called once; "
-            f"got {mock_client.get_workspace.call_count}"
+            f"Expected get_workspace to be called once; got {mock_client.get_workspace.call_count}"
         )
         assert mock_client.get_workspace.call_args[0][0] == _VALID_SLUG, (
-            f"Expected get_workspace to be called with {_VALID_SLUG!r}; "
-            f"got {mock_client.get_workspace.call_args}"
+            f"Expected get_workspace to be called with {_VALID_SLUG!r}; got {mock_client.get_workspace.call_args}"
         )
 
 
@@ -1064,9 +1035,7 @@ class TestCwdValidationWorkspaceChecks:
 
         assert exc_info.value.code == 1
         captured = capfd.readouterr()
-        assert "pending" in captured.err, (
-            f"Expected stderr to show clone_status 'pending'; got: {captured.err!r}"
-        )
+        assert "pending" in captured.err, f"Expected stderr to show clone_status 'pending'; got: {captured.err!r}"
 
     def test_clone_status_failed_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
         """Exit 1 when clone_status is 'failed'.
@@ -1088,9 +1057,7 @@ class TestCwdValidationWorkspaceChecks:
 
         assert exc_info.value.code == 1
         captured = capfd.readouterr()
-        assert "failed" in captured.err, (
-            f"Expected stderr to show clone_status 'failed'; got: {captured.err!r}"
-        )
+        assert "failed" in captured.err, f"Expected stderr to show clone_status 'failed'; got: {captured.err!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1165,9 +1132,9 @@ class TestCwdValidationGitSubprocess:
 
         assert exc_info.value.code == 1
         captured = capfd.readouterr()
-        assert captured.err.strip() == (
-            "git is not installed or not in PATH; nightshift requires git"
-        ), f"Expected exact git-not-found message; got: {captured.err!r}"
+        assert captured.err.strip() == ("git is not installed or not in PATH; nightshift requires git"), (
+            f"Expected exact git-not-found message; got: {captured.err!r}"
+        )
 
     def test_git_timeout_exits(self, capfd: pytest.CaptureFixture[str]) -> None:
         """Exit 1 with timeout message when git subprocess times out.
@@ -1285,9 +1252,7 @@ class TestCwdValidationOriginUrl:
         assert "https://git.example.com/correct-repo.git" in captured.err, (
             f"Expected workspace git_url in stderr; got: {captured.err!r}"
         )
-        assert "cd" in captured.err, (
-            f"Expected 'cd' instruction in stderr; got: {captured.err!r}"
-        )
+        assert "cd" in captured.err, f"Expected 'cd' instruction in stderr; got: {captured.err!r}"
 
     def test_validation_success_logs_and_continues(
         self,
@@ -1317,15 +1282,9 @@ class TestCwdValidationOriginUrl:
         ):
             _run_startup()
 
-        info_messages = [
-            r.message for r in caplog.records if r.levelname == "INFO"
-        ]
-        assert any(
-            "valid" in m.lower() or "success" in m.lower() or "pass" in m.lower()
-            for m in info_messages
-        ), (
-            f"Expected an INFO log indicating CWD validation succeeded; "
-            f"got messages: {info_messages}"
+        info_messages = [r.message for r in caplog.records if r.levelname == "INFO"]
+        assert any("valid" in m.lower() or "success" in m.lower() or "pass" in m.lower() for m in info_messages), (
+            f"Expected an INFO log indicating CWD validation succeeded; got messages: {info_messages}"
         )
 
     def test_trailing_whitespace_stripped_before_comparison(self) -> None:
@@ -1385,9 +1344,7 @@ class TestCwdValidationOriginUrl:
 
         assert exc_info.value.code == 1
         captured = capfd.readouterr()
-        assert "cd" in captured.err, (
-            f"Expected URL mismatch error with 'cd' instruction; got: {captured.err!r}"
-        )
+        assert "cd" in captured.err, f"Expected URL mismatch error with 'cd' instruction; got: {captured.err!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1471,25 +1428,13 @@ class TestConfigGenerationOnFirstStart:
         ):
             _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
 
-        assert config_path.exists(), (
-            ".nightshift/config.toml was not created on first start"
-        )
+        assert config_path.exists(), ".nightshift/config.toml was not created on first start"
         content = config_path.read_text(encoding="utf-8")
-        assert "[hub]" in content, (
-            f"Generated config missing [hub] section; content:\n{content}"
-        )
-        assert "[carry_patch]" in content, (
-            f"Generated config missing [carry_patch] section; content:\n{content}"
-        )
-        assert "[workspace]" in content, (
-            f"Generated config missing [workspace] section; content:\n{content}"
-        )
-        assert "endpoint_url" in content, (
-            f"Generated config missing endpoint_url field; content:\n{content}"
-        )
-        assert not tmp_file.exists(), (
-            ".nightshift/config.toml.tmp should not remain after successful write"
-        )
+        assert "[hub]" in content, f"Generated config missing [hub] section; content:\n{content}"
+        assert "[carry_patch]" in content, f"Generated config missing [carry_patch] section; content:\n{content}"
+        assert "[workspace]" in content, f"Generated config missing [workspace] section; content:\n{content}"
+        assert "endpoint_url" in content, f"Generated config missing endpoint_url field; content:\n{content}"
+        assert not tmp_file.exists(), ".nightshift/config.toml.tmp should not remain after successful write"
 
     def test_config_dir_already_exists(self, tmp_path: Path) -> None:
         """When .nightshift/ directory exists but config.toml is absent,
@@ -1508,9 +1453,7 @@ class TestConfigGenerationOnFirstStart:
         ):
             _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
 
-        assert config_path.exists(), (
-            ".nightshift/config.toml was not created when directory already existed"
-        )
+        assert config_path.exists(), ".nightshift/config.toml was not created when directory already existed"
 
 
 # ---------------------------------------------------------------------------
@@ -1587,14 +1530,9 @@ class TestConfigIntegrationBranch:
         ):
             _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
 
-        assert config_path.exists(), (
-            ".nightshift/config.toml was not created"
-        )
+        assert config_path.exists(), ".nightshift/config.toml was not created"
         content = config_path.read_text()
-        assert 'integration_branch = ""' in content, (
-            f"Expected integration_branch = \"\" for None; "
-            f"content:\n{content}"
-        )
+        assert 'integration_branch = ""' in content, f'Expected integration_branch = "" for None; content:\n{content}'
 
     def test_integration_branch_nonempty_writes_value(
         self,
@@ -1620,13 +1558,10 @@ class TestConfigIntegrationBranch:
         ):
             _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
 
-        assert config_path.exists(), (
-            ".nightshift/config.toml was not created"
-        )
+        assert config_path.exists(), ".nightshift/config.toml was not created"
         content = config_path.read_text()
         assert 'integration_branch = "develop"' in content, (
-            f"Expected integration_branch = \"develop\"; "
-            f"content:\n{content}"
+            f'Expected integration_branch = "develop"; content:\n{content}'
         )
 
 
@@ -1664,16 +1599,10 @@ class TestConfigWriteFailureNonFatal:
             # Should NOT raise — startup continues despite the write failure
             _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
 
-        warning_messages = [
-            r.message for r in caplog.records if r.levelname == "WARNING"
-        ]
+        warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
         assert any(
-            "permission" in m.lower() or "failed" in m.lower() or "config" in m.lower()
-            for m in warning_messages
-        ), (
-            f"Expected a WARNING log about config write failure; "
-            f"got warnings: {warning_messages}"
-        )
+            "permission" in m.lower() or "failed" in m.lower() or "config" in m.lower() for m in warning_messages
+        ), f"Expected a WARNING log about config write failure; got warnings: {warning_messages}"
 
     def test_rename_failure_leaves_tmp_and_continues(
         self,
@@ -1706,12 +1635,8 @@ class TestConfigWriteFailureNonFatal:
             # Should NOT raise — startup continues despite rename failure
             _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
 
-        warning_messages = [
-            r.message for r in caplog.records if r.levelname == "WARNING"
-        ]
-        assert len(warning_messages) >= 1, (
-            "Expected at least one WARNING log about the rename failure"
-        )
+        warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warning_messages) >= 1, "Expected at least one WARNING log about the rename failure"
 
 
 # ---------------------------------------------------------------------------
@@ -1746,18 +1671,13 @@ class TestConfigPatExclusion:
                 slug=_VALID_SLUG,
             )
 
-        assert config_path.exists(), (
-            ".nightshift/config.toml was not created"
-        )
+        assert config_path.exists(), ".nightshift/config.toml was not created"
         content = config_path.read_text()
         assert secret_pat not in content, (
-            f"PAT value '{secret_pat}' found in generated config file; "
-            f"PAT must never be persisted to disk"
+            f"PAT value '{secret_pat}' found in generated config file; PAT must never be persisted to disk"
         )
         # Also check for common token/pat key names with the secret value
-        assert "super-secret" not in content, (
-            "PAT value fragment found in generated config"
-        )
+        assert "super-secret" not in content, "PAT value fragment found in generated config"
 
 
 # ---------------------------------------------------------------------------
@@ -1838,23 +1758,17 @@ class TestSetVariableCorrectArgs:
             _run_startup(slug=_VALID_SLUG)
 
         calls = mock_client.set_variable.call_args_list
-        assert len(calls) == 2, (
-            f"Expected exactly 2 set_variable calls; got {len(calls)}: {calls}"
-        )
+        assert len(calls) == 2, f"Expected exactly 2 set_variable calls; got {len(calls)}: {calls}"
         assert calls[0].args == (_VALID_SLUG, "AUTO_REBUILD_AFTER_SYNC", "false") or (
             calls[0].args[0] == _VALID_SLUG
             and calls[0].args[1] == "AUTO_REBUILD_AFTER_SYNC"
             and calls[0].args[2] == "false"
-        ), (
-            f"First set_variable call has wrong args: {calls[0]}"
-        )
+        ), f"First set_variable call has wrong args: {calls[0]}"
         assert calls[1].args == (_VALID_SLUG, "AUTO_REBUILD_AFTER_PUSH", "false") or (
             calls[1].args[0] == _VALID_SLUG
             and calls[1].args[1] == "AUTO_REBUILD_AFTER_PUSH"
             and calls[1].args[2] == "false"
-        ), (
-            f"Second set_variable call has wrong args: {calls[1]}"
-        )
+        ), f"Second set_variable call has wrong args: {calls[1]}"
 
     def test_single_hubclient_reused_for_all_calls(
         self,
@@ -1879,13 +1793,9 @@ class TestSetVariableCorrectArgs:
             _run_startup(slug=_VALID_SLUG)
 
         # Exactly one HubClient constructed
-        assert mock_cls.call_count == 1, (
-            f"Expected exactly 1 HubClient construction; got {mock_cls.call_count}"
-        )
+        assert mock_cls.call_count == 1, f"Expected exactly 1 HubClient construction; got {mock_cls.call_count}"
         # Same instance used for get_workspace and set_variable
-        assert mock_client.get_workspace.call_count >= 1, (
-            "get_workspace was not called on the HubClient instance"
-        )
+        assert mock_client.get_workspace.call_count >= 1, "get_workspace was not called on the HubClient instance"
         assert mock_client.set_variable.call_count == 2, (
             "set_variable was not called exactly twice on the same HubClient"
         )
@@ -1931,12 +1841,8 @@ class TestSetVariableExceptionNonFatal:
             # Should NOT raise — startup continues despite set_variable failures
             _run_startup(slug=_VALID_SLUG)
 
-        warning_messages = [
-            r.message for r in caplog.records if r.levelname == "WARNING"
-        ]
-        assert len(warning_messages) >= 1, (
-            "Expected at least one WARNING log for set_variable failure"
-        )
+        warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warning_messages) >= 1, "Expected at least one WARNING log for set_variable failure"
 
     def test_connection_error_is_nonfatal(
         self,
@@ -1964,12 +1870,8 @@ class TestSetVariableExceptionNonFatal:
         ):
             _run_startup(slug=_VALID_SLUG)
 
-        warning_messages = [
-            r.message for r in caplog.records if r.levelname == "WARNING"
-        ]
-        assert len(warning_messages) >= 1, (
-            "Expected WARNING log for HubConnectionError in set_variable"
-        )
+        warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warning_messages) >= 1, "Expected WARNING log for HubConnectionError in set_variable"
 
     def test_first_set_variable_fails_second_still_attempted(
         self,
@@ -2005,16 +1907,11 @@ class TestSetVariableExceptionNonFatal:
             _run_startup(slug=_VALID_SLUG)
 
         assert call_count["n"] == 2, (
-            f"Expected 2 set_variable calls (both attempted independently); "
-            f"got {call_count['n']}"
+            f"Expected 2 set_variable calls (both attempted independently); got {call_count['n']}"
         )
         # At least one warning for the first failure
-        warning_messages = [
-            r.message for r in caplog.records if r.levelname == "WARNING"
-        ]
-        assert len(warning_messages) >= 1, (
-            "Expected WARNING for first set_variable failure"
-        )
+        warning_messages = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warning_messages) >= 1, "Expected WARNING for first set_variable failure"
 
 
 # ---------------------------------------------------------------------------
@@ -2061,6 +1958,5 @@ class TestStartupHelperReturnsHubClient:
 
         # The startup helper must return the HubClient instance
         assert result is mock_client, (
-            f"Expected startup_helper to return the HubClient instance; "
-            f"got {type(result).__name__}: {result!r}"
+            f"Expected startup_helper to return the HubClient instance; got {type(result).__name__}: {result!r}"
         )

@@ -467,8 +467,6 @@ class TestNoPartialConfig:
         assert result is None
 
 
-
-
 # ===================================================================
 # TS-13-20: DEBUG log — global config loaded
 # ===================================================================
@@ -548,7 +546,6 @@ class TestDebugLogHomeUnresolvable:
 
         # TS-13-23: same message must contain BOTH 'HOME' AND 'could not be resolved'/'skipped'
         assert any("HOME" in msg and ("could not be resolved" in msg or "skipped" in msg) for msg in caplog.messages)
-
 
 
 # ===================================================================
@@ -641,7 +638,6 @@ class TestNonexistentCWD:
         monkeypatch.setattr(Path, "cwd", staticmethod(lambda: (_ for _ in ()).throw(OSError("no cwd"))))
         with pytest.raises((ConfigError, OSError)):
             load_config()
-
 
 
 # ===================================================================
@@ -807,7 +803,6 @@ class TestSymlinkFinalFileOnlyProperty:
         check_symlinked_intermediate_dir_accepted()
 
 
-
 # ===================================================================
 # SMOKE TESTS — end-to-end execution path verification
 # ===================================================================
@@ -906,7 +901,6 @@ class TestSmoke3MalformedGlobalFailFast:
 
         config = load_config()
         assert config.orchestrator.max_retries == 1
-
 
 
 class TestSmoke8HomeUnsetLocalUsed:

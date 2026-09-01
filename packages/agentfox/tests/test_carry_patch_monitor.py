@@ -113,9 +113,7 @@ def _make_hub_client(
         dashboard = _PatchStatusDashboard(patches=patches or [])
         client.get_patch_status = AsyncMock(return_value=dashboard)
     client.list_rerere = AsyncMock(return_value=rerere_entries or [])
-    client.submit_rebuild = AsyncMock(
-        return_value=(submit_rebuild_return or _RebuildJob("job-1", "queued"))
-    )
+    client.submit_rebuild = AsyncMock(return_value=(submit_rebuild_return or _RebuildJob("job-1", "queued")))
     client.list_rebuilds = AsyncMock(return_value=list_rebuilds_return or [])
     return client
 
@@ -181,17 +179,13 @@ class TestCarryPatchMonitorInstantiation:
         assert isinstance(monitor, CarryPatchMonitor)
 
         # run_cycle() must be a coroutine function.
-        assert asyncio.iscoroutinefunction(monitor.run_cycle), (
-            "CarryPatchMonitor.run_cycle() must be an async method"
-        )
+        assert asyncio.iscoroutinefunction(monitor.run_cycle), "CarryPatchMonitor.run_cycle() must be an async method"
 
         # FAILS: run_cycle raises NotImplementedError (implementation pending)
         result = await monitor.run_cycle()
 
         # Assertions after implementation:
-        assert isinstance(result, MonitorCycleResult), (
-            "run_cycle() must return a MonitorCycleResult instance"
-        )
+        assert isinstance(result, MonitorCycleResult), "run_cycle() must return a MonitorCycleResult instance"
 
     def test_monitor_cycle_result_is_dataclass(self) -> None:
         """MonitorCycleResult is a dataclasses.dataclass.
@@ -213,9 +207,7 @@ class TestCarryPatchMonitorInstantiation:
         Fails: stub MonitorCycleResult is not a dataclass (group 5.1 pending)
         """
         # FAILS: MonitorCycleResult is not yet a dataclass
-        assert dataclasses.is_dataclass(MonitorCycleResult), (
-            "MonitorCycleResult must be a dataclass"
-        )
+        assert dataclasses.is_dataclass(MonitorCycleResult), "MonitorCycleResult must be a dataclass"
         r = MonitorCycleResult(
             conflicts_detected=3,
             conflicts_resolved=2,
@@ -237,9 +229,7 @@ class TestCarryPatchMonitorInstantiation:
         Fails: stub MonitorCycleResult is not a dataclass (group 5.1 pending)
         """
         # FAILS: MonitorCycleResult is not yet a dataclass
-        assert dataclasses.is_dataclass(MonitorCycleResult), (
-            "MonitorCycleResult must be a dataclass with zero defaults"
-        )
+        assert dataclasses.is_dataclass(MonitorCycleResult), "MonitorCycleResult must be a dataclass with zero defaults"
         r = MonitorCycleResult()
         assert r.conflicts_detected == 0
         assert r.conflicts_resolved == 0
@@ -257,19 +247,14 @@ class TestCarryPatchMonitorInstantiation:
         Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         monitor = _make_monitor()
-        assert hasattr(monitor, "_retry_counter"), (
-            "CarryPatchMonitor must have a _retry_counter dict attribute"
-        )
-        assert isinstance(monitor._retry_counter, dict), (
-            "_retry_counter must be a dict"
-        )
+        assert hasattr(monitor, "_retry_counter"), "CarryPatchMonitor must have a _retry_counter dict attribute"
+        assert isinstance(monitor._retry_counter, dict), "_retry_counter must be a dict"
 
         # FAILS: run_cycle raises NotImplementedError — the retry counter must
         # be properly wired to run_cycle logic for this assertion to hold.
         result = await monitor.run_cycle()
         assert isinstance(result, MonitorCycleResult), (
-            "run_cycle() must return MonitorCycleResult so retry counter "
-            "tracking is observable through result fields"
+            "run_cycle() must return MonitorCycleResult so retry counter tracking is observable through result fields"
         )
 
 
@@ -304,9 +289,7 @@ class TestRunCycleHubError:
         assert result.conflicts_resolved == 0, "fail-open: conflicts_resolved must be 0"
         assert result.conflicts_failed == 0, "fail-open: conflicts_failed must be 0"
         assert result.patches_merged == 0, "fail-open: patches_merged must be 0"
-        assert result.rebuild_triggered is False, (
-            "fail-open: rebuild_triggered must be False"
-        )
+        assert result.rebuild_triggered is False, "fail-open: rebuild_triggered must be False"
 
     async def test_get_patch_status_runtime_error_returns_empty_result(self) -> None:
         """RuntimeError from get_patch_status also produces fail-open result.
@@ -354,9 +337,7 @@ class TestMergedUpstreamAndAutoResolve:
     Test IDs: TS-03-10, TS-03-11
     """
 
-    async def test_merged_upstream_patches_increment_patches_merged(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_merged_upstream_patches_increment_patches_merged(self, caplog: pytest.LogCaptureFixture) -> None:
         """run_cycle increments patches_merged for merged_upstream patches.
 
         Requirements: 03-REQ-3.1
@@ -375,14 +356,10 @@ class TestMergedUpstreamAndAutoResolve:
             result = await monitor.run_cycle()
 
         assert isinstance(result, MonitorCycleResult)
-        assert result.patches_merged == 1, (
-            "patches_merged must equal the number of merged_upstream patches"
-        )
+        assert result.patches_merged == 1, "patches_merged must equal the number of merged_upstream patches"
         # merged_upstream patches must be logged at INFO level
         assert any(
-            "merged_upstream" in record.message.lower()
-            or "p1" in record.message
-            for record in caplog.records
+            "merged_upstream" in record.message.lower() or "p1" in record.message for record in caplog.records
         ), "merged_upstream patch must be logged"
 
     async def test_all_merged_upstream_patches_counted(self) -> None:
@@ -405,9 +382,7 @@ class TestMergedUpstreamAndAutoResolve:
         # FAILS: run_cycle raises NotImplementedError
         result = await monitor.run_cycle()
 
-        assert result.patches_merged == 2, (
-            "patches_merged must count both merged_upstream patches"
-        )
+        assert result.patches_merged == 2, "patches_merged must count both merged_upstream patches"
 
     async def test_auto_resolve_false_does_not_invoke_coder_session(self) -> None:
         """When auto_resolve=False, run_cycle does not invoke the coder session.
@@ -429,23 +404,13 @@ class TestMergedUpstreamAndAutoResolve:
         result = await monitor.run_cycle()
 
         # After implementation:
-        assert result.conflicts_detected == 2, (
-            "conflicts_detected must be set even when auto_resolve=False"
-        )
-        assert result.conflicts_resolved == 0, (
-            "conflicts_resolved must be 0 when auto_resolve=False"
-        )
-        assert result.conflicts_failed == 0, (
-            "conflicts_failed must be 0 when auto_resolve=False"
-        )
-        assert result.rebuild_triggered is False, (
-            "rebuild_triggered must be False when auto_resolve=False"
-        )
+        assert result.conflicts_detected == 2, "conflicts_detected must be set even when auto_resolve=False"
+        assert result.conflicts_resolved == 0, "conflicts_resolved must be 0 when auto_resolve=False"
+        assert result.conflicts_failed == 0, "conflicts_failed must be 0 when auto_resolve=False"
+        assert result.rebuild_triggered is False, "rebuild_triggered must be False when auto_resolve=False"
         engine._run_coder_session.assert_not_called()
 
-    async def test_auto_resolve_false_logs_conflict_count(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_auto_resolve_false_logs_conflict_count(self, caplog: pytest.LogCaptureFixture) -> None:
         """When auto_resolve=False, conflict count is logged at INFO.
 
         Requirements: 03-REQ-3.2
@@ -465,10 +430,9 @@ class TestMergedUpstreamAndAutoResolve:
             await monitor.run_cycle()
 
         # After implementation, conflict count logged at INFO
-        assert any(
-            "2" in record.message or "conflict" in record.message.lower()
-            for record in caplog.records
-        ), "conflict count must be logged when auto_resolve=False"
+        assert any("2" in record.message or "conflict" in record.message.lower() for record in caplog.records), (
+            "conflict count must be logged when auto_resolve=False"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -483,9 +447,7 @@ class TestMaxResolveRetriesExceeded:
     Test ID: TS-03-12
     """
 
-    async def test_patch_at_max_retries_is_skipped(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_patch_at_max_retries_is_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
         """Patch with retry count == max_resolve_retries is skipped.
 
         Requirements: 03-REQ-3.4
@@ -509,24 +471,14 @@ class TestMaxResolveRetriesExceeded:
 
         # After implementation:
         engine._run_coder_session.assert_not_called()
-        assert result.conflicts_detected == 1, (
-            "conflicts_detected must still be incremented for skipped patches"
-        )
-        assert result.conflicts_failed == 1, (
-            "conflicts_failed must count patches skipped due to retry exhaustion"
-        )
+        assert result.conflicts_detected == 1, "conflicts_detected must still be incremented for skipped patches"
+        assert result.conflicts_failed == 1, "conflicts_failed must count patches skipped due to retry exhaustion"
         assert result.conflicts_resolved == 0
 
         # Warning logged containing patch id and branch name
-        warning_messages = [
-            r.message for r in caplog.records if r.levelno >= logging.WARNING
-        ]
-        assert any("p1" in msg for msg in warning_messages), (
-            "WARNING must include patch id 'p1'"
-        )
-        assert any("fix/p1" in msg for msg in warning_messages), (
-            "WARNING must include branch name 'fix/p1'"
-        )
+        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("p1" in msg for msg in warning_messages), "WARNING must include patch id 'p1'"
+        assert any("fix/p1" in msg for msg in warning_messages), "WARNING must include branch name 'fix/p1'"
 
     async def test_patch_below_max_retries_is_not_skipped(self) -> None:
         """Patch with retry count < max_resolve_retries proceeds to resolution.
@@ -624,9 +576,7 @@ class TestSuccessfulConflictResolution:
         Test ID: TS-03-13
         Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
-        patches = [
-            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
-        ]
+        patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
         config = _make_config(auto_resolve=True, max_resolve_retries=3)
         engine = _make_engine()
@@ -663,9 +613,7 @@ class TestSuccessfulConflictResolution:
         Test ID: TS-03-13
         Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
-        patches = [
-            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
-        ]
+        patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
         config = _make_config(auto_resolve=True)
         engine = _make_engine()
@@ -673,9 +621,7 @@ class TestSuccessfulConflictResolution:
 
         emitted_types: list[str] = []
 
-        def capture_emit(
-            sink: object, run_id: str, event_type: object, **kwargs: object
-        ) -> None:
+        def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_types.append(str(event_type))
 
         with (
@@ -714,9 +660,7 @@ class TestFailedConflictResolution:
         Test ID: TS-03-14
         Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
-        patches = [
-            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
-        ]
+        patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
         config = _make_config(auto_resolve=True, max_resolve_retries=3)
         engine = _make_engine(coder_session_raises=RuntimeError("coder session failed"))
@@ -734,9 +678,7 @@ class TestFailedConflictResolution:
 
         # After implementation:
         new_count = monitor._retry_counter.get(("ws-1", "p1"), 0)
-        assert new_count == initial_count + 1, (
-            "retry counter must be incremented by 1 on coder session failure"
-        )
+        assert new_count == initial_count + 1, "retry counter must be incremented by 1 on coder session failure"
         assert result.conflicts_failed == 1
         assert result.conflicts_resolved == 0
 
@@ -749,9 +691,7 @@ class TestFailedConflictResolution:
         Test ID: TS-03-14
         Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
-        patches = [
-            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
-        ]
+        patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
         config = _make_config(auto_resolve=True, max_resolve_retries=3)
         engine = _make_engine(coder_session_raises=RuntimeError("coder failed"))
@@ -759,9 +699,7 @@ class TestFailedConflictResolution:
 
         emitted_types: list[str] = []
 
-        def capture_emit(
-            sink: object, run_id: str, event_type: object, **kwargs: object
-        ) -> None:
+        def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_types.append(str(event_type))
 
         with (
@@ -816,9 +754,7 @@ class TestFailedConflictResolution:
         Test ID: TS-03-14
         Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
-        patches = [
-            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
-        ]
+        patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
         config = _make_config(auto_resolve=True, max_resolve_retries=3)
         engine = _make_engine(coder_session_raises=RuntimeError("coder failed"))
@@ -875,9 +811,7 @@ class TestConflictResolutionContext:
         )
         config = _make_config(auto_resolve=True)
         engine = _make_engine()
-        monitor = _make_monitor(
-            hub_client=hub_client, config=config, engine=engine
-        )
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
         with (
             patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
@@ -899,20 +833,12 @@ class TestConflictResolutionContext:
         # Extract context dict from call args or kwargs
         all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
         ctx_candidates = [v for v in all_values if isinstance(v, dict)]
-        assert ctx_candidates, (
-            "coder session must receive a context dict argument"
-        )
+        assert ctx_candidates, "coder session must receive a context dict argument"
         ctx = ctx_candidates[0]
 
-        assert ctx["patch_description"] == "Fix auth bug", (
-            "patch_description must come from PatchDetail.description"
-        )
-        assert ctx["conflict_files"] == ["auth.py"], (
-            "conflict_files must come from PatchDetail.conflict_files"
-        )
-        assert "diff" in ctx["upstream_context"], (
-            "upstream_context must contain git diff output"
-        )
+        assert ctx["patch_description"] == "Fix auth bug", "patch_description must come from PatchDetail.description"
+        assert ctx["conflict_files"] == ["auth.py"], "conflict_files must come from PatchDetail.conflict_files"
+        assert "diff" in ctx["upstream_context"], "upstream_context must contain git diff output"
         assert ctx["rerere_resolutions"] == ["auth.py"], (
             "rerere_resolutions must be path strings extracted from RerereEntry"
         )
@@ -940,9 +866,7 @@ class TestConflictResolutionContext:
         hub_client = _make_hub_client(patches=patches, rerere_entries=entries)
         config = _make_config(auto_resolve=True)
         engine = _make_engine()
-        monitor = _make_monitor(
-            hub_client=hub_client, config=config, engine=engine
-        )
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
         with (
             patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
@@ -964,9 +888,7 @@ class TestConflictResolutionContext:
         # Path strings, NOT RerereEntry objects
         assert ctx["rerere_resolutions"] == ["a.py", "b.py"]
         for item in ctx["rerere_resolutions"]:
-            assert isinstance(item, str), (
-                f"rerere_resolutions items must be str, got {type(item)}"
-            )
+            assert isinstance(item, str), f"rerere_resolutions items must be str, got {type(item)}"
 
     async def test_patch_description_defaults_to_empty_string_when_none(
         self,
@@ -991,9 +913,7 @@ class TestConflictResolutionContext:
         hub_client = _make_hub_client(patches=patches)
         config = _make_config(auto_resolve=True)
         engine = _make_engine()
-        monitor = _make_monitor(
-            hub_client=hub_client, config=config, engine=engine
-        )
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
         with (
             patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
@@ -1011,13 +931,9 @@ class TestConflictResolutionContext:
         call_kwargs = engine._run_coder_session.call_args
         all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
         ctx = next(v for v in all_values if isinstance(v, dict))
-        assert ctx["patch_description"] == "", (
-            "patch_description must be '' when description is None"
-        )
+        assert ctx["patch_description"] == "", "patch_description must be '' when description is None"
 
-    async def test_list_rerere_exception_passes_empty_list(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_list_rerere_exception_passes_empty_list(self, caplog: pytest.LogCaptureFixture) -> None:
         """When list_rerere raises, rerere_resolutions is [] and coder proceeds.
 
         Requirements: 03-REQ-4.E1
@@ -1034,14 +950,10 @@ class TestConflictResolutionContext:
             )
         ]
         hub_client = _make_hub_client(patches=patches)
-        hub_client.list_rerere = AsyncMock(
-            side_effect=ConnectionError("rerere service down")
-        )
+        hub_client.list_rerere = AsyncMock(side_effect=ConnectionError("rerere service down"))
         config = _make_config(auto_resolve=True)
         engine = _make_engine()
-        monitor = _make_monitor(
-            hub_client=hub_client, config=config, engine=engine
-        )
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
         with (
             caplog.at_level(logging.WARNING),
@@ -1061,20 +973,14 @@ class TestConflictResolutionContext:
         call_kwargs = engine._run_coder_session.call_args
         all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
         ctx = next(v for v in all_values if isinstance(v, dict))
-        assert ctx["rerere_resolutions"] == [], (
-            "rerere_resolutions must be [] when list_rerere raises"
-        )
+        assert ctx["rerere_resolutions"] == [], "rerere_resolutions must be [] when list_rerere raises"
 
         # Warning logged
-        assert any(
-            "rerere" in r.message.lower()
-            for r in caplog.records
-            if r.levelno >= logging.WARNING
-        ), "warning about rerere failure must be logged"
+        assert any("rerere" in r.message.lower() for r in caplog.records if r.levelno >= logging.WARNING), (
+            "warning about rerere failure must be logged"
+        )
 
-    async def test_git_diff_failure_passes_empty_upstream_context(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_git_diff_failure_passes_empty_upstream_context(self, caplog: pytest.LogCaptureFixture) -> None:
         """When git diff fails, upstream_context is '' and coder proceeds.
 
         Requirements: 03-REQ-4.E2
@@ -1096,9 +1002,7 @@ class TestConflictResolutionContext:
         )
         config = _make_config(auto_resolve=True)
         engine = _make_engine()
-        monitor = _make_monitor(
-            hub_client=hub_client, config=config, engine=engine
-        )
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
         with (
             caplog.at_level(logging.WARNING),
@@ -1117,9 +1021,7 @@ class TestConflictResolutionContext:
         call_kwargs = engine._run_coder_session.call_args
         all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
         ctx = next(v for v in all_values if isinstance(v, dict))
-        assert ctx["upstream_context"] == "", (
-            "upstream_context must be '' when git diff fails"
-        )
+        assert ctx["upstream_context"] == "", "upstream_context must be '' when git diff fails"
 
 
 # ---------------------------------------------------------------------------
@@ -1157,9 +1059,7 @@ class TestRerereReadOnly:
 
         config = _make_config(auto_resolve=True)
         engine = _make_engine()
-        monitor = _make_monitor(
-            hub_client=hub_client, config=config, engine=engine
-        )
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
         with (
             patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
@@ -1201,21 +1101,15 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
         Test ID: TS-03-24
         Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
-        patches = [
-            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
-        ]
+        patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
         config = _make_config(auto_resolve=True)
         engine = _make_engine()
-        monitor = _make_monitor(
-            hub_client=hub_client, config=config, engine=engine
-        )
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
         emitted_types: list[str] = []
 
-        def capture_emit(
-            sink: object, run_id: str, event_type: object, **kwargs: object
-        ) -> None:
+        def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_types.append(str(event_type))
 
         with (
@@ -1234,8 +1128,7 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
         from afaudit.events import AuditEventType  # noqa: PLC0415
 
         assert str(AuditEventType.CARRY_PATCH_CONFLICT_DETECTED) in emitted_types, (
-            "CARRY_PATCH_CONFLICT_DETECTED audit event must be emitted "
-            "when a conflict patch is found"
+            "CARRY_PATCH_CONFLICT_DETECTED audit event must be emitted when a conflict patch is found"
         )
 
     async def test_merged_detected_audit_event_emitted(self) -> None:
@@ -1245,18 +1138,14 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
         Test ID: TS-03-24
         Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
-        patches = [
-            _PatchDetail(id="p1", status="merged_upstream", branch_name="fix/p1")
-        ]
+        patches = [_PatchDetail(id="p1", status="merged_upstream", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
         config = _make_config()
         monitor = _make_monitor(hub_client=hub_client, config=config)
 
         emitted_types: list[str] = []
 
-        def capture_emit(
-            sink: object, run_id: str, event_type: object, **kwargs: object
-        ) -> None:
+        def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_types.append(str(event_type))
 
         with patch("afaudit.emit.emit_audit_event", side_effect=capture_emit):
@@ -1266,8 +1155,7 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
         from afaudit.events import AuditEventType  # noqa: PLC0415
 
         assert str(AuditEventType.CARRY_PATCH_MERGED_DETECTED) in emitted_types, (
-            "CARRY_PATCH_MERGED_DETECTED audit event must be emitted "
-            "for merged_upstream patches"
+            "CARRY_PATCH_MERGED_DETECTED audit event must be emitted for merged_upstream patches"
         )
 
     async def test_audit_event_emission_failure_does_not_abort_cycle(
@@ -1279,15 +1167,11 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
         Test ID: TS-03-24
         Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
-        patches = [
-            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
-        ]
+        patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
         config = _make_config(auto_resolve=True)
         engine = _make_engine()
-        monitor = _make_monitor(
-            hub_client=hub_client, config=config, engine=engine
-        )
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
         with (
             patch(
@@ -1308,6 +1192,5 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
             result = await monitor.run_cycle()
 
         assert isinstance(result, MonitorCycleResult), (
-            "run_cycle must return MonitorCycleResult even when "
-            "audit emission fails"
+            "run_cycle must return MonitorCycleResult even when audit emission fails"
         )

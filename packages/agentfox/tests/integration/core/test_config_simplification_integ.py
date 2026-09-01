@@ -48,10 +48,7 @@ class TestHiddenSectionsLoad:
     def test_multiple_hidden_sections_load(self, tmp_path: Path):
         """Config with multiple hidden sections all load correctly."""
         base = generate_default_config()
-        extra = (
-            "\n[theme]\nplayful = true\n"
-            '\n[knowledge]\nstore_path = "custom.duckdb"\n'
-        )
+        extra = '\n[theme]\nplayful = true\n\n[knowledge]\nstore_path = "custom.duckdb"\n'
         content = base + extra
         config_file = tmp_path / "config.toml"
         config_file.write_text(content)

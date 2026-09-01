@@ -18,9 +18,7 @@ if TYPE_CHECKING:
     from afhub.client import HubClient
     from afhub.models import RebuildJob, Workspace
 
-_TERMINAL_REBUILD_STATUSES = frozenset(
-    {"completed", "failed", "dead_letter", "cancelled"}
-)
+_TERMINAL_REBUILD_STATUSES = frozenset({"completed", "failed", "dead_letter", "cancelled"})
 
 
 async def poll_rebuild(
@@ -54,8 +52,7 @@ async def poll_rebuild(
             return job
         if time.monotonic() - start >= timeout:
             raise TimeoutError(
-                f"poll_rebuild timed out after {timeout}s waiting for "
-                f"rebuild {rebuild_id!r} in workspace {slug!r}"
+                f"poll_rebuild timed out after {timeout}s waiting for rebuild {rebuild_id!r} in workspace {slug!r}"
             )
         await asyncio.sleep(interval)
 
@@ -87,11 +84,7 @@ async def poll_clone_ready(
         if ws.clone_status == "ready":
             return ws
         if ws.clone_status == "failed":
-            message = (
-                ws.clone_error
-                if ws.clone_error
-                else "Workspace clone failed"
-            )
+            message = ws.clone_error if ws.clone_error else "Workspace clone failed"
             raise HubError(
                 status_code=0,
                 error_type="clone_failed",
@@ -99,7 +92,6 @@ async def poll_clone_ready(
             )
         if time.monotonic() - start >= timeout:
             raise TimeoutError(
-                f"poll_clone_ready timed out after {timeout}s waiting for "
-                f"workspace {slug!r} clone to become ready"
+                f"poll_clone_ready timed out after {timeout}s waiting for workspace {slug!r} clone to become ready"
             )
         await asyncio.sleep(interval)

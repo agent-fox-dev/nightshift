@@ -121,9 +121,7 @@ def _extract_group_numbers(items):
 class TestFallbackOrdering:
     """NS-REQ-4: Falls back to ascending task-group order when no footprint."""
 
-    def test_none_footprint_preserves_ascending_order(
-        self, provider_db, provider_conn
-    ):
+    def test_none_footprint_preserves_ascending_order(self, provider_db, provider_conn):
         """file_footprint=None -> ascending group order (1, 2, 3)."""
         _insert_groups(provider_conn, [1, 2, 3])
 
@@ -139,13 +137,9 @@ class TestFallbackOrdering:
         context_items = [i for i in items if i.startswith("[CONTEXT]")]
         groups = _extract_group_numbers(context_items)
 
-        assert groups == [1, 2, 3], (
-            f"Expected ascending order [1, 2, 3] with None footprint; got {groups}"
-        )
+        assert groups == [1, 2, 3], f"Expected ascending order [1, 2, 3] with None footprint; got {groups}"
 
-    def test_empty_footprint_preserves_ascending_order(
-        self, provider_db, provider_conn
-    ):
+    def test_empty_footprint_preserves_ascending_order(self, provider_db, provider_conn):
         """file_footprint=[] -> ascending group order (1, 2, 3)."""
         _insert_groups(provider_conn, [1, 2, 3])
 
@@ -161,8 +155,4 @@ class TestFallbackOrdering:
         context_items = [i for i in items if i.startswith("[CONTEXT]")]
         groups = _extract_group_numbers(context_items)
 
-        assert groups == [1, 2, 3], (
-            f"Expected ascending order [1, 2, 3] with empty footprint; got {groups}"
-        )
-
-
+        assert groups == [1, 2, 3], f"Expected ascending order [1, 2, 3] with empty footprint; got {groups}"

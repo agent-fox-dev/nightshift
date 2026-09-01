@@ -54,8 +54,7 @@ class TestCarryPatchModeConfig:
         """
         coder_entry = ARCHETYPE_REGISTRY["coder"]
         assert "carry-patch" in coder_entry.modes, (
-            "coder archetype must register a 'carry-patch' mode in its "
-            "modes dict (03-REQ-5.1)"
+            "coder archetype must register a 'carry-patch' mode in its modes dict (03-REQ-5.1)"
         )
 
     def test_carry_patch_mode_config_has_correct_fields(self) -> None:
@@ -66,23 +65,13 @@ class TestCarryPatchModeConfig:
         Fails: 'carry-patch' mode not yet registered (group 8 pending)
         """
         coder_entry = ARCHETYPE_REGISTRY["coder"]
-        assert "carry-patch" in coder_entry.modes, (
-            "carry-patch mode must exist before checking its fields"
-        )
+        assert "carry-patch" in coder_entry.modes, "carry-patch mode must exist before checking its fields"
         mode_cfg = coder_entry.modes["carry-patch"]
         assert isinstance(mode_cfg, ModeConfig)
-        assert mode_cfg.model_tier == "STANDARD", (
-            f"model_tier must be 'STANDARD', got {mode_cfg.model_tier!r}"
-        )
-        assert mode_cfg.max_turns == 200, (
-            f"max_turns must be 200, got {mode_cfg.max_turns!r}"
-        )
-        assert mode_cfg.thinking_mode == "adaptive", (
-            f"thinking_mode must be 'adaptive', got {mode_cfg.thinking_mode!r}"
-        )
-        assert mode_cfg.effort == "high", (
-            f"effort must be 'high', got {mode_cfg.effort!r}"
-        )
+        assert mode_cfg.model_tier == "STANDARD", f"model_tier must be 'STANDARD', got {mode_cfg.model_tier!r}"
+        assert mode_cfg.max_turns == 200, f"max_turns must be 200, got {mode_cfg.max_turns!r}"
+        assert mode_cfg.thinking_mode == "adaptive", f"thinking_mode must be 'adaptive', got {mode_cfg.thinking_mode!r}"
+        assert mode_cfg.effort == "high", f"effort must be 'high', got {mode_cfg.effort!r}"
 
     def test_resolve_effective_config_applies_carry_patch_mode(self) -> None:
         """resolve_effective_config('coder', 'carry-patch') returns resolved entry.
@@ -108,14 +97,11 @@ class TestCarryPatchModeConfig:
         Test ID: TS-03-17
         Fails: 'carry-patch' mode not yet registered (group 8 pending)
         """
-        assert "coder" in ARCHETYPE_REGISTRY, (
-            "coder archetype must exist in ARCHETYPE_REGISTRY"
-        )
+        assert "coder" in ARCHETYPE_REGISTRY, "coder archetype must exist in ARCHETYPE_REGISTRY"
         entry = ARCHETYPE_REGISTRY["coder"]
         mode_cfg = entry.modes.get("carry-patch")
         assert mode_cfg is not None, (
-            "'carry-patch' mode must be importable from the coder archetype "
-            "registry at runtime"
+            "'carry-patch' mode must be importable from the coder archetype registry at runtime"
         )
 
 
@@ -180,9 +166,7 @@ class TestCoderCarryPatchProfileTemplate:
         Fails: template file not yet created (group 8 pending)
         """
         template_path = _TEMPLATES_DIR / "coder_carry-patch.md"
-        assert template_path.exists(), (
-            f"Profile template must exist at {template_path}"
-        )
+        assert template_path.exists(), f"Profile template must exist at {template_path}"
 
     def test_profile_template_is_non_empty(self) -> None:
         """coder_carry-patch.md is non-empty.
@@ -192,13 +176,9 @@ class TestCoderCarryPatchProfileTemplate:
         Fails: template file not yet created (group 8 pending)
         """
         template_path = _TEMPLATES_DIR / "coder_carry-patch.md"
-        assert template_path.exists(), (
-            f"Template file must exist: {template_path}"
-        )
+        assert template_path.exists(), f"Template file must exist: {template_path}"
         content = template_path.read_text()
-        assert len(content.strip()) > 0, (
-            "Profile template must not be empty"
-        )
+        assert len(content.strip()) > 0, "Profile template must not be empty"
 
     def test_profile_template_contains_patch_intent_instruction(self) -> None:
         """Template instructs preserving the patch's original intent.
@@ -224,9 +204,7 @@ class TestCoderCarryPatchProfileTemplate:
         template_path = _TEMPLATES_DIR / "coder_carry-patch.md"
         assert template_path.exists(), f"Template missing: {template_path}"
         content = template_path.read_text().lower()
-        assert "conflict" in content, (
-            "Template must contain instructions about conflict files"
-        )
+        assert "conflict" in content, "Template must contain instructions about conflict files"
 
     def test_profile_template_contains_conventional_commit_instruction(
         self,
@@ -241,8 +219,7 @@ class TestCoderCarryPatchProfileTemplate:
         assert template_path.exists(), f"Template missing: {template_path}"
         content = template_path.read_text()
         assert "fix: resolve conflict" in content, (
-            "Template must contain 'fix: resolve conflict' conventional "
-            "commit instruction"
+            "Template must contain 'fix: resolve conflict' conventional commit instruction"
         )
 
     def test_profile_template_contains_run_tests_instruction(self) -> None:
@@ -255,9 +232,7 @@ class TestCoderCarryPatchProfileTemplate:
         template_path = _TEMPLATES_DIR / "coder_carry-patch.md"
         assert template_path.exists(), f"Template missing: {template_path}"
         content = template_path.read_text().lower()
-        assert "test" in content, (
-            "Template must contain instructions about running tests"
-        )
+        assert "test" in content, "Template must contain instructions about running tests"
 
     def test_profile_template_contains_commit_body_explanation(self) -> None:
         """Template instructs explaining the resolution in the commit body.
@@ -269,9 +244,8 @@ class TestCoderCarryPatchProfileTemplate:
         template_path = _TEMPLATES_DIR / "coder_carry-patch.md"
         assert template_path.exists(), f"Template missing: {template_path}"
         content = template_path.read_text().lower()
-        assert ("commit message" in content or "body" in content), (
-            "Template must contain instructions about explaining the "
-            "resolution in the commit message body"
+        assert "commit message" in content or "body" in content, (
+            "Template must contain instructions about explaining the resolution in the commit message body"
         )
 
     def test_profile_template_missing_raises_file_not_found(self) -> None:

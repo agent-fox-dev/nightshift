@@ -242,21 +242,6 @@ def resolve_effective_config(
     )
 
 
-def _resolve_custom_preset(
-    name: str,
-    config: AgentFoxConfig | None,  # noqa: ARG001
-) -> str:
-    """Resolve the permission preset name for a custom archetype.
-
-    Returns ``'coder'`` — custom permission presets are not supported.
-    """
-    logger.warning(
-        "Custom archetype '%s' has no permission preset in config; defaulting to 'coder' permissions",
-        name,
-    )
-    return "coder"
-
-
 def get_archetype(
     name: str,
     *,
@@ -299,17 +284,11 @@ def get_archetype(
         from agentfox.session.profiles import has_custom_profile
 
         if has_custom_profile(name, project_dir):
-            preset_name = _resolve_custom_preset(name, config)
-            preset_entry = ARCHETYPE_REGISTRY.get(preset_name)
-            if preset_entry is None:
-                from agentfox.core.errors import ConfigError
-
-                raise ConfigError(
-                    f"Custom archetype '{name}' references invalid permission "
-                    f"preset '{preset_name}'. Valid built-in archetypes: "
-                    f"{list(ARCHETYPE_REGISTRY.keys())}",
-                )
-            return dataclasses.replace(preset_entry, name=name)
+            logger.warning(
+                "Custom archetype '%s' has no permission preset in config; defaulting to 'coder' permissions",
+                name,
+            )
+            return dataclasses.replace(ARCHETYPE_REGISTRY["coder"], name=name)
 
     # 3. Final fallback to coder
     logger.warning("Unknown archetype '%s', falling back to 'coder'", name)

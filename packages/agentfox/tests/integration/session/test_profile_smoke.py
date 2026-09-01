@@ -161,5 +161,3 @@ class TestCustomArchetypeSession:
 # Execution Path 4 + Path 2 from design.md
 # Requirements: 99-REQ-3.1, 99-REQ-5.1, 99-REQ-5.2
 # ---------------------------------------------------------------------------
-
-

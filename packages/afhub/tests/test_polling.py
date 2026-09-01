@@ -33,92 +33,62 @@ class TestPollRebuild:
 
     async def test_returns_terminal_rebuild_job_completed(self) -> None:
         """poll_rebuild returns the RebuildJob when status is 'completed'."""
-        non_terminal = RebuildJob(
-            id="job-1", status="running", created_at="2026-01-01T00:00:00Z"
-        )
-        terminal = RebuildJob(
-            id="job-1", status="completed", created_at="2026-01-01T00:00:00Z"
-        )
+        non_terminal = RebuildJob(id="job-1", status="running", created_at="2026-01-01T00:00:00Z")
+        terminal = RebuildJob(id="job-1", status="completed", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
         client.get_rebuild = AsyncMock(side_effect=[non_terminal, terminal])
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await poll_rebuild(
-                client, "ws1", "job-1", timeout=600.0, interval=5.0
-            )
+            result = await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
             assert result.status == "completed"
             mock_sleep.assert_called_with(5.0)
 
     async def test_sleeps_between_non_terminal_polls(self) -> None:
         """poll_rebuild calls asyncio.sleep(interval) between non-terminal polls."""
-        non_terminal = RebuildJob(
-            id="job-1", status="running", created_at="2026-01-01T00:00:00Z"
-        )
-        terminal = RebuildJob(
-            id="job-1", status="completed", created_at="2026-01-01T00:00:00Z"
-        )
+        non_terminal = RebuildJob(id="job-1", status="running", created_at="2026-01-01T00:00:00Z")
+        terminal = RebuildJob(id="job-1", status="completed", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
-        client.get_rebuild = AsyncMock(
-            side_effect=[non_terminal, non_terminal, terminal]
-        )
+        client.get_rebuild = AsyncMock(side_effect=[non_terminal, non_terminal, terminal])
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await poll_rebuild(
-                client, "ws1", "job-1", timeout=600.0, interval=5.0
-            )
+            await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
             assert mock_sleep.call_count == 2
 
     async def test_terminal_status_failed(self) -> None:
         """poll_rebuild returns when status is 'failed'."""
-        terminal = RebuildJob(
-            id="job-1", status="failed", created_at="2026-01-01T00:00:00Z"
-        )
+        terminal = RebuildJob(id="job-1", status="failed", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
         client.get_rebuild = AsyncMock(return_value=terminal)
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await poll_rebuild(
-                client, "ws1", "job-1", timeout=600.0, interval=5.0
-            )
+            result = await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
             assert result.status == "failed"
             mock_sleep.assert_not_called()
 
     async def test_terminal_status_dead_letter(self) -> None:
         """poll_rebuild returns when status is 'dead_letter'."""
-        terminal = RebuildJob(
-            id="job-1", status="dead_letter", created_at="2026-01-01T00:00:00Z"
-        )
+        terminal = RebuildJob(id="job-1", status="dead_letter", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
         client.get_rebuild = AsyncMock(return_value=terminal)
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result = await poll_rebuild(
-                client, "ws1", "job-1", timeout=600.0, interval=5.0
-            )
+            result = await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
             assert result.status == "dead_letter"
 
     async def test_terminal_status_cancelled(self) -> None:
         """poll_rebuild returns when status is 'cancelled'."""
-        terminal = RebuildJob(
-            id="job-1", status="cancelled", created_at="2026-01-01T00:00:00Z"
-        )
+        terminal = RebuildJob(id="job-1", status="cancelled", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
         client.get_rebuild = AsyncMock(return_value=terminal)
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result = await poll_rebuild(
-                client, "ws1", "job-1", timeout=600.0, interval=5.0
-            )
+            result = await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
             assert result.status == "cancelled"
 
     async def test_first_poll_is_immediate_no_preceding_sleep(self) -> None:
         """poll_rebuild calls get_rebuild immediately without sleeping first
         (01-REQ-8.1).
         """
-        terminal = RebuildJob(
-            id="job-1", status="completed", created_at="2026-01-01T00:00:00Z"
-        )
+        terminal = RebuildJob(id="job-1", status="completed", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
         client.get_rebuild = AsyncMock(return_value=terminal)
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await poll_rebuild(
-                client, "ws1", "job-1", timeout=600.0, interval=5.0
-            )
+            await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
             # Terminal on first poll -> no sleep at all
             mock_sleep.assert_not_called()
             client.get_rebuild.assert_called_once()
@@ -127,18 +97,12 @@ class TestPollRebuild:
         """poll_rebuild does not issue further get_rebuild calls after
         observing a terminal status (01-PROP-8).
         """
-        non_terminal = RebuildJob(
-            id="job-1", status="running", created_at="2026-01-01T00:00:00Z"
-        )
-        terminal = RebuildJob(
-            id="job-1", status="completed", created_at="2026-01-01T00:00:00Z"
-        )
+        non_terminal = RebuildJob(id="job-1", status="running", created_at="2026-01-01T00:00:00Z")
+        terminal = RebuildJob(id="job-1", status="completed", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
         client.get_rebuild = AsyncMock(side_effect=[non_terminal, terminal])
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await poll_rebuild(
-                client, "ws1", "job-1", timeout=600.0, interval=5.0
-            )
+            await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
             assert client.get_rebuild.call_count == 2
 
 
@@ -156,30 +120,22 @@ class TestPollRebuildTimeout:
 
     async def test_raises_timeout_error_when_no_terminal_status(self) -> None:
         """poll_rebuild raises TimeoutError when timeout elapses."""
-        non_terminal = RebuildJob(
-            id="job-1", status="running", created_at="2026-01-01T00:00:00Z"
-        )
+        non_terminal = RebuildJob(id="job-1", status="running", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
         client.get_rebuild = AsyncMock(return_value=non_terminal)
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(TimeoutError):
-                await poll_rebuild(
-                    client, "ws1", "job-1", timeout=0.0, interval=5.0
-                )
+                await poll_rebuild(client, "ws1", "job-1", timeout=0.0, interval=5.0)
 
     async def test_timeout_zero_returns_terminal_immediately(self) -> None:
         """poll_rebuild with timeout=0 returns terminal RebuildJob if first
         poll is terminal (01-REQ-8.E6).
         """
-        terminal = RebuildJob(
-            id="job-1", status="completed", created_at="2026-01-01T00:00:00Z"
-        )
+        terminal = RebuildJob(id="job-1", status="completed", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
         client.get_rebuild = AsyncMock(return_value=terminal)
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result = await poll_rebuild(
-                client, "ws1", "job-1", timeout=0.0, interval=5.0
-            )
+            result = await poll_rebuild(client, "ws1", "job-1", timeout=0.0, interval=5.0)
             assert result.status == "completed"
 
 
@@ -207,9 +163,7 @@ class TestPollRebuildConnectionError:
         )
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HubConnectionError):
-                await poll_rebuild(
-                    client, "ws1", "job-1", timeout=600.0, interval=5.0
-                )
+                await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +199,7 @@ class TestPollCloneReady:
         client = MagicMock()
         client.get_workspace = AsyncMock(side_effect=[pending_ws, ready_ws])
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await poll_clone_ready(
-                client, "ws1", timeout=300.0, interval=5.0
-            )
+            result = await poll_clone_ready(client, "ws1", timeout=300.0, interval=5.0)
             assert result.clone_status == "ready"
             mock_sleep.assert_called_with(5.0)
 
@@ -270,13 +222,9 @@ class TestPollCloneReady:
             sync_status="ok",
         )
         client = MagicMock()
-        client.get_workspace = AsyncMock(
-            side_effect=[pending_ws, pending_ws, ready_ws]
-        )
+        client.get_workspace = AsyncMock(side_effect=[pending_ws, pending_ws, ready_ws])
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await poll_clone_ready(
-                client, "ws1", timeout=300.0, interval=5.0
-            )
+            await poll_clone_ready(client, "ws1", timeout=300.0, interval=5.0)
             assert mock_sleep.call_count == 2
 
 
@@ -392,9 +340,7 @@ class TestPollCloneReadyTimeout:
         client.get_workspace = AsyncMock(return_value=pending_ws)
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(TimeoutError):
-                await poll_clone_ready(
-                    client, "ws1", timeout=0.0, interval=5.0
-                )
+                await poll_clone_ready(client, "ws1", timeout=0.0, interval=5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -421,9 +367,7 @@ class TestPollCloneReadyConnectionError:
         )
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HubConnectionError):
-                await poll_clone_ready(
-                    client, "ws1", timeout=300.0, interval=5.0
-                )
+                await poll_clone_ready(client, "ws1", timeout=300.0, interval=5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -440,18 +384,12 @@ class TestPollSleepPatching:
 
     async def test_poll_rebuild_sleep_call_count_verifiable(self) -> None:
         """asyncio.sleep call count is verifiable during poll_rebuild."""
-        non_terminal = RebuildJob(
-            id="job-1", status="running", created_at="2026-01-01T00:00:00Z"
-        )
-        terminal = RebuildJob(
-            id="job-1", status="completed", created_at="2026-01-01T00:00:00Z"
-        )
+        non_terminal = RebuildJob(id="job-1", status="running", created_at="2026-01-01T00:00:00Z")
+        terminal = RebuildJob(id="job-1", status="completed", created_at="2026-01-01T00:00:00Z")
         client = MagicMock()
         client.get_rebuild = AsyncMock(side_effect=[non_terminal, terminal])
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await poll_rebuild(
-                client, "ws1", "job-1", timeout=600.0, interval=5.0
-            )
+            await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
             assert mock_sleep.call_count == 1
             mock_sleep.assert_called_with(5.0)
 
@@ -476,8 +414,6 @@ class TestPollSleepPatching:
         client = MagicMock()
         client.get_workspace = AsyncMock(side_effect=[pending_ws, ready_ws])
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            await poll_clone_ready(
-                client, "ws1", timeout=300.0, interval=5.0
-            )
+            await poll_clone_ready(client, "ws1", timeout=300.0, interval=5.0)
             assert mock_sleep.call_count == 1
             mock_sleep.assert_called_with(5.0)

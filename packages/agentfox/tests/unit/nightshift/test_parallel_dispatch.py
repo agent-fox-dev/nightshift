@@ -214,12 +214,8 @@ class TestDependencyAwareScheduling:
 
         # Extract start events
         starts = [num for event, num in dispatch_log if event == "start"]
-        a_end_idx = next(
-            i for i, (event, num) in enumerate(dispatch_log) if event == "end" and num == 1
-        )
-        b_start_idx = next(
-            i for i, (event, num) in enumerate(dispatch_log) if event == "start" and num == 2
-        )
+        a_end_idx = next(i for i, (event, num) in enumerate(dispatch_log) if event == "end" and num == 1)
+        b_start_idx = next(i for i, (event, num) in enumerate(dispatch_log) if event == "start" and num == 2)
 
         # A and C should start before A ends (concurrent)
         assert 1 in starts
@@ -359,9 +355,7 @@ class TestInFlightStalenessExclusion:
             "agentfox.nightshift.staleness._run_ai_staleness",
             AsyncMock(return_value=ai_result),
         ):
-            result = await check_staleness(
-                fixed, remaining, "", config, mock_platform, in_flight=set()
-            )
+            result = await check_staleness(fixed, remaining, "", config, mock_platform, in_flight=set())
 
         assert 2 in result.obsolete_issues
 
@@ -435,8 +429,7 @@ class TestSerialProcessingWithMaxParallelOne:
             if event == "start":
                 # The next event for this issue should be "end" before any other "start"
                 assert next_event == "end" and next_num == num, (
-                    f"Expected end of {num} before any other start, "
-                    f"got {next_event} {next_num}"
+                    f"Expected end of {num} before any other start, got {next_event} {next_num}"
                 )
 
 
