@@ -1,12 +1,13 @@
-"""Carry-patch startup — CWD validation and workspace variable init.
+"""Carry-patch startup — CWD validation, config generation, and variable init.
 
-Implements REQ-3 (CWD validation sequence) from spec 02_carry_patch_bootstrap.
-REQ-4 (config generation) and REQ-5 (variable init) pending groups 8–9.
+Implements REQ-3 (CWD validation sequence) and REQ-4 (config generation)
+from spec 02_carry_patch_bootstrap.  REQ-5 (variable init) pending group 9.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -138,4 +139,69 @@ async def startup_helper(
     # -- Step 6: Validation succeeded (REQ-3.11) ----------------------------
     logger.info("CWD validation succeeded for workspace %s", slug)
 
+    # -- Step 7: Generate default config if absent (REQ-4) ------------------
+    _maybe_generate_config(hub_url=hub_url, slug=slug, workspace=workspace)
+
     return hub_client
+
+
+def _maybe_generate_config(
+    *,
+    hub_url: str,
+    slug: str,
+    workspace: object,
+) -> None:
+    """Generate ``.nightshift/config.toml`` if it does not already exist.
+
+    The file is written atomically via a ``.tmp`` intermediate and then
+    renamed.  Any OS-level error is logged as a warning and does **not**
+    abort startup.
+
+    Requirements: 02-REQ-4.1, 02-REQ-4.2, 02-REQ-4.3, 02-REQ-4.4,
+                  02-REQ-4.5, 02-REQ-4.E1, 02-REQ-4.E2
+    """
+    cwd = os.getcwd()
+    config_dir = os.path.join(cwd, ".nightshift")
+    config_path = os.path.join(config_dir, "config.toml")
+    tmp_path = os.path.join(config_dir, "config.toml.tmp")
+
+    # REQ-4.2: skip entirely if config already exists
+    if os.path.exists(config_path):
+        return
+
+    # Build TOML content — PAT is never written (REQ-4.5)
+    integration_branch = getattr(workspace, "integration_branch", None)
+    if integration_branch is None:
+        integration_branch = ""
+
+    content = (
+        f"[hub]\n"
+        f'endpoint_url = "{hub_url}"\n'
+        f"\n"
+        f"[carry_patch]\n"
+        f"enabled = true\n"
+        f'workspace = "{slug}"\n'
+        f"check_interval = 300\n"
+        f"auto_resolve = true\n"
+        f"rebuild_timeout = 600\n"
+        f"rebuild_poll_interval = 5\n"
+        f"max_resolve_retries = 2\n"
+        f"\n"
+        f"[workspace]\n"
+        f'integration_branch = "{integration_branch}"\n'
+        f'merge_strategy = "direct"\n'
+    )
+
+    try:
+        # REQ-4.E1: create directory if absent; no-op if it already exists
+        os.makedirs(config_dir, exist_ok=True)
+
+        # Write to temp file first (UTF-8)
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # Atomic rename — REQ-4.1
+        os.rename(tmp_path, config_path)
+    except OSError as exc:
+        # REQ-4.4, REQ-4.E2: non-fatal — log warning and continue
+        logger.warning("Failed to write .nightshift/config.toml: %s", exc)

@@ -628,9 +628,12 @@ def _valid_workspace(**overrides: object) -> Workspace:
     Override individual fields to trigger specific failure modes.
     """
     defaults: dict[str, object] = {
+        "slug": _VALID_SLUG,
         "workspace_mode": "carry_patch",
         "clone_status": "ready",
         "git_url": _VALID_GIT_URL,
+        "status": "active",
+        "sync_status": "synced",
     }
     defaults.update(overrides)
     return Workspace(**defaults)  # type: ignore[arg-type]
