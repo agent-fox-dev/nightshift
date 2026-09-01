@@ -45,16 +45,16 @@ monitoring stream in the daemon.
 ## Tech Stack
 
 - Python 3.12+, asyncio
-- `packages/agentfox/agentfox/nightshift/fix_pipeline.py` — existing fix pipeline
-- `packages/agentfox/agentfox/nightshift/streams.py` — stream registration
-- `packages/agentfox/agentfox/nightshift/engine.py` — engine method
-- `packages/agentfox/agentfox/nightshift/daemon.py` — display names
-- `packages/agentfox/agentfox/archetypes.py` — archetype mode registry
-- `packages/agentfox/agentfox/_templates/profiles/` — profile templates
+- `packages/afcore/afcore/nightshift/fix_pipeline.py` — existing fix pipeline
+- `packages/afcore/afcore/nightshift/streams.py` — stream registration
+- `packages/afcore/afcore/nightshift/engine.py` — engine method
+- `packages/afcore/afcore/nightshift/daemon.py` — display names
+- `packages/afcore/afcore/archetypes.py` — archetype mode registry
+- `packages/afcore/afcore/_templates/profiles/` — profile templates
 - `packages/afaudit/afaudit/events.py` — audit event types
 - `afhub` package (Spec 01_afhub_client): HubClient, poll_rebuild, HubConflictError,
   HubNoActivePatchesError, PatchStatusDashboard, RebuildJob
-- `agentfox.core.config`: AgentFoxConfig with CarryPatchConfig (Spec 02)
+- `afcore.core.config`: AgentFoxConfig with CarryPatchConfig (Spec 02)
 - Existing: `FixPipeline._run_coder_session()`, `run_git()`, `push_to_remote()`,
   `fetch_remote()`, `MergeLock`, `emit_audit_event()`
 
@@ -96,7 +96,7 @@ the local harvest/squash-merge with:
 
 ### REQ-2: CarryPatchMonitor class
 
-Create `packages/agentfox/agentfox/nightshift/carry_patch_monitor.py`:
+Create `packages/afcore/afcore/nightshift/carry_patch_monitor.py`:
 
 ```python
 class CarryPatchMonitor:
@@ -156,7 +156,7 @@ containing:
 
 ### REQ-5: Carry-patch archetype mode
 
-Add to `coder` archetype in `packages/agentfox/agentfox/archetypes.py`:
+Add to `coder` archetype in `packages/afcore/afcore/archetypes.py`:
 
 ```python
 "carry-patch": ModeConfig(
@@ -169,7 +169,7 @@ Add to `coder` archetype in `packages/agentfox/agentfox/archetypes.py`:
 
 ### REQ-6: Carry-patch profile template
 
-Create `packages/agentfox/agentfox/_templates/profiles/coder_carry-patch.md`.
+Create `packages/afcore/afcore/_templates/profiles/coder_carry-patch.md`.
 The profile instructs the agent to:
 - Preserve the patch's original intent (explain the intent from the provided description)
 - Adapt to upstream changes in the conflict files only — no unrelated refactoring
@@ -179,7 +179,7 @@ The profile instructs the agent to:
 
 ### REQ-7: Stream registration
 
-In `packages/agentfox/agentfox/nightshift/streams.py`, `build_streams()`
+In `packages/afcore/afcore/nightshift/streams.py`, `build_streams()`
 gains a new optional parameter: `hub_client: HubClient | None = None`. Updated
 signature: `build_streams(config: AgentFoxConfig, hub_client: HubClient | None = None, **existing_params)`.
 All existing callers in `engine.py` and `daemon.py` must be updated to pass the
@@ -193,10 +193,10 @@ The stream has:
 - `check_interval = config.carry_patch.check_interval`
 - `enabled = True`
 
-In `packages/agentfox/agentfox/nightshift/daemon.py`, add `"carry-patch"` to
+In `packages/afcore/afcore/nightshift/daemon.py`, add `"carry-patch"` to
 `_STREAM_DISPLAY_NAMES` and `_STREAM_ACTIVE_LABELS` dicts.
 
-In `packages/agentfox/agentfox/nightshift/engine.py`, add
+In `packages/afcore/afcore/nightshift/engine.py`, add
 `_run_carry_patch_monitor(self, slug: str) -> MonitorCycleResult` that
 delegates to a single `CarryPatchMonitor` instance stored on the engine (e.g.,
 `self._carry_patch_monitor`). The instance must be reused across all calls to
@@ -224,21 +224,21 @@ appropriate points in fix pipeline and monitor cycle.
 
 | File | Change |
 |------|--------|
-| `agentfox/nightshift/fix_pipeline.py` | Add patch registration + rebuild polling in carry-patch mode |
-| `agentfox/nightshift/carry_patch_monitor.py` | New: CarryPatchMonitor, MonitorCycleResult |
-| `agentfox/nightshift/streams.py` | Register carry-patch stream in build_streams() |
-| `agentfox/nightshift/engine.py` | Add _run_carry_patch_monitor() method |
-| `agentfox/nightshift/daemon.py` | Add carry-patch display name/label entries |
-| `agentfox/archetypes.py` | Add carry-patch ModeConfig to coder archetype |
-| `agentfox/_templates/profiles/coder_carry-patch.md` | New: conflict resolution profile |
+| `afcore/nightshift/fix_pipeline.py` | Add patch registration + rebuild polling in carry-patch mode |
+| `afcore/nightshift/carry_patch_monitor.py` | New: CarryPatchMonitor, MonitorCycleResult |
+| `afcore/nightshift/streams.py` | Register carry-patch stream in build_streams() |
+| `afcore/nightshift/engine.py` | Add _run_carry_patch_monitor() method |
+| `afcore/nightshift/daemon.py` | Add carry-patch display name/label entries |
+| `afcore/archetypes.py` | Add carry-patch ModeConfig to coder archetype |
+| `afcore/_templates/profiles/coder_carry-patch.md` | New: conflict resolution profile |
 | `afaudit/events.py` | Add 8 carry-patch audit event type constants |
 
 ## Test Files
 
 | File | Package | Coverage |
 |------|---------|----------|
-| `packages/agentfox/tests/test_carry_patch_monitor.py` | agentfox | MonitorCycleResult, run_cycle happy path and failures |
-| `packages/agentfox/tests/test_carry_patch_registration.py` | agentfox | Fix pipeline patch registration, concurrent rebuild handling |
-| `packages/agentfox/tests/test_carry_patch_stream.py` | agentfox | Stream enablement, disabled when hub not configured |
-| `packages/agentfox/tests/test_carry_patch_profile.py` | agentfox | Profile template loading, archetype mode presence |
+| `packages/afcore/tests/test_carry_patch_monitor.py` | afcore | MonitorCycleResult, run_cycle happy path and failures |
+| `packages/afcore/tests/test_carry_patch_registration.py` | afcore | Fix pipeline patch registration, concurrent rebuild handling |
+| `packages/afcore/tests/test_carry_patch_stream.py` | afcore | Stream enablement, disabled when hub not configured |
+| `packages/afcore/tests/test_carry_patch_profile.py` | afcore | Profile template loading, archetype mode presence |
 

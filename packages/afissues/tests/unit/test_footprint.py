@@ -20,7 +20,7 @@ _WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 _AFISSUES_SRC = _WORKSPACE_ROOT / "packages" / "afissues" / "afissues"
 
 # Workspace package names that must NOT appear in afissues source imports.
-_WORKSPACE_PKGS = ("agentfox", "afspec", "afaudit", "nightshift")
+_WORKSPACE_PKGS = ("afcore", "afspec", "afaudit", "nightshift")
 
 
 # ── TS-03-35: pip show afissues lists only httpx ─────────────────────
@@ -83,7 +83,7 @@ class TestWorkspaceImportIsolationProperty:
     """TS-03-P1: Every module in afissues/afissues/ is workspace-independent.
 
     Property invariant: for each module m in packages/afissues/afissues/,
-    m does not import from agentfox, afspec, afaudit, or nightshift.
+    m does not import from afcore, afspec, afaudit, or nightshift.
     """
 
     @pytest.fixture()

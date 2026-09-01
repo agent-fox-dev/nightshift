@@ -12,9 +12,9 @@ def init_knowledge(config, project_root):
     kdb = sink = kprov = None
     try:
         from afaudit.sink import SinkDispatcher
-        from agentfox.knowledge.db import open_knowledge_store
-        from agentfox.knowledge.duckdb_sink import DuckDBSink
-        from agentfox.knowledge.fox_provider import FoxKnowledgeProvider
+        from afcore.knowledge.db import open_knowledge_store
+        from afcore.knowledge.duckdb_sink import DuckDBSink
+        from afcore.knowledge.fox_provider import FoxKnowledgeProvider
 
         kdb = open_knowledge_store(config.knowledge, read_only=False)
         sink = SinkDispatcher([DuckDBSink(kdb.connection)])
@@ -23,8 +23,8 @@ def init_knowledge(config, project_root):
         logger.warning("Failed to open knowledge store", exc_info=True)
         return None, None, None
     # Run legacy migrations at startup via the canonical helper.
-    from agentfox.core.config import resolve_spec_root
-    from agentfox.engine.migrations import run_startup_migrations
+    from afcore.core.config import resolve_spec_root
+    from afcore.engine.migrations import run_startup_migrations
 
     specs = resolve_spec_root(config, project_root)
     try:
@@ -38,7 +38,7 @@ def wrap_task_callback(progress, om):
     """Bridge UI task events to JSONL when ``om.json_mode`` is active."""
     if not om.json_mode:
         return progress.task_callback
-    from agentfox.io.progress import ProgressDisplay as JsonlProgress
+    from afcore.io.progress import ProgressDisplay as JsonlProgress
 
     jl = JsonlProgress(output_manager=om, json_mode=True)
     ui_cb = progress.task_callback

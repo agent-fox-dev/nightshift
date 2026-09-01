@@ -2313,7 +2313,7 @@ class TestCheckCredentials503:
 # Requirement: 05-REQ-18.1
 # Note: The platform_factory integration test lives in this file temporarily
 #       since the factory only supports github currently. The factory test
-#       for gitea will be refactored to agentfox/nightshift/tests/ once
+#       for gitea will be refactored to afcore/nightshift/tests/ once
 #       spec 04 restructures the factory with multi-platform routing.
 # ===========================================================================
 
@@ -2322,7 +2322,7 @@ class TestPlatformFactoryGitea:
     """Verify GiteaPlatform can be constructed with expected parameters.
 
     The full factory integration test (create_platform with type='gitea')
-    lives in packages/agentfox/tests/unit/nightshift/test_platform_factory_gitea.py.
+    lives in packages/afcore/tests/unit/nightshift/test_platform_factory_gitea.py.
     This test verifies the afissues-side constructor contract.
     """
 

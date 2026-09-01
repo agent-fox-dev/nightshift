@@ -4,8 +4,8 @@ TS-01-25: ExecutionState satisfies PostmortemInput structurally
 TS-01-26: SessionRecord satisfies SessionRecordLike structurally
 TS-01-41: Protocol boundary tests run and pass via pytest
 
-These tests import both afaudit protocols and agentfox state classes
-to verify structural compatibility. They require agentfox to be installed.
+These tests import both afaudit protocols and afcore state classes
+to verify structural compatibility. They require afcore to be installed.
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ import typing
 
 import pytest
 
-# These imports require agentfox to be installed — mark as integration.
+# These imports require afcore to be installed — mark as integration.
 try:
-    from agentfox.engine.state import ExecutionState, SessionRecord
+    from afcore.engine.state import ExecutionState, SessionRecord
 
     _HAS_AGENTFOX = True
 except ImportError:
@@ -56,7 +56,7 @@ SESSION_RECORD_LIKE_ATTRS = {
 }
 
 
-@pytest.mark.skipif(not _HAS_AGENTFOX, reason="agentfox not installed")
+@pytest.mark.skipif(not _HAS_AGENTFOX, reason="afcore not installed")
 class TestExecutionStateSatisfiesPostmortemInput:
     """TS-01-25: ExecutionState has all 11 PostmortemInput attributes.
 
@@ -108,7 +108,7 @@ class TestExecutionStateSatisfiesPostmortemInput:
         assert isinstance(instance, PostmortemInput)
 
 
-@pytest.mark.skipif(not _HAS_AGENTFOX, reason="agentfox not installed")
+@pytest.mark.skipif(not _HAS_AGENTFOX, reason="afcore not installed")
 class TestSessionRecordSatisfiesSessionRecordLike:
     """TS-01-26: SessionRecord has all 12 SessionRecordLike attributes.
 

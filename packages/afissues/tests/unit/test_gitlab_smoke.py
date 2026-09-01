@@ -353,7 +353,7 @@ class TestSmokeSSRFBlocked:
 # Path: Lazy import of afissues.gitea → ImportError → ConfigError
 # Requirements: 04-REQ-21.1, 04-REQ-21.2
 #
-# Note: The full factory flow requires the agentfox package. This test
+# Note: The full factory flow requires the afcore package. This test
 # verifies the underlying concept at the afissues level: that the gitea
 # module exists and is importable, and that ConfigError is the correct
 # exception type for platform unavailability scenarios.

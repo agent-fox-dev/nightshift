@@ -49,9 +49,9 @@ def _make_mock_config() -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def _reset_agent_fox_logger() -> Generator[None, None, None]:
-    """Reset the agentfox logger after each test."""
+    """Reset the afcore logger after each test."""
     yield
-    agent_logger = logging.getLogger("agentfox")
+    agent_logger = logging.getLogger("afcore")
     agent_logger.setLevel(logging.NOTSET)
     agent_logger.handlers.clear()
 

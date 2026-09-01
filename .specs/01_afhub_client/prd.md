@@ -67,12 +67,12 @@ changes would require a new client version.
 
 - Python 3.12+, asyncio
 - `httpx` for async HTTP (already used by `afissues`); minimum version `httpx>=0.27`
-- `pydantic` v2 for data models (already used by `agentfox`); minimum version `pydantic>=2.0`
+- `pydantic` v2 for data models (already used by `afcore`); minimum version `pydantic>=2.0`
 - `pytest` + `pytest-asyncio` (`asyncio_mode=auto`) for testing
 - `unittest.mock.AsyncMock` / `MagicMock` for httpx mocking (no external mock
   library; matches the pattern in `packages/afissues/tests/`)
 - Package layout mirrors `packages/afissues/`
-- Lower-bound dependency versions match those used by `afissues` and `agentfox`
+- Lower-bound dependency versions match those used by `afissues` and `afcore`
   to avoid monorepo incompatibilities
 
 ## External API Surface
@@ -377,7 +377,7 @@ Breaking hub API changes require a new client version.
 
 ```
 packages/afhub/
-  pyproject.toml          # httpx>=0.27, pydantic>=2.0; matches afissues/agentfox lower bounds
+  pyproject.toml          # httpx>=0.27, pydantic>=2.0; matches afissues/afcore lower bounds
   afhub/
     __init__.py           # public exports (see below)
     client.py             # HubClient
@@ -418,4 +418,4 @@ The following symbols must be exported from `afhub.__init__`:
 - Python: `>=3.12`
 - Runtime dependencies: `httpx>=0.27`, `pydantic>=2.0`
 - Dev/test dependencies: `pytest`, `pytest-asyncio`
-- Lower bounds match those used by `afissues` and `agentfox` in the monorepo
+- Lower bounds match those used by `afissues` and `afcore` in the monorepo

@@ -50,7 +50,7 @@ class TestProp1StdoutStderrSeparation:
         """
         import io
 
-        from agentfox.io import OutputManager, ProgressDisplay
+        from afcore.io import OutputManager, ProgressDisplay
 
         stdout_buf = io.StringIO()
         stderr_buf = io.StringIO()
@@ -112,7 +112,7 @@ class TestPropFormatTableKeyAlignment:
     )
     def test_all_dicts_have_header_keys(self, headers: list[str], num_rows: int) -> None:
         """Every dict in format_table output has exactly the header keys."""
-        from agentfox.io import format_table
+        from afcore.io import format_table
 
         rows = []
         for _ in range(num_rows):
@@ -136,7 +136,7 @@ class TestPropOutputManagerSoleChannel:
         """om.emit() writes JSON to stdout stream."""
         import io
 
-        from agentfox.io import OutputManager
+        from afcore.io import OutputManager
 
         stdout_buf = io.StringIO()
         om = OutputManager(json_mode=True, stdout=stdout_buf)
@@ -151,7 +151,7 @@ class TestPropOutputManagerSoleChannel:
         """om.emit_progress() writes JSONL to stderr stream."""
         import io
 
-        from agentfox.io import OutputManager
+        from afcore.io import OutputManager
 
         stderr_buf = io.StringIO()
         om = OutputManager(json_mode=True, stderr=stderr_buf)

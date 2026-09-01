@@ -10,9 +10,9 @@ resolution-markers = [
 [manifest]
 members = [
     "afaudit",
+    "afcore",
     "afhub",
     "afissues",
-    "agentfox",
     "nightshift",
     "nightshift-workspace",
 ]
@@ -23,54 +23,9 @@ version = "0.9.0"
 source = { editable = "packages/afaudit" }
 
 [[package]]
-name = "afhub"
+name = "afcore"
 version = "0.9.0"
-source = { editable = "packages/afhub" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'" },
-]
-provides-extras = ["dev"]
-
-[[package]]
-name = "afissues"
-version = "0.9.0"
-source = { editable = "packages/afissues" }
-dependencies = [
-    { name = "httpx" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
-
-[[package]]
-name = "afspec"
-version = "1.3.6"
-source = { git = "https://github.com/agent-fox-dev/spec-format?subdirectory=packages%2Fafspec#ed87819441b23b0f74f5dfae9bc16911c6495363" }
-dependencies = [
-    { name = "jsonschema" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-]
-
-[[package]]
-name = "agentfox"
-version = "0.9.0"
-source = { editable = "packages/agentfox" }
+source = { editable = "packages/afcore" }
 dependencies = [
     { name = "afaudit" },
     { name = "afhub" },
@@ -152,6 +107,51 @@ requires-dist = [
     { name = "tree-sitter-rust", specifier = ">=0.24" },
     { name = "tree-sitter-swift", specifier = ">=0.0.1" },
     { name = "tree-sitter-typescript", specifier = ">=0.23" },
+]
+
+[[package]]
+name = "afhub"
+version = "0.9.0"
+source = { editable = "packages/afhub" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "afissues"
+version = "0.9.0"
+source = { editable = "packages/afissues" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
+
+[[package]]
+name = "afspec"
+version = "1.3.6"
+source = { git = "https://github.com/agent-fox-dev/spec-format?subdirectory=packages%2Fafspec#ed87819441b23b0f74f5dfae9bc16911c6495363" }
+dependencies = [
+    { name = "jsonschema" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [[package]]
@@ -1649,8 +1649,8 @@ version = "0.9.0"
 source = { editable = "packages/nightshift" }
 dependencies = [
     { name = "afaudit" },
+    { name = "afcore" },
     { name = "afhub" },
-    { name = "agentfox" },
     { name = "click" },
     { name = "duckdb" },
     { name = "rich" },
@@ -1659,8 +1659,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "afaudit", editable = "packages/afaudit" },
+    { name = "afcore", editable = "packages/afcore" },
     { name = "afhub", editable = "packages/afhub" },
-    { name = "agentfox", editable = "packages/agentfox" },
     { name = "click", specifier = ">=8.1" },
     { name = "duckdb", specifier = ">=1.5.4" },
     { name = "rich", specifier = ">=15.0" },

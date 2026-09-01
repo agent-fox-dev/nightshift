@@ -3,7 +3,7 @@
 Verifies the independent error hierarchy: AfIssuesError stores context kwargs,
 ConfigError subclasses AfIssuesError (not AgentFoxError), IntegrationError
 defaults retryable to True, errors.py has no workspace imports, and
-agentfox.core.errors remains unchanged and independent.
+afcore.core.errors remains unchanged and independent.
 
 Requirements: 03-REQ-5.1, 03-REQ-5.2, 03-REQ-5.3, 03-REQ-5.4, 03-REQ-5.5,
               03-REQ-5.E1
@@ -78,10 +78,10 @@ class TestConfigError:
         err = ConfigError("bad config", param="x")
         assert err.context == {"param": "x"}
 
-    def test_no_agentfox_in_mro(self) -> None:
-        """ConfigError.__mro__ does not include any agentfox.core.errors class."""
+    def test_no_afcore_in_mro(self) -> None:
+        """ConfigError.__mro__ does not include any afcore.core.errors class."""
         for cls in ConfigError.__mro__:
-            assert cls.__module__ != "agentfox.core.errors", f"Should not inherit from agentfox: {cls}"
+            assert cls.__module__ != "afcore.core.errors", f"Should not inherit from afcore: {cls}"
 
 
 # ── TS-03-19: IntegrationError defaults retryable ────────────────────
@@ -120,47 +120,47 @@ class TestErrorsNoWorkspaceImports:
     """TS-03-20: afissues/errors.py contains zero imports from workspace packages."""
 
     def test_no_workspace_package_references(self) -> None:
-        """errors.py does not reference agentfox, afspec, afaudit, or nightshift."""
+        """errors.py does not reference afcore, afspec, afaudit, or nightshift."""
         source = _ERRORS_PY.read_text()
-        for pkg in ["agentfox", "afspec", "afaudit", "nightshift"]:
+        for pkg in ["afcore", "afspec", "afaudit", "nightshift"]:
             assert pkg not in source, f"Found workspace reference '{pkg}' in errors.py"
 
 
-# ── TS-03-21: agentfox.core.errors hierarchy unchanged ────────────────
+# ── TS-03-21: afcore.core.errors hierarchy unchanged ────────────────
 
 
 class TestAgentfoxErrorsIndependence:
-    """TS-03-21: agentfox.core.errors still defines its own hierarchy."""
+    """TS-03-21: afcore.core.errors still defines its own hierarchy."""
 
-    def test_agentfox_config_error_is_agentfox_error(self) -> None:
-        """agentfox ConfigError subclasses AgentFoxError."""
-        from agentfox.core.errors import AgentFoxError
-        from agentfox.core.errors import ConfigError as AgentfoxConfigError
+    def test_afcore_config_error_is_afcore_error(self) -> None:
+        """afcore ConfigError subclasses AgentFoxError."""
+        from afcore.core.errors import AgentFoxError
+        from afcore.core.errors import ConfigError as AgentfoxConfigError
 
         assert issubclass(AgentfoxConfigError, AgentFoxError)
 
-    def test_agentfox_integration_error_is_agentfox_error(self) -> None:
-        """agentfox IntegrationError subclasses AgentFoxError."""
-        from agentfox.core.errors import AgentFoxError
-        from agentfox.core.errors import IntegrationError as AgentfoxIntegrationError
+    def test_afcore_integration_error_is_afcore_error(self) -> None:
+        """afcore IntegrationError subclasses AgentFoxError."""
+        from afcore.core.errors import AgentFoxError
+        from afcore.core.errors import IntegrationError as AgentfoxIntegrationError
 
         assert issubclass(AgentfoxIntegrationError, AgentFoxError)
 
-    def test_agentfox_config_error_not_afissues_error(self) -> None:
-        """agentfox ConfigError is NOT a subclass of AfIssuesError."""
-        from agentfox.core.errors import ConfigError as AgentfoxConfigError
+    def test_afcore_config_error_not_afissues_error(self) -> None:
+        """afcore ConfigError is NOT a subclass of AfIssuesError."""
+        from afcore.core.errors import ConfigError as AgentfoxConfigError
 
         assert not issubclass(AgentfoxConfigError, AfIssuesError)
 
-    def test_agentfox_integration_error_not_afissues_error(self) -> None:
-        """agentfox IntegrationError is NOT a subclass of AfIssuesError."""
-        from agentfox.core.errors import IntegrationError as AgentfoxIntegrationError
+    def test_afcore_integration_error_not_afissues_error(self) -> None:
+        """afcore IntegrationError is NOT a subclass of AfIssuesError."""
+        from afcore.core.errors import IntegrationError as AgentfoxIntegrationError
 
         assert not issubclass(AgentfoxIntegrationError, AfIssuesError)
 
-    def test_agentfox_integration_error_retryable_default(self) -> None:
-        """agentfox IntegrationError also defaults retryable=True."""
-        from agentfox.core.errors import IntegrationError as AgentfoxIntegrationError
+    def test_afcore_integration_error_retryable_default(self) -> None:
+        """afcore IntegrationError also defaults retryable=True."""
+        from afcore.core.errors import IntegrationError as AgentfoxIntegrationError
 
         err = AgentfoxIntegrationError("workspace error")
         assert err.retryable is True
@@ -178,11 +178,11 @@ class TestErrorHierarchyProperty:
         assert issubclass(cls, AfIssuesError)
 
     @pytest.mark.parametrize("cls", [AfIssuesError, ConfigError, IntegrationError])
-    def test_no_agentfox_module_in_mro(self, cls: type) -> None:
-        """No class in the MRO has module agentfox.core.errors."""
+    def test_no_afcore_module_in_mro(self, cls: type) -> None:
+        """No class in the MRO has module afcore.core.errors."""
         for mro_cls in cls.__mro__:
-            assert mro_cls.__module__ != "agentfox.core.errors", (
-                f"{cls.__name__} MRO includes {mro_cls} from agentfox.core.errors"
+            assert mro_cls.__module__ != "afcore.core.errors", (
+                f"{cls.__name__} MRO includes {mro_cls} from afcore.core.errors"
             )
 
 

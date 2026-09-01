@@ -1,7 +1,7 @@
 """Tests for afissues.github module (TS-03-10 through TS-03-13, TS-03-E3 to TS-03-E5).
 
 Verifies GitHubPlatform class attributes, parse_github_remote function,
-SSRF guard helpers, import independence from agentfox, and edge-case
+SSRF guard helpers, import independence from afcore, and edge-case
 behaviour.
 
 Requirements: 03-REQ-3.1, 03-REQ-3.2, 03-REQ-3.3, 03-REQ-3.4,
@@ -149,15 +149,15 @@ class TestSSRFGuardHelpers:
         assert callable(_truncate_response)
 
 
-# ── TS-03-13: No agentfox imports in github.py ─────────────────────
+# ── TS-03-13: No afcore imports in github.py ─────────────────────
 
 
 class TestGitHubImportIndependence:
-    """TS-03-13: afissues/github.py has zero agentfox references."""
+    """TS-03-13: afissues/github.py has zero afcore references."""
 
-    def test_no_agentfox_in_source(self) -> None:
+    def test_no_afcore_in_source(self) -> None:
         source = _GITHUB_SRC.read_text()
-        assert "agentfox" not in source, "github.py must not import from agentfox"
+        assert "afcore" not in source, "github.py must not import from afcore"
 
     def test_imports_from_afissues_errors(self) -> None:
         source = _GITHUB_SRC.read_text()

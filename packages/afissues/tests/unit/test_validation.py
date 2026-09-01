@@ -1,8 +1,8 @@
 """Tests for end-to-end validation and property invariants (TS-03-41 through
 TS-03-43, TS-03-P2, TS-03-P4, TS-03-P6, TS-03-E1).
 
-Verifies that make check passes, afissues imports work without agentfox,
-type checker resolves py.typed, no agentfox.platform imports remain in the
+Verifies that make check passes, afissues imports work without afcore,
+type checker resolves py.typed, no afcore.platform imports remain in the
 workspace, all public symbols are importable, IntegrationError defaults to
 retryable, and Python < 3.12 rejects installation.
 
@@ -25,28 +25,28 @@ import pytest
 _WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 
 
-# ── TS-03-P2: No agentfox.platform imports remain in workspace ──────
+# ── TS-03-P2: No afcore.platform imports remain in workspace ──────
 
 
 class TestNoAgentfoxPlatformImports:
-    """TS-03-P2: No file in packages/ imports from agentfox.platform.
+    """TS-03-P2: No file in packages/ imports from afcore.platform.
 
     Property invariant: for every .py file in the workspace, no import
-    statement references 'agentfox.platform'.
+    statement references 'afcore.platform'.
     """
 
-    def test_no_agentfox_platform_in_any_source(self) -> None:
-        """No .py source file under packages/ references agentfox.platform."""
+    def test_no_afcore_platform_in_any_source(self) -> None:
+        """No .py source file under packages/ references afcore.platform."""
         all_py = glob.glob(str(_WORKSPACE_ROOT / "packages" / "**" / "*.py"), recursive=True)
         violations = []
         for path in all_py:
             content = Path(path).read_text()
             for i, line in enumerate(content.splitlines(), 1):
                 stripped = line.strip()
-                if "agentfox.platform" in stripped and (stripped.startswith("from ") or stripped.startswith("import ")):
+                if "afcore.platform" in stripped and (stripped.startswith("from ") or stripped.startswith("import ")):
                     rel = Path(path).relative_to(_WORKSPACE_ROOT)
                     violations.append(f"{rel}:{i}: {stripped}")
-        assert not violations, f"Found {len(violations)} stale agentfox.platform import(s):\n" + "\n".join(
+        assert not violations, f"Found {len(violations)} stale afcore.platform import(s):\n" + "\n".join(
             f"  - {v}" for v in violations
         )
 
@@ -128,20 +128,20 @@ class TestIntegrationErrorRetryableDefault:
         assert _MAX_RETRIES == 3
 
 
-# ── TS-03-42: Import without agentfox installed ─────────────────────
+# ── TS-03-42: Import without afcore installed ─────────────────────
 
 
 class TestImportWithoutAgentfox:
     """TS-03-42: afissues imports succeed in environment with only httpx.
 
-    In the workspace environment, both agentfox and afissues are installed.
+    In the workspace environment, both afcore and afissues are installed.
     This test verifies that afissues module source code does not import
-    agentfox at the module level (which would cause ModuleNotFoundError
+    afcore at the module level (which would cause ModuleNotFoundError
     in a standalone installation).
     """
 
-    def test_afissues_source_has_no_agentfox_imports(self) -> None:
-        """No top-level import of agentfox in any afissues source module."""
+    def test_afissues_source_has_no_afcore_imports(self) -> None:
+        """No top-level import of afcore in any afissues source module."""
         afissues_src = _WORKSPACE_ROOT / "packages" / "afissues" / "afissues"
         source_files = glob.glob(str(afissues_src / "**" / "*.py"), recursive=True)
         violations = []
@@ -149,9 +149,9 @@ class TestImportWithoutAgentfox:
             content = Path(path).read_text()
             for line in content.splitlines():
                 stripped = line.strip()
-                if stripped.startswith(("import agentfox", "from agentfox")):
+                if stripped.startswith(("import afcore", "from afcore")):
                     violations.append(f"{Path(path).name}: {stripped}")
-        assert not violations, "afissues has agentfox imports (would fail without agentfox):\n" + "\n".join(
+        assert not violations, "afissues has afcore imports (would fail without afcore):\n" + "\n".join(
             f"  - {v}" for v in violations
         )
 
@@ -208,17 +208,17 @@ class TestPythonVersionConstraint:
 
 
 class TestStaleImportDetection:
-    """TS-03-E7: A stale agentfox.platform import raises ModuleNotFoundError.
+    """TS-03-E7: A stale afcore.platform import raises ModuleNotFoundError.
 
     This test verifies that if the platform directory has been deleted,
     attempting to import from it raises ModuleNotFoundError.
     """
 
     def test_stale_import_raises_module_not_found(self) -> None:
-        """Stale agentfox.platform import must raise ModuleNotFoundError."""
-        platform_dir = _WORKSPACE_ROOT / "packages" / "agentfox" / "agentfox" / "platform"
+        """Stale afcore.platform import must raise ModuleNotFoundError."""
+        platform_dir = _WORKSPACE_ROOT / "packages" / "afcore" / "afcore" / "platform"
         if platform_dir.exists():
             pytest.skip("Platform directory not yet deleted — test deferred to post-deletion")
 
         with pytest.raises(ModuleNotFoundError):
-            exec("from agentfox.platform.protocol import PlatformProtocol")  # noqa: S102
+            exec("from afcore.platform.protocol import PlatformProtocol")  # noqa: S102

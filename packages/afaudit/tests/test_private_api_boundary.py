@@ -27,7 +27,7 @@ class TestDispatchOptionalBoundary:
     """
 
     def test_no_dispatch_optional_in_external_code(self) -> None:
-        """_dispatch_optional must not appear in tests, af, nightshift, or agentfox code.
+        """_dispatch_optional must not appear in tests, af, nightshift, or afcore code.
 
         Excludes afaudit/afaudit/sink.py itself (where it is legitimately defined).
         """
@@ -35,7 +35,7 @@ class TestDispatchOptionalBoundary:
             WORKSPACE_ROOT / "packages" / "afaudit" / "tests",
             WORKSPACE_ROOT / "packages" / "af",
             WORKSPACE_ROOT / "packages" / "nightshift",
-            WORKSPACE_ROOT / "packages" / "agentfox",
+            WORKSPACE_ROOT / "packages" / "afcore",
         ]
         # The definition site is allowed
         sink_path = WORKSPACE_ROOT / "packages" / "afaudit" / "afaudit" / "sink.py"

@@ -13,7 +13,7 @@ schema_version: 1
 
 ## Intent
 
-Extend the existing `agentfox` config system and `nightshift` CLI entry point
+Extend the existing `afcore` config system and `nightshift` CLI entry point
 to support carry-patch mode. This spec covers the Pydantic config models, the
 CLI flags that activate carry-patch, the startup validation sequence (hub URL
 resolution, CWD verification), and the workspace variable initialization that
@@ -60,7 +60,7 @@ Full motivation and design rationale are documented in
 ## Tech Stack
 
 - Python 3.12+, pydantic v2, click
-- `agentfox.core.config` (existing config system, `packages/agentfox/`)
+- `afcore.core.config` (existing config system, `packages/afcore/`)
 - `nightshift.app` (CLI entry point, `packages/nightshift/`)
 - `afhub` package (Spec 01_afhub_client) for `HubClient`, `resolve_hub_url`,
   `resolve_hub_pat`
@@ -162,7 +162,7 @@ resolved_slug = workspace_flag or os.environ.get('AF_WORKSPACE', '') or config.c
 
 ### REQ-1: HubConfig and CarryPatchConfig Pydantic models
 
-Add to `packages/agentfox/agentfox/core/config.py`:
+Add to `packages/afcore/afcore/core/config.py`:
 
 ```python
 class HubConfig(BaseModel):
@@ -181,7 +181,7 @@ class CarryPatchConfig(BaseModel):
 ```
 
 **`Clamped` validator:** `Clamped` is an internal annotated-type utility
-already defined in `agentfox.core.config` (the same file being modified). It
+already defined in `afcore.core.config` (the same file being modified). It
 is used throughout existing models such as `NightShiftConfig`. No new import
 or module is required. It silently clamps out-of-range values rather than
 raising `ValidationError`, matching the established pattern in the codebase.
@@ -311,7 +311,7 @@ merge_strategy = "direct"
 
 **Notes on the `[workspace]` section:**
 - `merge_strategy` is an existing field on the `WorkspaceConfig` model in
-  `agentfox.core.config`, typed as `Literal['direct', 'branch', 'pr']` with a
+  `afcore.core.config`, typed as `Literal['direct', 'branch', 'pr']` with a
   default of `'direct'`. No new model or field is required; the generated config
   simply writes the default value explicitly so the file is self-documenting.
 
@@ -382,18 +382,18 @@ these variables because it handles concurrent rebuild (409) gracefully.
 
 | File | Change |
 |------|--------|
-| `packages/agentfox/agentfox/core/config.py` | Add HubConfig, CarryPatchConfig, extend AgentFoxConfig |
-| `packages/agentfox/agentfox/core/config_gen.py` | Add `[hub]` and `[carry_patch]` sections to the global default AgentFoxConfig comment-annotated TOML template (shown when no config file exists at all). This is separate from and complementary to the workspace-level `.nightshift/config.toml` written in REQ-4. |
+| `packages/afcore/afcore/core/config.py` | Add HubConfig, CarryPatchConfig, extend AgentFoxConfig |
+| `packages/afcore/afcore/core/config_gen.py` | Add `[hub]` and `[carry_patch]` sections to the global default AgentFoxConfig comment-annotated TOML template (shown when no config file exists at all). This is separate from and complementary to the workspace-level `.nightshift/config.toml` written in REQ-4. |
 | `packages/nightshift/nightshift/app.py` | Add --hub-url, --workspace, --token flags; import and invoke startup helper; close HubClient in finally block |
 | `packages/nightshift/nightshift/_carry_patch_startup.py` | New: async startup helper containing the CWD validation sequence, HubClient creation, and subprocess.run() call; returns HubClient instance; exempt from test_delegation.py constraint |
 | `packages/nightshift/pyproject.toml` | Add afhub as dependency |
-| `packages/agentfox/pyproject.toml` | Add afhub as optional dependency |
+| `packages/afcore/pyproject.toml` | Add afhub as optional dependency |
 
 ## Test Files
 
 | File | Package | Coverage |
 |------|---------|----------|
-| `packages/agentfox/tests/test_carry_patch_config.py` | agentfox | HubConfig, CarryPatchConfig defaults, Clamped clamping behavior, extra="ignore" backward compatibility |
+| `packages/afcore/tests/test_carry_patch_config.py` | afcore | HubConfig, CarryPatchConfig defaults, Clamped clamping behavior, extra="ignore" backward compatibility |
 | `packages/nightshift/tests/test_carry_patch_startup.py` | nightshift | CLI flag 3-tier resolution (REQ-2); CWD validation steps 1–6 (REQ-3); default config atomic write and non-fatal failure (REQ-4); set_variable non-fatal exception handling (REQ-5) |
 
 ### Requirement-to-Test Mapping

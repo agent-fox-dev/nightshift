@@ -3,7 +3,7 @@
 Provides Protocols for postmortem input data, builder functions to construct
 postmortem data structures, and a writer to persist them as JSON files.
 
-Migrated from ``agentfox.engine.run`` (lines 394-541).
+Migrated from ``afcore.engine.run`` (lines 394-541).
 
 Requirements: 01-REQ-6.1, 01-REQ-6.2, 01-REQ-6.3, 01-REQ-6.4, 01-REQ-6.5
 """

@@ -377,14 +377,14 @@ class TestDoubleSigintAbort:
 
 
 class TestAgentFoxGroupUsage:
-    """TS-07-19: app.py uses AgentFoxGroup from agentfox.io as its Click group.
+    """TS-07-19: app.py uses AgentFoxGroup from afcore.io as its Click group.
 
     Requirements: 07-REQ-3.11
     """
 
-    def test_main_is_agentfox_group_instance(self) -> None:
+    def test_main_is_afcore_group_instance(self) -> None:
         """main is an instance of AgentFoxGroup (not just any Click BaseCommand)."""
-        from agentfox.io import AgentFoxGroup
+        from afcore.io import AgentFoxGroup
         from nightshift.app import main
 
         assert isinstance(main, AgentFoxGroup) or type(main).__name__ == "AgentFoxGroup", (

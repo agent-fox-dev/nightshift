@@ -2,7 +2,7 @@
 
 TS-01-16: DuckDBSink implements all methods required by SessionSink.
 
-This test requires agentfox (and duckdb) to be installed.
+This test requires afcore (and duckdb) to be installed.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import inspect
 import pytest
 
 try:
-    from agentfox.knowledge.duckdb_sink import DuckDBSink
+    from afcore.knowledge.duckdb_sink import DuckDBSink
 
     _HAS_DUCKDB_SINK = True
 except ImportError:
@@ -32,7 +32,7 @@ _REQUIRED_METHODS = [
 ]
 
 
-@pytest.mark.skipif(not _HAS_DUCKDB_SINK, reason="agentfox/duckdb not installed")
+@pytest.mark.skipif(not _HAS_DUCKDB_SINK, reason="afcore/duckdb not installed")
 class TestDuckDBSinkSatisfiesSessionSink:
     """TS-01-16: DuckDBSink structurally satisfies SessionSink protocol.
 

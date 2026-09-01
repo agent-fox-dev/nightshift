@@ -21,11 +21,11 @@ import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from agentfox.core.config import AgentFoxConfig, PlatformConfig
-from agentfox.core.config_gen import extract_schema
-from agentfox.nightshift.platform_factory import create_platform
-from agentfox.workspace import WorkspaceInfo
-from agentfox.workspace.harvest import post_harvest_integrate
+from afcore.core.config import AgentFoxConfig, PlatformConfig
+from afcore.core.config_gen import extract_schema
+from afcore.nightshift.platform_factory import create_platform
+from afcore.workspace import WorkspaceInfo
+from afcore.workspace.harvest import post_harvest_integrate
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
@@ -105,7 +105,7 @@ class TestNoPushInstructionsInTemplates:
     Validates: 19-REQ-2.1, 19-REQ-2.4, 19-REQ-2.E1
     """
 
-    _TEMPLATE_DIR = Path(__file__).resolve().parents[3] / "agentfox" / "_templates" / "profiles"
+    _TEMPLATE_DIR = Path(__file__).resolve().parents[3] / "afcore" / "_templates" / "profiles"
 
     def test_no_push_in_any_template(self) -> None:
         """No profile in _templates/profiles/ contains 'git push'."""
@@ -237,12 +237,12 @@ class TestAlwaysPushesBoth:
         async def run_test():
             with (
                 patch(
-                    "agentfox.workspace.harvest.push_to_remote",
+                    "afcore.workspace.harvest.push_to_remote",
                     new_callable=AsyncMock,
                     return_value=True,
                 ) as mock_push_remote,
                 patch(
-                    "agentfox.workspace.harvest._push_integration_branch",
+                    "afcore.workspace.harvest._push_integration_branch",
                     new_callable=AsyncMock,
                 ) as mock_push_develop,
             ):

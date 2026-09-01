@@ -10,9 +10,9 @@
     "AF_WORKSPACE": "Environment variable used as the second tier in workspace slug resolution.",
     "AUTO_REBUILD_AFTER_PUSH": "Hub workspace variable set to `\"false\"` by nightshift on startup so the hub does not trigger rebuilds automatically after push.",
     "AUTO_REBUILD_AFTER_SYNC": "Hub workspace variable set to `\"false\"` by nightshift on startup so the hub does not trigger rebuilds automatically after sync.",
-    "AgentFoxConfig": "Top-level Pydantic config model for the agentfox system, defined in `packages/agentfox/agentfox/core/config.py`.",
+    "AgentFoxConfig": "Top-level Pydantic config model for the afcore system, defined in `packages/afcore/afcore/core/config.py`.",
     "CarryPatchConfig": "Pydantic model added to AgentFoxConfig holding all carry-patch tunable parameters such as `workspace`, `check_interval`, `auto_resolve`, `rebuild_timeout`, `rebuild_poll_interval`, and `max_resolve_retries`.",
-    "Clamped": "Internal annotated-type utility in `agentfox.core.config` that silently clamps out-of-range integer values to the declared bounds instead of raising a ValidationError.",
+    "Clamped": "Internal annotated-type utility in `afcore.core.config` that silently clamps out-of-range integer values to the declared bounds instead of raising a ValidationError.",
     "DaemonRunner": "Existing synchronous daemon loop class in `nightshift.app` whose `run()` method is invoked after startup validation completes.",
     "HubAuthError": "Exception from `afhub` raised on HTTP 401 Unauthorized responses from the hub API.",
     "HubClient": "Async HTTP client from the `afhub` package (Spec 01_afhub_client) used to communicate with the hub REST API.",
@@ -23,12 +23,12 @@
     "HubNotFoundError": "Exception from `afhub` raised on HTTP 404 responses from the hub API.",
     "PAT": "Personal Access Token used to authenticate requests to the hub API.",
     "Workspace": "Pydantic model returned by `HubClient.get_workspace()` containing fields `workspace_mode`, `clone_status`, `git_url`, and `integration_branch`.",
-    "WorkspaceConfig": "Existing Pydantic model in `agentfox.core.config` with a `merge_strategy` field typed as `Literal['direct', 'branch', 'pr']`.",
+    "WorkspaceConfig": "Existing Pydantic model in `afcore.core.config` with a `merge_strategy` field typed as `Literal['direct', 'branch', 'pr']`.",
     "auto_resolve": "Field on `CarryPatchConfig` controlling whether nightshift automatically attempts to resolve detected conflicts.",
     "carry-patch mode": "Operational mode of nightshift where it monitors a hub workspace for conflicts and drives a fix pipeline; activated when both `--workspace` and `--token` resolve to non-empty values.",
     "check_interval": "Field on `CarryPatchConfig` controlling how often (in seconds) nightshift polls for conflicts; minimum 60, default 300.",
     "clone_status": "Field on the `Workspace` model indicating the hub-side clone state; must equal `\"ready\"` before nightshift proceeds.",
-    "config_gen.py": "Module at `packages/agentfox/agentfox/core/config_gen.py` that holds the global default AgentFoxConfig comment-annotated TOML template.",
+    "config_gen.py": "Module at `packages/afcore/afcore/core/config_gen.py` that holds the global default AgentFoxConfig comment-annotated TOML template.",
     "endpoint_url": "Field on `HubConfig` storing the hub API base URL.",
     "get_workspace": "Method on `HubClient` that fetches a `Workspace` model by slug from the hub API.",
     "git_url": "Field on the `Workspace` model containing the expected remote origin URL for the local git checkout.",
@@ -43,9 +43,9 @@
     "set_variable": "Method on `HubClient` that upserts a workspace variable via PATCH-then-POST; used to set `AUTO_REBUILD_AFTER_SYNC` and `AUTO_REBUILD_AFTER_PUSH`.",
     "workspace slug": "Short identifier string for a hub workspace, supplied via `--workspace` CLI flag, `AF_WORKSPACE` env var, or `carry_patch.workspace` config field.",
     "workspace_mode": "Field on the `Workspace` model indicating the operational mode; must equal `\"carry_patch\"` for this spec.",
-    "build_streams": "Function in `agentfox.nightshift.streams` that constructs the set of work streams (fix-pipeline, pr-feedback, carry-patch) registered with the daemon; receives a `HubClient` instance from `main()` when carry-patch is active.",
-    "CarryPatchMonitor": "Class in `agentfox.nightshift.carry_patch_monitor` that monitors the hub workspace for conflicting patches and coordinates the resolution workflow; does not own the `HubClient` lifecycle.",
-    "FixPipeline": "Existing class in `agentfox.nightshift.fix_pipeline` that implements the coder-reviewer-reviewer loop for resolving GitHub issues; receives a `HubClient` in carry-patch mode.",
+    "build_streams": "Function in `afcore.nightshift.streams` that constructs the set of work streams (fix-pipeline, pr-feedback, carry-patch) registered with the daemon; receives a `HubClient` instance from `main()` when carry-patch is active.",
+    "CarryPatchMonitor": "Class in `afcore.nightshift.carry_patch_monitor` that monitors the hub workspace for conflicting patches and coordinates the resolution workflow; does not own the `HubClient` lifecycle.",
+    "FixPipeline": "Existing class in `afcore.nightshift.fix_pipeline` that implements the coder-reviewer-reviewer loop for resolving GitHub issues; receives a `HubClient` in carry-patch mode.",
     "startup_helper": "The async function in `packages/nightshift/nightshift/_carry_patch_startup.py` that performs CWD validation, workspace variable initialization, and returns the `HubClient` instance to `main()`."
   },
   "requirements": [
@@ -53,7 +53,7 @@
       "id": "02-REQ-1",
       "title": "HubConfig and CarryPatchConfig Pydantic models",
       "user_story": {
-        "role": "developer extending agentfox",
+        "role": "developer extending afcore",
         "goal": "add HubConfig and CarryPatchConfig Pydantic models to AgentFoxConfig with safe defaults",
         "benefit": "so that existing config files without these sections continue to load cleanly and carry-patch is disabled by default"
       },
@@ -61,7 +61,7 @@
         {
           "id": "02-REQ-1.1",
           "ears_pattern": "event_driven",
-          "system": "agentfox config loader",
+          "system": "afcore config loader",
           "action": "populate `hub` with a `HubConfig` instance whose `endpoint_url` defaults to an empty string",
           "return_contract": "HubConfig(endpoint_url='') is accessible as config.hub",
           "trigger": "AgentFoxConfig is instantiated without a `[hub]` section in the TOML file"
@@ -69,7 +69,7 @@
         {
           "id": "02-REQ-1.2",
           "ears_pattern": "event_driven",
-          "system": "agentfox config loader",
+          "system": "afcore config loader",
           "action": "populate `carry_patch` with a `CarryPatchConfig` instance using all documented defaults: enabled=False, workspace='', check_interval=300, auto_resolve=True, rebuild_timeout=600, rebuild_poll_interval=5, max_resolve_retries=2",
           "return_contract": "CarryPatchConfig with all default values is accessible as config.carry_patch",
           "trigger": "AgentFoxConfig is instantiated without a `[carry_patch]` section in the TOML file"
@@ -109,7 +109,7 @@
         {
           "id": "02-REQ-1.6",
           "ears_pattern": "event_driven",
-          "system": "agentfox config loader",
+          "system": "afcore config loader",
           "action": "ignore the unknown keys without raising a ValidationError, consistent with `extra='ignore'` on both models",
           "return_contract": "AgentFoxConfig loads successfully; unknown keys are silently dropped",
           "trigger": "a TOML config contains unknown keys in the `[hub]` or `[carry_patch]` sections"
@@ -135,7 +135,7 @@
         {
           "id": "02-REQ-1.E3",
           "ears_pattern": "event_driven",
-          "system": "agentfox config loader",
+          "system": "afcore config loader",
           "action": "load the file successfully and populate both sections with defaults",
           "return_contract": "AgentFoxConfig loads without error; config.carry_patch.enabled == False",
           "trigger": "an existing config file that predates this spec (no `[hub]` or `[carry_patch]` sections) is loaded"

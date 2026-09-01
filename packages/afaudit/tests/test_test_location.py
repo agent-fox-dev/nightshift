@@ -2,7 +2,7 @@
 
 TS-01-40: packages/afaudit/tests/ contains tests for all afaudit-exclusive symbols
 TS-01-42: Edge case tests present for enforce_file_retention (missing dir, bad names, failures)
-TS-01-44: agentfox/tests/ retains DuckDBSink and calculate_session_cost tests with updated imports
+TS-01-44: afcore/tests/ retains DuckDBSink and calculate_session_cost tests with updated imports
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 AFAUDIT_TESTS = WORKSPACE_ROOT / "packages" / "afaudit" / "tests"
-AGENTFOX_TESTS = WORKSPACE_ROOT / "packages" / "agentfox" / "tests"
+AGENTFOX_TESTS = WORKSPACE_ROOT / "packages" / "afcore" / "tests"
 
 
 def _read_all_test_content(test_dir: Path) -> str:
@@ -103,37 +103,36 @@ class TestEnforceFileRetentionEdgeCaseCoverage:
 
 @pytest.mark.integration
 class TestAgentfoxTestsRetainHeavyTests:
-    """TS-01-44: agentfox/tests/ retains DuckDBSink and calculate_session_cost tests.
+    """TS-01-44: afcore/tests/ retains DuckDBSink and calculate_session_cost tests.
 
     Requirement: 01-REQ-11.5
     """
 
-    def test_duckdb_sink_tests_remain_in_agentfox(self) -> None:
-        """agentfox/tests/ must still contain tests for DuckDBSink."""
+    def test_duckdb_sink_tests_remain_in_afcore(self) -> None:
+        """afcore/tests/ must still contain tests for DuckDBSink."""
         all_content = _read_all_test_content(AGENTFOX_TESTS)
         assert "DuckDBSink" in all_content, (
-            "DuckDBSink tests should remain in agentfox/tests/ (they require agentfox infrastructure)"
+            "DuckDBSink tests should remain in afcore/tests/ (they require afcore infrastructure)"
         )
 
-    def test_calculate_session_cost_tests_remain_in_agentfox(self) -> None:
-        """agentfox/tests/ must still contain tests for calculate_session_cost."""
+    def test_calculate_session_cost_tests_remain_in_afcore(self) -> None:
+        """afcore/tests/ must still contain tests for calculate_session_cost."""
         all_content = _read_all_test_content(AGENTFOX_TESTS)
         assert "calculate_session_cost" in all_content, (
-            "calculate_session_cost tests should remain in agentfox/tests/ "
-            "(it depends on agentfox-internal pricing models)"
+            "calculate_session_cost tests should remain in afcore/tests/ (it depends on afcore-internal pricing models)"
         )
 
-    def test_agentfox_tests_use_afaudit_imports(self) -> None:
-        """agentfox/tests/ files that reference audit symbols must import from afaudit.
+    def test_afcore_tests_use_afaudit_imports(self) -> None:
+        """afcore/tests/ files that reference audit symbols must import from afaudit.
 
-        After migration, any agentfox test file that uses AuditEvent,
+        After migration, any afcore test file that uses AuditEvent,
         SessionSink, or similar symbols must import them from afaudit.*,
-        not from the old agentfox.knowledge.* paths.
+        not from the old afcore.knowledge.* paths.
         """
         old_import_patterns = [
-            "from agentfox.knowledge.audit import",
-            "from agentfox.knowledge.sink import",
-            "from agentfox.knowledge.agent_trace import",
+            "from afcore.knowledge.audit import",
+            "from afcore.knowledge.sink import",
+            "from afcore.knowledge.agent_trace import",
         ]
         for test_file in AGENTFOX_TESTS.rglob("*.py"):
             try:
@@ -148,7 +147,7 @@ class TestAgentfoxTestsRetainHeavyTests:
                 continue
             for old_pattern in old_import_patterns:
                 assert old_pattern not in content, (
-                    f"agentfox test file {test_file.relative_to(WORKSPACE_ROOT)} "
+                    f"afcore test file {test_file.relative_to(WORKSPACE_ROOT)} "
                     f"still uses old import path: '{old_pattern}'. "
                     f"Should import from afaudit.* instead."
                 )
