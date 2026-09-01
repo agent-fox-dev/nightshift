@@ -11,10 +11,15 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from afaudit import emit as _audit_emit
 from afaudit.events import AuditEventType
+from afhub.errors import HubConflictError as _HubConflictError
+from afhub.polling import poll_rebuild as _poll_rebuild
+
+from agentfox.workspace import git as _workspace_git
 
 if TYPE_CHECKING:
     from afaudit.sink import SessionSink, SinkDispatcher
@@ -246,6 +251,131 @@ class CarryPatchMonitor:
     # Private helpers
     # ------------------------------------------------------------------
 
+    async def _build_conflict_context(
+        self,
+        patch_detail: object,
+        slug: str,
+        repo_root: Path,
+    ) -> dict[str, object]:
+        """Assemble the conflict resolution context dict for the coder.
+
+        Returns a dict with keys: ``patch_description``, ``conflict_files``,
+        ``upstream_context``, and ``rerere_resolutions``.
+
+        All error cases are handled gracefully — a missing or failed field
+        defaults to an empty value; the coder session proceeds with
+        degraded context rather than aborting.
+
+        Requirements: 03-REQ-4.1, 03-REQ-4.E1, 03-REQ-4.E2, 03-REQ-4.E3,
+                      03-REQ-3.E6
+        """
+        # ── patch_description (03-REQ-4.E3) ─────────────────────────
+        desc = getattr(patch_detail, "description", None)
+        if desc is None:
+            logger.debug(
+                "PatchDetail.description is None; defaulting to ''"
+            )
+        patch_description: str = desc if desc is not None else ""
+
+        # ── conflict_files (03-REQ-3.E6) ────────────────────────────
+        conflict_files = getattr(patch_detail, "conflict_files", None)
+        if conflict_files is None:
+            logger.warning(
+                "PatchDetail.conflict_files is None; defaulting to []"
+            )
+            conflict_files = []
+
+        # ── rerere_resolutions (03-REQ-4.1, 03-REQ-4.E1) ────────────
+        rerere_resolutions: list[str] = []
+        try:
+            entries = await self._hub_client.list_rerere(slug)
+            rerere_resolutions = [e.path for e in entries]
+        except Exception:
+            logger.warning(
+                "list_rerere failed for workspace %s; "
+                "using empty rerere_resolutions",
+                slug,
+                exc_info=True,
+            )
+
+        # ── upstream_context (03-REQ-4.1, 03-REQ-4.E2) ──────────────
+        upstream_context: str = ""
+        try:
+            rc, stdout, stderr = await _workspace_git.run_git(
+                ["diff", "origin/main", "HEAD"],
+                cwd=repo_root,
+                check=False,
+            )
+            if rc == 0:
+                upstream_context = stdout
+            else:
+                logger.warning(
+                    "git diff failed (rc=%d): %s",
+                    rc,
+                    stderr.strip(),
+                )
+        except Exception:
+            logger.warning(
+                "git diff command failed; "
+                "using empty upstream_context",
+                exc_info=True,
+            )
+
+        return {
+            "patch_description": patch_description,
+            "conflict_files": list(conflict_files),
+            "upstream_context": upstream_context,
+            "rerere_resolutions": rerere_resolutions,
+        }
+
+    async def _submit_and_poll_rebuild(self, slug: str) -> None:
+        """Submit a rebuild and poll for completion.
+
+        Handles ``HubConflictError`` by falling back to the active
+        rebuild (03-REQ-3.E5).  Poll failures are logged but do not
+        fail the resolution — the rebuild was already triggered.
+        """
+        job = None
+        try:
+            job = await self._hub_client.submit_rebuild(slug)
+        except _HubConflictError:
+            # 03-REQ-3.E5: concurrent rebuild already in progress
+            logger.info(
+                "submit_rebuild raised HubConflictError for %s — "
+                "looking up active rebuild",
+                slug,
+            )
+            active_jobs = await self._hub_client.list_rebuilds(slug)
+            if active_jobs:
+                job = active_jobs[0]
+            else:
+                logger.warning(
+                    "list_rebuilds returned empty after "
+                    "HubConflictError for %s",
+                    slug,
+                )
+
+        if job is None:
+            return
+
+        # Best-effort poll — failures do not abort the resolution.
+        try:
+            await _poll_rebuild(
+                self._hub_client,
+                slug,
+                job.id,
+                timeout=self._config.carry_patch.rebuild_timeout,
+                poll_interval=self._config.carry_patch.rebuild_poll_interval,
+            )
+        except Exception:
+            logger.warning(
+                "poll_rebuild failed for job %s in workspace %s; "
+                "rebuild was triggered but completion status unknown",
+                getattr(job, "id", ""),
+                slug,
+                exc_info=True,
+            )
+
     async def _resolve_conflict(
         self,
         patch_detail: object,
@@ -253,18 +383,42 @@ class CarryPatchMonitor:
     ) -> None:
         """Resolve a single conflicting patch.
 
-        Group 7 will expand this with fetch/checkout, context assembly,
-        push, and rebuild polling.
+        Sequence: build context → fetch → checkout → coder session →
+        push → submit_rebuild → poll_rebuild.
 
-        Requirements: 03-REQ-3.3
+        Any exception during fetch/checkout or the coder session
+        propagates to ``run_cycle()`` which handles it as a failure
+        (retry counter + ``conflicts_failed``).
+
+        Requirements: 03-REQ-3.3, 03-REQ-4
         """
-        # TODO(group-7): fetch_remote + checkout_branch before coder
-        # TODO(group-7): assemble conflict context dict (REQ-4)
-        # TODO(group-7): push_to_remote + submit_rebuild + poll_rebuild
+        slug = self._workspace_slug
+        branch = getattr(patch_detail, "branch_name", "")
+        repo_root = Path.cwd()
 
-        await self._engine._run_coder_session()
+        # Step 1: Assemble conflict resolution context (03-REQ-4.1)
+        context = await self._build_conflict_context(
+            patch_detail, slug, repo_root,
+        )
 
-        # Resolution succeeded
+        # Step 2: Fetch and checkout the patch branch (03-REQ-3.3)
+        await _workspace_git.fetch_remote(repo_root, branch=branch)
+        await _workspace_git.checkout_branch(repo_root, branch)
+
+        # Step 3: Run coder session in carry-patch mode (03-REQ-3.3)
+        await self._engine._run_coder_session(
+            archetype="coder",
+            mode="carry-patch",
+            context=context,
+        )
+
+        # Step 4: Push resolved branch (03-REQ-3.3)
+        await _workspace_git.push_to_remote(repo_root, branch)
+
+        # Step 5: Submit and poll rebuild (03-REQ-3.3, 03-REQ-3.E5)
+        await self._submit_and_poll_rebuild(slug)
+
+        # Step 6: Record success
         result.conflicts_resolved += 1
         result.rebuild_triggered = True
         _safe_emit(

@@ -546,8 +546,12 @@ class TestMaxResolveRetriesExceeded:
         # Retry count below max — patch should proceed to resolution attempt.
         monitor._retry_counter[("ws-1", "p1")] = 2
 
-        # FAILS: run_cycle raises NotImplementedError
-        await monitor.run_cycle()
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+        ):
+            await monitor.run_cycle()
 
         # After implementation, coder session must be invoked:
         engine._run_coder_session.assert_called_once()
