@@ -18,7 +18,7 @@ import httpx
 import pytest
 
 from afhub.client import HubClient
-from afhub.errors import HubConnectionError
+from afhub.errors import HubConnectionError, HubError
 from afhub.models import (
     PatchStatusDashboard,
     PatchSummary,
@@ -804,6 +804,173 @@ class TestReorderPatches:
         await client.reorder_patches("my-workspace", ["p2", "p1"])
         call_args = str(client._http_client.post.call_args)
         assert "/api/v1/workspaces/my-workspace/patches/reorder" in call_args
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-2.E1: remove_patch raises HubNotFoundError on HTTP 404
+# ---------------------------------------------------------------------------
+
+
+class TestRemovePatchNotFound:
+    """01-REQ-2.E1 — remove_patch raises HubNotFoundError when the hub
+    returns HTTP 404; it does NOT silently return None.
+
+    Requirements: 01-REQ-2.E1
+    """
+
+    async def test_remove_patch_raises_hub_not_found_error_on_404(self) -> None:
+        """remove_patch raises HubNotFoundError with status_code=404."""
+        from afhub.errors import HubNotFoundError
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=404,
+            json=lambda: {
+                "error": {"code": 404, "message": "not found", "error_type": "not_found"}
+            },
+        )
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubNotFoundError) as exc_info:
+            await client.remove_patch("my-workspace", "nonexistent-id")
+        assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-2.E2: add_patch raises HubConflictError on HTTP 409
+# ---------------------------------------------------------------------------
+
+
+class TestAddPatchConflict:
+    """01-REQ-2.E2 — add_patch raises HubConflictError with the error_type
+    from the response envelope when the hub returns HTTP 409.
+
+    Requirements: 01-REQ-2.E2
+    """
+
+    async def test_add_patch_raises_hub_conflict_error_on_409(self) -> None:
+        """add_patch raises HubConflictError with status_code=409."""
+        from afhub.errors import HubConflictError
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=409,
+            json=lambda: {
+                "error": {
+                    "code": 409,
+                    "message": "branch already exists",
+                    "error_type": "duplicate_branch",
+                }
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubConflictError) as exc_info:
+            await client.add_patch("my-workspace", "feat/existing")
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.error_type == "duplicate_branch"
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-2.E3: add_patches_batch with empty list sends empty JSON array
+# ---------------------------------------------------------------------------
+
+
+class TestAddPatchesBatchEmpty:
+    """01-REQ-2.E3 — add_patches_batch(slug, []) sends an empty JSON array
+    body and returns an empty list[Patch] on HTTP 201.
+
+    Requirements: 01-REQ-2.E3
+    """
+
+    async def test_add_patches_batch_empty_returns_empty_list(self) -> None:
+        """add_patches_batch([]) returns an empty list on HTTP 201."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201, json=lambda: [])
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.add_patches_batch("my-workspace", [])
+        assert result == []
+
+    async def test_add_patches_batch_empty_sends_empty_array_body(self) -> None:
+        """add_patches_batch([]) sends an empty JSON array (not null/dict) in the POST body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201, json=lambda: [])
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.add_patches_batch("my-workspace", [])
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert isinstance(sent_body, list)
+        assert len(sent_body) == 0
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-2.E4: patch operation raises HubModeError on 400/workspace_mode_mismatch
+# ---------------------------------------------------------------------------
+
+
+class TestPatchOperationModeError:
+    """01-REQ-2.E4 — When the hub returns HTTP 400 with
+    error_type='workspace_mode_mismatch' for a patch operation, HubClient
+    raises HubModeError.
+
+    Requirements: 01-REQ-2.E4
+    """
+
+    async def test_add_patch_raises_hub_mode_error_on_workspace_mode_mismatch(self) -> None:
+        """add_patch raises HubModeError on 400 with error_type='workspace_mode_mismatch'."""
+        from afhub.errors import HubModeError
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=400,
+            json=lambda: {
+                "error": {
+                    "code": 400,
+                    "message": "mode mismatch",
+                    "error_type": "workspace_mode_mismatch",
+                }
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubModeError) as exc_info:
+            await client.add_patch("my-workspace", "feat/x")
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.error_type == "workspace_mode_mismatch"
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-2.E5: patch operation raises base HubError on 400/unrecognized error_type
+# ---------------------------------------------------------------------------
+
+
+class TestPatchOperationUnrecognizedError:
+    """01-REQ-2.E5 — When the hub returns HTTP 400 with an unrecognized
+    error_type for a patch operation, HubClient raises the base HubError.
+
+    Requirements: 01-REQ-2.E5
+    """
+
+    async def test_add_patch_raises_hub_error_on_unrecognized_error_type(self) -> None:
+        """add_patch raises base HubError on 400 with an unknown error_type."""
+        from afhub.errors import HubModeError, HubNoActivePatchesError
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=400,
+            json=lambda: {
+                "error": {
+                    "code": 400,
+                    "message": "something weird",
+                    "error_type": "totally_unknown_error",
+                }
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubError) as exc_info:
+            await client.add_patch("my-workspace", "feat/x")
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.error_type == "totally_unknown_error"
+        # Must be base HubError, not a specialized subclass
+        assert type(exc_info.value) is HubError
+        assert not isinstance(exc_info.value, HubModeError)
+        assert not isinstance(exc_info.value, HubNoActivePatchesError)
 
 
 # ---------------------------------------------------------------------------
