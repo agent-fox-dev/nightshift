@@ -19,6 +19,8 @@ from hypothesis import strategies as st
 _EXPECTED_VISIBLE_SECTIONS = frozenset(
     {
         "backend",
+        "carry_patch",
+        "hub",
         "orchestrator",
         "platform",
         "workspace",

@@ -33,6 +33,8 @@ _BOUNDS_MAP_OVERRIDES: dict[tuple[str, str], str] = {}
 
 _VISIBLE_SECTIONS: set[str] = {
     "backend",
+    "carry_patch",
+    "hub",
     "orchestrator",
     "platform",
     "night_shift",

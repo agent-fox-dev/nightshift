@@ -490,6 +490,45 @@ class WorkspaceConfig(BaseModel):
     )
 
 
+class HubConfig(BaseModel):
+    """Hub API configuration for carry-patch mode.
+
+    Requirements: 02-REQ-1.1
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    endpoint_url: str = Field(default="", description="Hub API base URL")
+
+
+class CarryPatchConfig(BaseModel):
+    """Carry-patch mode configuration.
+
+    Requirements: 02-REQ-1.2, 02-REQ-1.3, 02-REQ-1.4, 02-REQ-1.5,
+                  02-REQ-1.7
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = Field(default=False, description="Enable carry-patch mode")
+    workspace: str = Field(default="", description="Hub workspace slug")
+    check_interval: Annotated[int, Clamped(ge=60)] = Field(
+        default=300, description="Seconds between conflict checks (>=60)"
+    )
+    auto_resolve: bool = Field(default=True, description="Auto-resolve detected conflicts")
+    rebuild_timeout: Annotated[int, Clamped(ge=1)] = Field(
+        default=600, description="Max seconds to wait for hub rebuild (>=1)"
+    )
+    rebuild_poll_interval: Annotated[int, Clamped(ge=2)] = Field(
+        default=5, description="Seconds between rebuild poll checks (>=2)"
+    )
+    max_resolve_retries: Annotated[int, Clamped(ge=0, le=10)] = Field(
+        default=2, description="Max automatic conflict-resolve retries (0-10)"
+    )
+
+    _auto_clamp = _auto_clamp_validator()
+
+
 class AgentFoxConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -504,6 +543,8 @@ class AgentFoxConfig(BaseModel):
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     caching: CachingConfig = Field(default_factory=CachingConfig)
     night_shift: NightShiftConfig = Field(default_factory=NightShiftConfig)
+    hub: HubConfig = Field(default_factory=HubConfig)
+    carry_patch: CarryPatchConfig = Field(default_factory=CarryPatchConfig)
 
     _caching_explicit: bool = PrivateAttr(default=False)
 

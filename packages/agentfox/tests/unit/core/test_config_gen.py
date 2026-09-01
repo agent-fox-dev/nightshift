@@ -255,6 +255,8 @@ class TestSchemaExtraction:
 
         expected = {
             "backend",
+            "carry_patch",
+            "hub",
             "orchestrator",
             "security",
             "theme",
