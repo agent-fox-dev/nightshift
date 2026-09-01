@@ -1,5 +1,7 @@
 """afhub -- Hub API client for af-hub carry-patch workspaces."""
 
+from afhub.auth import resolve_hub_pat, resolve_hub_url
+from afhub.client import HubClient
 from afhub.errors import (
     HubAuthError,
     HubConflictError,
@@ -23,8 +25,17 @@ from afhub.models import (
     SyncResult,
     Workspace,
 )
+from afhub.polling import poll_clone_ready, poll_rebuild
 
 __all__ = [
+    # Client
+    "HubClient",
+    # Auth helpers
+    "resolve_hub_pat",
+    "resolve_hub_url",
+    # Polling helpers
+    "poll_clone_ready",
+    "poll_rebuild",
     # Error classes
     "HubAuthError",
     "HubConflictError",
