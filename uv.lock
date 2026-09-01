@@ -73,6 +73,7 @@ version = "4.3.6"
 source = { editable = "packages/agentfox" }
 dependencies = [
     { name = "afaudit" },
+    { name = "afhub" },
     { name = "afissues" },
     { name = "afspec" },
     { name = "anthropic", extra = ["bedrock", "vertex"] },
@@ -114,6 +115,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "afaudit", editable = "packages/afaudit" },
+    { name = "afhub", editable = "packages/afhub" },
     { name = "afissues", editable = "packages/afissues" },
     { name = "afspec", git = "https://github.com/agent-fox-dev/spec-format?subdirectory=packages%2Fafspec" },
     { name = "anthropic", extras = ["vertex", "bedrock"], specifier = ">=0.111" },

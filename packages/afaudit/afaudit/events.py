@@ -94,6 +94,16 @@ class AuditEventType(StrEnum):
     WORKSPACE_SETUP_FAILED = "workspace.setup_failed"
     RUN_PREFLIGHT = "run.preflight"
 
+    # Carry-patch pipeline events (03-REQ-8.1)
+    CARRY_PATCH_CONFLICT_DETECTED = "carry_patch.conflict_detected"
+    CARRY_PATCH_CONFLICT_RESOLVED = "carry_patch.conflict_resolved"
+    CARRY_PATCH_CONFLICT_FAILED = "carry_patch.conflict_failed"
+    CARRY_PATCH_PATCH_REGISTERED = "carry_patch.patch_registered"
+    CARRY_PATCH_REBUILD_REQUESTED = "carry_patch.rebuild_requested"
+    CARRY_PATCH_REBUILD_COMPLETED = "carry_patch.rebuild_completed"
+    CARRY_PATCH_REBUILD_FAILED = "carry_patch.rebuild_failed"
+    CARRY_PATCH_MERGED_DETECTED = "carry_patch.merged_detected"
+
 
 # ---------------------------------------------------------------------------
 # Data model

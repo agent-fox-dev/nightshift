@@ -9,12 +9,9 @@ Requirements: 03-REQ-1
 Test IDs: TS-03-1, TS-03-2, TS-03-3, TS-03-4, TS-03-5, TS-03-6
 
 Dependencies:
-- Spec 01 (afhub): HubClient, RebuildJob, HubConflictError, HubNoActivePatchesError
-  are stubbed inline because afhub is not yet implemented.
+- Spec 01 (afhub): HubClient, RebuildJob, HubConflictError, HubNoActivePatchesError.
 - Spec 02 (CarryPatchConfig): AgentFoxConfig.carry_patch not yet available;
   config is built with MagicMock to avoid import errors.
-- Group 4 (implementation): All assertions fail because the carry-patch
-  integration branch has not been added to fix_pipeline.py yet.
 """
 
 from __future__ import annotations
@@ -26,10 +23,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from afaudit.events import AuditEventType
+from afhub.errors import HubConflictError, HubNoActivePatchesError
 from agentfox.nightshift.fix_pipeline import FixPipeline
 
 # ---------------------------------------------------------------------------
-# Stub types for afhub (Spec 01 — not yet implemented)
+# Stub types for afhub models (lightweight stand-ins for Pydantic models)
 # ---------------------------------------------------------------------------
 
 
@@ -39,20 +37,6 @@ class _RebuildJob:
 
     id: str
     status: str
-
-
-class _HubConflictError(Exception):
-    """Stub for afhub.HubConflictError.
-
-    Raised by submit_rebuild() when a rebuild is already in progress.
-    """
-
-
-class _HubNoActivePatchesError(Exception):
-    """Stub for afhub.HubNoActivePatchesError.
-
-    Raised by submit_rebuild() when no active patches exist in the workspace.
-    """
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +80,12 @@ def _make_hub_client(
     submit_return: _RebuildJob | None = None,
     list_rebuilds_result: list[_RebuildJob] | None = None,
 ) -> MagicMock:
-    """Build a mock HubClient with async methods."""
+    """Build a mock HubClient with async methods.
+
+    Note: ``submit_raises`` should be an instance of the real
+    ``HubConflictError`` or ``HubNoActivePatchesError`` from afhub.errors
+    so that the fix pipeline's ``except`` clauses can catch them.
+    """
     client = MagicMock()
     client.add_patch = AsyncMock()
     if submit_raises is not None:
@@ -168,20 +157,37 @@ async def _call_integrate_fix(
     branch_name: str = "fix/issue-42",
     issue_title: str = "Fix null pointer in auth module",
     issue_number: int = 42,
+    poll_return: _RebuildJob | None = None,
 ) -> tuple[str, list]:
     """Helper: run pipeline._integrate_fix with mocked git operations.
 
-    Patches _auto_commit_pending_changes and _harvest_and_push so the test
-    can focus on the carry-patch hub API calls without real git operations.
+    Patches _auto_commit_pending_changes, _harvest_and_push, push_to_remote,
+    and poll_rebuild so the test can focus on the carry-patch hub API calls
+    without real git operations.
+
+    ``poll_return`` overrides the default poll_rebuild return value (defaults
+    to a completed RebuildJob).
+
     Returns the (status, changed_files) tuple from _integrate_fix.
     """
     issue = _make_mock_issue(number=issue_number, title=issue_title)
     spec = _make_mock_spec(branch_name=branch_name, issue_number=issue_number)
     workspace = _make_mock_workspace(branch=branch_name)
+    _default_poll = poll_return or _RebuildJob("job-1", "completed")
 
     with (
         patch.object(pipeline, "_auto_commit_pending_changes", AsyncMock()),
         patch.object(pipeline, "_harvest_and_push", AsyncMock(return_value=[])),
+        patch(
+            "agentfox.workspace.git.push_to_remote",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "agentfox.nightshift.fix_pipeline.poll_rebuild",
+            new_callable=AsyncMock,
+            return_value=_default_poll,
+        ),
     ):
         pipeline._platform.add_issue_comment = AsyncMock()
         result = await pipeline._integrate_fix(issue, spec, workspace)
@@ -255,7 +261,6 @@ class TestCarryPatchCallOrder:
 
         Requirements: 03-REQ-1.E5 — add_patch replaces local harvest
         Test ID: TS-03-1
-        Fails: carry-patch gate not implemented; local harvest still runs
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client()
@@ -266,6 +271,16 @@ class TestCarryPatchCallOrder:
         ) as mock_harvest:
             with (
                 patch.object(pipeline, "_auto_commit_pending_changes", AsyncMock()),
+                patch(
+                    "agentfox.workspace.git.push_to_remote",
+                    new_callable=AsyncMock,
+                    return_value=True,
+                ),
+                patch(
+                    "agentfox.nightshift.fix_pipeline.poll_rebuild",
+                    new_callable=AsyncMock,
+                    return_value=_RebuildJob("job-1", "completed"),
+                ),
             ):
                 pipeline._platform.add_issue_comment = AsyncMock()
                 await pipeline._integrate_fix(
@@ -274,8 +289,6 @@ class TestCarryPatchCallOrder:
                     _make_mock_workspace(),
                 )
 
-        # FAILS: carry-patch integration not yet implemented;
-        # _harvest_and_push is still called in the current code path
         mock_harvest.assert_not_called()
 
 
@@ -346,7 +359,6 @@ class TestAddPatchArguments:
 
         Requirements: 03-REQ-1.1 ordering
         Test ID: TS-03-1
-        Fails: carry-patch integration not yet implemented
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client()
@@ -362,13 +374,26 @@ class TestAddPatchArguments:
 
         hub_client.add_patch = tracking_add_patch
 
-        with patch(
-            "agentfox.workspace.git.push_to_remote",
-            AsyncMock(side_effect=lambda *a, **kw: call_order.append("push_to_remote")),
-        ):
-            await _call_integrate_fix(pipeline, branch_name="fix/issue-42")
+        issue = _make_mock_issue()
+        spec = _make_mock_spec(branch_name="fix/issue-42")
+        workspace = _make_mock_workspace(branch="fix/issue-42")
 
-        # FAILS: neither push nor add_patch are called in current implementation
+        with (
+            patch.object(pipeline, "_auto_commit_pending_changes", AsyncMock()),
+            patch.object(pipeline, "_harvest_and_push", AsyncMock(return_value=[])),
+            patch(
+                "agentfox.workspace.git.push_to_remote",
+                AsyncMock(side_effect=lambda *a, **kw: call_order.append("push_to_remote")),
+            ),
+            patch(
+                "agentfox.nightshift.fix_pipeline.poll_rebuild",
+                new_callable=AsyncMock,
+                return_value=_RebuildJob("job-1", "completed"),
+            ),
+        ):
+            pipeline._platform.add_issue_comment = AsyncMock()
+            await pipeline._integrate_fix(issue, spec, workspace)
+
         assert "push_to_remote" in call_order, "push_to_remote was not called"
         assert "add_patch" in call_order, "add_patch was not called"
         assert call_order.index("push_to_remote") < call_order.index("add_patch"), (
@@ -441,7 +466,7 @@ class TestSubmitRebuildAndConflict:
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
-            submit_raises=_HubConflictError("rebuild already running"),
+            submit_raises=HubConflictError(status_code=409, message="rebuild already running", error_type="conflict"),
             list_rebuilds_result=[_RebuildJob("active-job-1", "running")],
         )
         pipeline = _make_pipeline(
@@ -464,7 +489,7 @@ class TestSubmitRebuildAndConflict:
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
-            submit_raises=_HubConflictError("rebuild already running"),
+            submit_raises=HubConflictError(status_code=409, message="rebuild already running", error_type="conflict"),
             list_rebuilds_result=[
                 _RebuildJob("active-job-1", "running"),
                 _RebuildJob("active-job-2", "queued"),
@@ -508,7 +533,9 @@ class TestHubNoActivePatchesError:
 
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
-            submit_raises=_HubNoActivePatchesError("no active patches"),
+            submit_raises=HubNoActivePatchesError(
+                status_code=400, message="no active patches", error_type="no_active_patches",
+            ),
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
@@ -530,7 +557,9 @@ class TestHubNoActivePatchesError:
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
-            submit_raises=_HubNoActivePatchesError("no active patches"),
+            submit_raises=HubNoActivePatchesError(
+                status_code=400, message="no active patches", error_type="no_active_patches",
+            ),
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
@@ -552,7 +581,9 @@ class TestHubNoActivePatchesError:
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
-            submit_raises=_HubNoActivePatchesError("no active patches"),
+            submit_raises=HubNoActivePatchesError(
+                status_code=400, message="no active patches", error_type="no_active_patches",
+            ),
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
@@ -717,7 +748,7 @@ class TestCarryPatchAuditEvents:
         def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_event_types.append(str(event_type))
 
-        with patch("afaudit.emit.emit_audit_event", side_effect=capture_emit):
+        with patch("agentfox.nightshift.fix_pipeline.emit_audit_event", side_effect=capture_emit):
             await _call_integrate_fix(pipeline)
 
         # FAILS: carry-patch integration not yet implemented;
@@ -744,7 +775,7 @@ class TestCarryPatchAuditEvents:
         def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_event_types.append(str(event_type))
 
-        with patch("afaudit.emit.emit_audit_event", side_effect=capture_emit):
+        with patch("agentfox.nightshift.fix_pipeline.emit_audit_event", side_effect=capture_emit):
             await _call_integrate_fix(pipeline)
 
         # FAILS: carry-patch integration not yet implemented
@@ -770,7 +801,7 @@ class TestCarryPatchAuditEvents:
         def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_event_types.append(str(event_type))
 
-        with patch("afaudit.emit.emit_audit_event", side_effect=capture_emit):
+        with patch("agentfox.nightshift.fix_pipeline.emit_audit_event", side_effect=capture_emit):
             await _call_integrate_fix(pipeline)
 
         # FAILS: carry-patch integration not yet implemented
@@ -796,7 +827,7 @@ class TestCarryPatchAuditEvents:
         def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_event_types.append(str(event_type))
 
-        with patch("afaudit.emit.emit_audit_event", side_effect=capture_emit):
+        with patch("agentfox.nightshift.fix_pipeline.emit_audit_event", side_effect=capture_emit):
             await _call_integrate_fix(pipeline)
 
         expected_events = [

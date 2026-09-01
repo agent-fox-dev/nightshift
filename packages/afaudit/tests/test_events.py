@@ -39,13 +39,14 @@ class TestEventModelTypes:
         assert issubclass(events.AuditEventType, str)
         assert issubclass(events.AuditEventType, enum.Enum)
 
-    def test_audit_event_type_has_55_members(self) -> None:
-        """AuditEventType must have exactly 55 members.
+    def test_audit_event_type_has_63_members(self) -> None:
+        """AuditEventType must have exactly 63 members.
 
         Note: spec says 49 but the actual source has 55.
         See docs/errata/01_audit_event_type_count.md.
+        Spec 03 (carry-patch) added 8 more constants (03-REQ-8.1).
         """
-        assert len(events.AuditEventType) == 55, f"Expected 55 AuditEventType members, got {len(events.AuditEventType)}"
+        assert len(events.AuditEventType) == 63, f"Expected 63 AuditEventType members, got {len(events.AuditEventType)}"
 
     def test_audit_severity_is_str_enum(self) -> None:
         """AuditSeverity must be a StrEnum (inherits from str and Enum)."""

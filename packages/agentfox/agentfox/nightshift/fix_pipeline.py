@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 
 from afaudit.emit import emit_audit_event
 from afaudit.events import AuditEventType, generate_run_id
+from afhub.errors import HubConflictError, HubNoActivePatchesError
+from afhub.polling import poll_rebuild
 from afissues.labels import LABEL_FIXED, LABEL_NO_CHANGE, LABEL_PR
 from afissues.protocol import IssueResult
 
@@ -42,6 +44,7 @@ from agentfox.workspace import git as _workspace_git
 if TYPE_CHECKING:
     import duckdb
     from afaudit.sink import SinkDispatcher
+    from afhub.client import HubClient
 
     from agentfox.knowledge.fox_provider import KnowledgeProvider
     from agentfox.nightshift.coder_reviewer import CoderReviewerResult
@@ -241,6 +244,8 @@ class FixPipeline:
         spinner_callback: SpinnerCallback | None = None,
         conn: duckdb.DuckDBPyConnection | None = None,
         knowledge_provider: KnowledgeProvider | None = None,
+        hub_client: HubClient | None = None,
+        workspace_slug: str = "",
     ) -> None:
         self._config = config
         self._platform = platform
@@ -250,6 +255,8 @@ class FixPipeline:
         self._spinner_callback = spinner_callback
         self._conn = conn
         self._knowledge_provider = knowledge_provider
+        self._hub_client = hub_client
+        self._workspace_slug = workspace_slug
         self._run_id: str = ""
         self._pr_number: int | None = None
         self._pr_url: str | None = None
@@ -1192,6 +1199,14 @@ class FixPipeline:
         # uncommitted by the coder or reviewer session (NS-REQ-5).
         await self._auto_commit_pending_changes(workspace)
 
+        # 03-REQ-1.1 / 03-REQ-1.E5: Carry-patch mode — register patch on
+        # the hub and poll a rebuild instead of running a local harvest.
+        carry_patch_cfg = getattr(self._config, "carry_patch", None)
+        if carry_patch_cfg and carry_patch_cfg.enabled and self._hub_client is not None:
+            return await self._carry_patch_register_and_rebuild(
+                issue, spec, workspace,
+            )
+
         # 02-REQ-2.2 / 02-REQ-3.2 / 02-REQ-4.2: Branch on merge strategy
         merge_strategy = self._config.workspace.merge_strategy
 
@@ -1293,6 +1308,187 @@ class FixPipeline:
         if not changed_files:
             return "no_changes", []
         return "merged", changed_files
+
+    # ------------------------------------------------------------------
+    # Carry-patch integration (03-REQ-1)
+    # ------------------------------------------------------------------
+
+    async def _carry_patch_register_and_rebuild(
+        self,
+        issue: IssueResult,
+        spec: InMemorySpec,
+        workspace: WorkspaceInfo,
+    ) -> tuple[str, list[str]]:
+        """Push the fix branch, register a hub patch, and poll the rebuild.
+
+        Called instead of the local harvest when ``carry_patch.enabled``
+        is True and a ``HubClient`` is available.
+
+        Returns ``("merged", [])`` on success (analogous to a successful
+        harvest), ``("error", [])`` on failure (issue is marked for retry
+        by the caller).
+
+        Requirements: 03-REQ-1.1 through 03-REQ-1.6, 03-REQ-1.E1 through E5
+        """
+        slug = self._workspace_slug
+        hub_client = self._hub_client
+        assert hub_client is not None  # guarded by caller
+
+        carry_patch_cfg = self._config.carry_patch
+
+        # Step 1: Push fix branch to the hub git server (03-REQ-1.1).
+        try:
+            await _workspace_git.push_to_remote(
+                workspace.path,
+                workspace.branch,
+            )
+        except Exception:
+            # 03-REQ-1.E1: mark for retry and re-raise.
+            logger.warning(
+                "push_to_remote failed for branch %s — marking issue for retry",
+                spec.branch_name,
+            )
+            raise
+
+        # Step 2: Register the patch on the hub (03-REQ-1.1).
+        try:
+            await hub_client.add_patch(
+                slug,
+                spec.branch_name,
+                description=issue.title,
+                skip_branch_check=True,
+                if_not_exists=True,
+            )
+        except Exception:
+            # 03-REQ-1.E4: log, emit audit, mark for retry.
+            logger.warning(
+                "add_patch failed for branch %s in workspace %s",
+                spec.branch_name,
+                slug,
+            )
+            try:
+                emit_audit_event(
+                    self._sink,
+                    self._run_id,
+                    AuditEventType.CARRY_PATCH_REBUILD_FAILED,
+                    payload={"slug": slug, "branch": spec.branch_name, "reason": "add_patch_failed"},
+                )
+            except Exception:
+                logger.warning("Failed to emit CARRY_PATCH_REBUILD_FAILED audit event")
+            return "error", []
+
+        # Emit CARRY_PATCH_PATCH_REGISTERED (03-REQ-1.6).
+        try:
+            emit_audit_event(
+                self._sink,
+                self._run_id,
+                AuditEventType.CARRY_PATCH_PATCH_REGISTERED,
+                payload={"slug": slug, "branch": spec.branch_name},
+            )
+        except Exception:
+            logger.warning("Failed to emit CARRY_PATCH_PATCH_REGISTERED audit event")
+
+        # Step 3: Submit a rebuild (03-REQ-1.1).
+        job = None
+        try:
+            job = await hub_client.submit_rebuild(slug)
+        except HubConflictError:
+            # 03-REQ-1.4: A rebuild is already running — poll it instead.
+            logger.info(
+                "submit_rebuild raised HubConflictError for %s — "
+                "looking up active rebuild",
+                slug,
+            )
+            active_jobs = await hub_client.list_rebuilds(slug)
+            if active_jobs:
+                job = active_jobs[0]
+            else:
+                # 03-REQ-1.E3: Empty list — skip rebuild polling.
+                logger.warning(
+                    "list_rebuilds returned empty after HubConflictError for %s "
+                    "— skipping rebuild polling",
+                    slug,
+                )
+        except HubNoActivePatchesError:
+            # 03-REQ-1.5: No active patches — skip rebuild, no retry.
+            logger.warning(
+                "No active patches for workspace %s — skipping rebuild",
+                slug,
+            )
+
+        if job is None:
+            # No rebuild to poll (HubNoActivePatchesError or empty list_rebuilds).
+            return "merged", []
+
+        # Emit CARRY_PATCH_REBUILD_REQUESTED (03-REQ-1.6).
+        try:
+            emit_audit_event(
+                self._sink,
+                self._run_id,
+                AuditEventType.CARRY_PATCH_REBUILD_REQUESTED,
+                payload={"slug": slug, "rebuild_id": job.id},
+            )
+        except Exception:
+            logger.warning("Failed to emit CARRY_PATCH_REBUILD_REQUESTED audit event")
+
+        # Step 4: Poll the rebuild to terminal status (03-REQ-1.1).
+        try:
+            result = await poll_rebuild(
+                hub_client,
+                slug,
+                job.id,
+                timeout=carry_patch_cfg.rebuild_timeout,
+                poll_interval=carry_patch_cfg.rebuild_poll_interval,
+            )
+        except TimeoutError:
+            # 03-REQ-1.E2: Timeout — treat as rebuild failure.
+            logger.warning(
+                "poll_rebuild timed out for rebuild %s in workspace %s",
+                job.id,
+                slug,
+            )
+            try:
+                emit_audit_event(
+                    self._sink,
+                    self._run_id,
+                    AuditEventType.CARRY_PATCH_REBUILD_FAILED,
+                    payload={"slug": slug, "rebuild_id": job.id, "reason": "timeout"},
+                )
+            except Exception:
+                logger.warning("Failed to emit CARRY_PATCH_REBUILD_FAILED audit event")
+            return "error", []
+
+        # Step 5: Handle terminal status.
+        if result.status == "completed":
+            # 03-REQ-1.2: Proceed with normal issue closure.
+            try:
+                emit_audit_event(
+                    self._sink,
+                    self._run_id,
+                    AuditEventType.CARRY_PATCH_REBUILD_COMPLETED,
+                    payload={"slug": slug, "rebuild_id": result.id},
+                )
+            except Exception:
+                logger.warning("Failed to emit CARRY_PATCH_REBUILD_COMPLETED audit event")
+            return "merged", []
+
+        # 03-REQ-1.3 / 03-REQ-1.3b: failed, dead_letter, or cancelled.
+        logger.warning(
+            "Rebuild %s for workspace %s reached terminal status '%s'",
+            result.id,
+            slug,
+            result.status,
+        )
+        try:
+            emit_audit_event(
+                self._sink,
+                self._run_id,
+                AuditEventType.CARRY_PATCH_REBUILD_FAILED,
+                payload={"slug": slug, "rebuild_id": result.id, "status": result.status},
+            )
+        except Exception:
+            logger.warning("Failed to emit CARRY_PATCH_REBUILD_FAILED audit event")
+        return "error", []
 
     async def _handle_result(
         self,
