@@ -1,0 +1,1455 @@
+{
+  "$schema": null,
+  "spec_id": "01",
+  "spec_name": "afhub_client",
+  "schema_version": 1,
+  "introduction": "The `afhub` package is an async Python HTTP client for the af-hub carry-patch REST API, providing Pydantic data models, a typed error hierarchy, auth helpers, and polling utilities. Note: requirements referencing httpx and pydantic APIs are based on PRD assumptions and should be cross-checked against the installed library versions before implementation.",
+  "glossary": {
+    "AF_HUB_TOKEN": "Environment variable that holds the hub Personal Access Token, used by resolve_hub_pat as a fallback when no token flag is provided",
+    "AF_HUB_URL": "Environment variable that holds the hub base URL, used by resolve_hub_url as a fallback when no URL flag is provided",
+    "ConnectError": "httpx exception raised when a TCP connection cannot be established (e.g. DNS failure, refused connection)",
+    "ConnectTimeout": "httpx exception raised when a TCP connection attempt exceeds the configured timeout",
+    "HubAuthError": "Exception raised when the hub returns HTTP 401 Unauthorized",
+    "HubClient": "The primary async HTTP client class in the afhub package that wraps httpx.AsyncClient and exposes all hub API operations",
+    "HubConflictError": "Exception raised when the hub returns HTTP 409 Conflict; stores error_type for caller inspection",
+    "HubConnectionError": "Exception raised when a network-level failure persists after all retries are exhausted",
+    "HubError": "Base exception class for all hub API errors; carries status_code, message, and error_type",
+    "HubForbiddenError": "Exception raised when the hub returns HTTP 403 Forbidden",
+    "HubModeError": "Exception raised when the hub returns a 400 response with error_type 'workspace_mode_mismatch'",
+    "HubNoActivePatchesError": "Exception raised when the hub returns a 400 response with error_type 'no_active_patches'",
+    "HubNotFoundError": "Exception raised when the hub returns HTTP 404 Not Found",
+    "PAT": "Personal Access Token — a bearer credential used to authenticate requests to the af-hub REST API",
+    "Patch": "Pydantic model representing a carry-patch entry within a workspace",
+    "PatchDetail": "Pydantic model representing the status of a single patch within a PatchStatusDashboard",
+    "PatchResult": "Pydantic model representing the outcome of applying a single patch during a rebuild",
+    "PatchStatusDashboard": "Pydantic model representing the full patch status view for a workspace, including per-patch details and a summary",
+    "PatchSummary": "Pydantic model representing aggregate counts of patches by status within a PatchStatusDashboard",
+    "ReadTimeout": "httpx exception raised when reading a response body exceeds the configured timeout",
+    "RebuildJob": "Pydantic model representing an asynchronous rebuild job on the hub",
+    "RebuildPreview": "Pydantic model representing a dry-run preview of what a rebuild would produce",
+    "RebuildPreviewPatchResult": "Pydantic model representing the predicted outcome for a single patch in a RebuildPreview",
+    "RerereEntry": "Pydantic model representing a recorded rerere conflict resolution",
+    "SyncResult": "Pydantic model representing the result of a workspace sync operation",
+    "Workspace": "Pydantic model representing a hub workspace resource, including clone and sync status fields",
+    "aclose": "Async method on HubClient that closes the underlying httpx.AsyncClient and releases connection pool resources",
+    "add_patch": "HubClient method that creates a single patch by sending a single-object JSON body to POST /patches",
+    "add_patches_batch": "HubClient method that creates multiple patches by sending a JSON array body to POST /patches",
+    "asyncio_mode": "pytest-asyncio configuration option; when set to 'auto', all async test functions are automatically treated as asyncio coroutines",
+    "clone_failed": "Synthetic error_type used by poll_clone_ready when the workspace clone_status transitions to 'failed'",
+    "clone_status": "A field on the Workspace model indicating the current state of the workspace git clone (e.g. 'ready', 'failed', 'pending')",
+    "error_type": "A string discriminator field in the hub error envelope that identifies the specific error category (e.g. 'workspace_mode_mismatch', 'no_active_patches')",
+    "extra_ignore": "Pydantic model configuration (extra='ignore') that silently discards unknown fields in API responses, enabling forward compatibility",
+    "forget_rerere": "HubClient method that calls DELETE /workspaces/:slug/rerere/*pathspec and returns None on 204",
+    "get_patch_status": "HubClient method that calls GET /workspaces/:slug/patch-status and returns a PatchStatusDashboard",
+    "get_resolved_variables": "HubClient method that calls GET /vars/resolved and returns a dict mapping variable keys to their resolved string values",
+    "list_rebuilds": "HubClient method that calls GET /rebuilds and unwraps the 'jobs' array from the response envelope",
+    "list_rerere": "HubClient method that calls GET /rerere and unwraps the 'resolutions' array from the response envelope",
+    "no_active_patches": "error_type value returned by the hub when an operation requires active patches but none exist",
+    "poll_clone_ready": "Async polling helper that repeatedly calls get_workspace() until clone_status is 'ready' or 'failed', or timeout elapses",
+    "poll_rebuild": "Async polling helper that repeatedly calls get_rebuild() until the RebuildJob reaches a terminal status or timeout elapses",
+    "reclone_workspace": "HubClient method that calls POST /workspaces/:slug/reclone and returns the updated Workspace",
+    "remove_patch": "HubClient method that calls DELETE /patches/:id and returns None on 204",
+    "reorder_patches": "HubClient method that calls POST /patches/reorder with an ordered list of patch IDs",
+    "resolve_hub_pat": "Auth helper function that resolves the hub PAT from a CLI flag, then environment variable, then returns None",
+    "resolve_hub_url": "Auth helper function that resolves the hub base URL from a CLI flag, then environment variable, then a pre-resolved config string, then returns None",
+    "rollback_rebuild": "HubClient method that calls POST /rebuilds/:id/rollback and extracts the previous_integration_head_sha string from the response",
+    "set_variable": "HubClient convenience upsert method that tries PATCH /vars/:key first and falls back to POST /vars on 404",
+    "slug": "A URL-safe string identifier for a hub workspace (e.g. 'my-workspace')",
+    "submit_rebuild": "HubClient method that calls POST /rebuild and returns a RebuildJob from the 202 response",
+    "sync_workspace": "HubClient method that calls POST /workspaces/:slug/sync and returns a SyncResult",
+    "workspace_mode_mismatch": "error_type value returned by the hub when an operation is incompatible with the workspace's current mode"
+  },
+  "requirements": [
+    {
+      "id": "01-REQ-1",
+      "title": "HubClient workspace operations",
+      "user_story": {
+        "role": "developer using the afhub package",
+        "goal": "create a HubClient and call workspace-level API methods",
+        "benefit": "I can inspect and manage hub workspaces without writing raw HTTP code"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-1.1",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "create a single shared httpx.AsyncClient instance configured with a base URL of endpoint_url and an Authorization: Bearer <pat> header applied to every request",
+          "return_contract": "returns a HubClient instance ready to issue authenticated requests",
+          "trigger": "a caller instantiates HubClient(endpoint_url, pat)"
+        },
+        {
+          "id": "01-REQ-1.2",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send GET /api/v1/workspaces/:slug and parse the response body into a Workspace model",
+          "return_contract": "returns a Workspace instance on HTTP 200",
+          "trigger": "a caller invokes get_workspace(slug)"
+        },
+        {
+          "id": "01-REQ-1.3",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/sync with a JSON body containing reset_to_upstream and parse the response into a SyncResult model",
+          "return_contract": "returns a SyncResult instance on HTTP 200",
+          "trigger": "a caller invokes sync_workspace(slug, reset_to_upstream=False)"
+        },
+        {
+          "id": "01-REQ-1.4",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send GET /api/v1/workspaces/:slug/patch-status and parse the response into a PatchStatusDashboard model",
+          "return_contract": "returns a PatchStatusDashboard instance on HTTP 200",
+          "trigger": "a caller invokes get_patch_status(slug)"
+        },
+        {
+          "id": "01-REQ-1.5",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/reclone and parse the response into a Workspace model",
+          "return_contract": "returns a Workspace instance on HTTP 200",
+          "trigger": "a caller invokes reclone_workspace(slug)"
+        },
+        {
+          "id": "01-REQ-1.6",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "close the underlying httpx.AsyncClient and release all connection pool resources",
+          "return_contract": "returns None; subsequent requests on the same HubClient raise an error",
+          "trigger": "a caller invokes aclose()"
+        },
+        {
+          "id": "01-REQ-1.7",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "call aclose() automatically on context manager exit, even if an exception is raised inside the block",
+          "return_contract": "returns the HubClient instance as the context variable; aclose() is guaranteed to be called on exit",
+          "trigger": "a caller uses HubClient as an async context manager via 'async with HubClient(...) as client'"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubNotFoundError with the parsed error envelope fields",
+          "return_contract": "raises HubNotFoundError(status_code=404, message=<hub message>, error_type=<hub error_type>)",
+          "error_condition": "the hub returns HTTP 404 for get_workspace(slug)"
+        },
+        {
+          "id": "01-REQ-1.E2",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubAuthError with the parsed error envelope fields",
+          "return_contract": "raises HubAuthError(status_code=401, message=<hub message>, error_type=<hub error_type>)",
+          "error_condition": "the hub returns HTTP 401 for any workspace operation"
+        },
+        {
+          "id": "01-REQ-1.E3",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubConnectionError after the retry budget is consumed; the underlying httpx.AsyncClient is not closed by the retry logic",
+          "return_contract": "raises HubConnectionError",
+          "error_condition": "a ConnectTimeout, ReadTimeout, or ConnectError is raised during a workspace operation and all retries are exhausted"
+        },
+        {
+          "id": "01-REQ-1.E4",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "propagate the error raised by the closed httpx.AsyncClient without masking it",
+          "return_contract": "raises an exception from httpx indicating the client is closed",
+          "error_condition": "aclose() is called and then a workspace method is subsequently invoked on the same HubClient instance"
+        },
+        {
+          "id": "01-REQ-1.E5",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "call aclose() before propagating the exception, ensuring no connection leak",
+          "return_contract": "the original exception propagates to the caller; aclose() is called exactly once",
+          "error_condition": "an exception is raised inside an 'async with HubClient(...)' block"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-2",
+      "title": "HubClient patch operations",
+      "user_story": {
+        "role": "developer using the afhub package",
+        "goal": "list, create, update, reorder, restore, and delete patches in a workspace",
+        "benefit": "I can manage the carry-patch stack without writing raw HTTP code"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send GET /api/v1/workspaces/:slug/patches and parse the response array into a list of Patch models",
+          "return_contract": "returns list[Patch] on HTTP 200; returns an empty list when the hub returns an empty array",
+          "trigger": "a caller invokes list_patches(slug)"
+        },
+        {
+          "id": "01-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/patches with a single-object JSON body containing the provided fields and parse the 201 response into a Patch model",
+          "return_contract": "returns a Patch instance on HTTP 201",
+          "trigger": "a caller invokes add_patch(slug, branch_name, position=None, upstream_pr_url=None, description=None, skip_branch_check=False, if_not_exists=False)"
+        },
+        {
+          "id": "01-REQ-2.3",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/patches with a JSON array body and parse the 201 response into a list of Patch models",
+          "return_contract": "returns list[Patch] on HTTP 201",
+          "trigger": "a caller invokes add_patches_batch(slug, patches) with a list of patch dicts"
+        },
+        {
+          "id": "01-REQ-2.4",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send PATCH /api/v1/workspaces/:slug/patches/:id with a JSON body of the provided kwargs and parse the response into a Patch model",
+          "return_contract": "returns a Patch instance on HTTP 200",
+          "trigger": "a caller invokes update_patch(slug, patch_id, **kwargs)"
+        },
+        {
+          "id": "01-REQ-2.5",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send DELETE /api/v1/workspaces/:slug/patches/:id and return None without attempting to parse the empty response body",
+          "return_contract": "returns None on HTTP 204",
+          "trigger": "a caller invokes remove_patch(slug, patch_id)"
+        },
+        {
+          "id": "01-REQ-2.6",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/patches/:id/restore and parse the response into a Patch model",
+          "return_contract": "returns a Patch instance on HTTP 200",
+          "trigger": "a caller invokes restore_patch(slug, patch_id)"
+        },
+        {
+          "id": "01-REQ-2.7",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/patches/reorder with a JSON body containing the ordered patch_ids list and parse the response into a list of Patch models",
+          "return_contract": "returns list[Patch] on HTTP 200",
+          "trigger": "a caller invokes reorder_patches(slug, patch_ids)"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubNotFoundError; do not return None",
+          "return_contract": "raises HubNotFoundError(status_code=404)",
+          "error_condition": "the hub returns HTTP 404 for remove_patch(slug, patch_id)"
+        },
+        {
+          "id": "01-REQ-2.E2",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubConflictError with the error_type from the response envelope stored on the exception",
+          "return_contract": "raises HubConflictError(status_code=409, error_type=<hub error_type>)",
+          "error_condition": "the hub returns HTTP 409 for add_patch"
+        },
+        {
+          "id": "01-REQ-2.E3",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/patches with an empty JSON array body and parse the 201 response",
+          "return_contract": "returns an empty list[Patch] on HTTP 201",
+          "trigger": "a caller invokes add_patches_batch(slug, []) with an empty list"
+        },
+        {
+          "id": "01-REQ-2.E4",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubModeError",
+          "return_contract": "raises HubModeError(status_code=400, error_type='workspace_mode_mismatch')",
+          "error_condition": "the hub returns HTTP 400 with error_type 'workspace_mode_mismatch' for a patch operation"
+        },
+        {
+          "id": "01-REQ-2.E5",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise the base HubError",
+          "return_contract": "raises HubError(status_code=400, error_type=<unrecognized value>)",
+          "error_condition": "the hub returns HTTP 400 with an unrecognized error_type for a patch operation"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-3",
+      "title": "HubClient rebuild operations",
+      "user_story": {
+        "role": "developer using the afhub package",
+        "goal": "submit, inspect, cancel, requeue, rollback, and preview rebuild jobs",
+        "benefit": "I can drive the hub rebuild lifecycle programmatically without writing raw HTTP code"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/rebuild with a JSON body containing the provided strategy and fail_mode fields (omitting None values) and parse the 202 response into a RebuildJob model",
+          "return_contract": "returns a RebuildJob instance on HTTP 202",
+          "trigger": "a caller invokes submit_rebuild(slug, strategy=None, fail_mode=None)"
+        },
+        {
+          "id": "01-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send GET /api/v1/workspaces/:slug/rebuilds/:id and parse the response into a RebuildJob model",
+          "return_contract": "returns a RebuildJob instance on HTTP 200",
+          "trigger": "a caller invokes get_rebuild(slug, rebuild_id)"
+        },
+        {
+          "id": "01-REQ-3.3",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send GET /api/v1/workspaces/:slug/rebuilds, extract the 'jobs' array from the response envelope, and parse each element into a RebuildJob model",
+          "return_contract": "returns list[RebuildJob] on HTTP 200; returns an empty list when 'jobs' is an empty array",
+          "trigger": "a caller invokes list_rebuilds(slug)"
+        },
+        {
+          "id": "01-REQ-3.4",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send DELETE /api/v1/workspaces/:slug/rebuilds/:id and parse the response into a RebuildJob model representing the cancelled job",
+          "return_contract": "returns a RebuildJob instance on HTTP 200",
+          "trigger": "a caller invokes cancel_rebuild(slug, rebuild_id)"
+        },
+        {
+          "id": "01-REQ-3.5",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/rebuilds/:id/requeue and parse the response into a RebuildJob model",
+          "return_contract": "returns a RebuildJob instance on HTTP 200",
+          "trigger": "a caller invokes requeue_rebuild(slug, rebuild_id)"
+        },
+        {
+          "id": "01-REQ-3.6",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/rebuilds/:id/rollback, parse the JSON response object, and extract the value of the 'previous_integration_head_sha' key as a plain string",
+          "return_contract": "returns a str (the SHA value) on HTTP 200",
+          "trigger": "a caller invokes rollback_rebuild(slug, rebuild_id)"
+        },
+        {
+          "id": "01-REQ-3.7",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send GET /api/v1/workspaces/:slug/rebuild-preview and parse the response into a RebuildPreview model",
+          "return_contract": "returns a RebuildPreview instance on HTTP 200",
+          "trigger": "a caller invokes get_rebuild_preview(slug)"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubNotFoundError",
+          "return_contract": "raises HubNotFoundError(status_code=404)",
+          "error_condition": "the hub returns HTTP 404 for get_rebuild(slug, rebuild_id)"
+        },
+        {
+          "id": "01-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubNoActivePatchesError",
+          "return_contract": "raises HubNoActivePatchesError(status_code=400, error_type='no_active_patches')",
+          "error_condition": "the hub returns HTTP 400 with error_type 'no_active_patches' for submit_rebuild"
+        },
+        {
+          "id": "01-REQ-3.E3",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubConflictError with the error_type stored on the exception",
+          "return_contract": "raises HubConflictError(status_code=409, error_type=<hub error_type>)",
+          "error_condition": "the hub returns HTTP 409 for requeue_rebuild"
+        },
+        {
+          "id": "01-REQ-3.E4",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise a KeyError or HubError indicating the expected field is absent; do not return None silently",
+          "return_contract": "raises an exception indicating the missing field",
+          "error_condition": "the hub returns HTTP 200 for rollback_rebuild but the response body is missing the 'previous_integration_head_sha' key"
+        },
+        {
+          "id": "01-REQ-3.E5",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubForbiddenError",
+          "return_contract": "raises HubForbiddenError(status_code=403)",
+          "error_condition": "the hub returns HTTP 403 for submit_rebuild"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-4",
+      "title": "HubClient rerere, variable, and secret operations",
+      "user_story": {
+        "role": "developer using the afhub package",
+        "goal": "manage rerere resolutions, workspace variables, and secrets via the hub API",
+        "benefit": "I can automate workspace configuration without writing raw HTTP code"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send GET /api/v1/workspaces/:slug/rerere, extract the 'resolutions' array from the response envelope, and parse each element into a RerereEntry model",
+          "return_contract": "returns list[RerereEntry] on HTTP 200; returns an empty list when 'resolutions' is empty",
+          "trigger": "a caller invokes list_rerere(slug)"
+        },
+        {
+          "id": "01-REQ-4.2",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send DELETE /api/v1/workspaces/:slug/rerere/*pathspec and return None without parsing the empty response body",
+          "return_contract": "returns None on HTTP 204",
+          "trigger": "a caller invokes forget_rerere(slug, pathspec)"
+        },
+        {
+          "id": "01-REQ-4.3",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/vars with a JSON body containing key and value, and return None without parsing the response body",
+          "return_contract": "returns None on HTTP 201",
+          "trigger": "a caller invokes create_variable(slug, key, value)"
+        },
+        {
+          "id": "01-REQ-4.4",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send PATCH /api/v1/workspaces/:slug/vars/:key with a JSON body containing the new value, and return None without parsing the response body",
+          "return_contract": "returns None on HTTP 200",
+          "trigger": "a caller invokes update_variable(slug, key, value)"
+        },
+        {
+          "id": "01-REQ-4.5",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send PATCH /api/v1/workspaces/:slug/vars/:key; on success return None without issuing a prior GET",
+          "return_contract": "returns None on HTTP 200 from PATCH",
+          "trigger": "a caller invokes set_variable(slug, key, value) and the hub returns HTTP 200 for PATCH /vars/:key"
+        },
+        {
+          "id": "01-REQ-4.6",
+          "ears_pattern": "complex_event",
+          "system": "HubClient",
+          "action": "fall back to POST /api/v1/workspaces/:slug/vars with a JSON body containing key and value, and return None",
+          "return_contract": "returns None on HTTP 201 from the fallback POST",
+          "trigger": "a caller invokes set_variable(slug, key, value)",
+          "condition": "the hub returns HTTP 404 for PATCH /vars/:key"
+        },
+        {
+          "id": "01-REQ-4.7",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send DELETE /api/v1/workspaces/:slug/vars/:key and return None without parsing the empty response body",
+          "return_contract": "returns None on HTTP 204",
+          "trigger": "a caller invokes delete_variable(slug, key)"
+        },
+        {
+          "id": "01-REQ-4.8",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send GET /api/v1/workspaces/:slug/vars/resolved and parse the response JSON object as a dict[str, str]",
+          "return_contract": "returns dict[str, str] on HTTP 200; returns an empty dict when the hub returns an empty object",
+          "trigger": "a caller invokes get_resolved_variables(slug)"
+        },
+        {
+          "id": "01-REQ-4.9",
+          "ears_pattern": "event_driven",
+          "system": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/secrets with a JSON body containing key and value, and return None without parsing the response body",
+          "return_contract": "returns None on HTTP 201",
+          "trigger": "a caller invokes create_secret(slug, key, value)"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubNotFoundError",
+          "return_contract": "raises HubNotFoundError(status_code=404)",
+          "error_condition": "the hub returns HTTP 404 for forget_rerere(slug, pathspec)"
+        },
+        {
+          "id": "01-REQ-4.E2",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubNotFoundError from the POST failure; do not retry further",
+          "return_contract": "raises HubNotFoundError(status_code=404)",
+          "error_condition": "the hub returns HTTP 404 for the fallback POST in set_variable (i.e. both PATCH and POST return 404)"
+        },
+        {
+          "id": "01-REQ-4.E3",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubAuthError",
+          "return_contract": "raises HubAuthError(status_code=401)",
+          "error_condition": "the hub returns HTTP 401 for create_secret"
+        },
+        {
+          "id": "01-REQ-4.E4",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubConflictError with the error_type stored on the exception",
+          "return_contract": "raises HubConflictError(status_code=409, error_type=<hub error_type>)",
+          "error_condition": "the hub returns HTTP 409 for create_variable"
+        },
+        {
+          "id": "01-REQ-4.E5",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "surface the HubConnectionError immediately without attempting the fallback POST",
+          "return_contract": "raises HubConnectionError",
+          "error_condition": "set_variable is called and the PATCH request raises HubConnectionError after retries"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-5",
+      "title": "Pydantic data models",
+      "user_story": {
+        "role": "developer using the afhub package",
+        "goal": "receive strongly-typed Python objects from all hub API responses",
+        "benefit": "I get IDE autocompletion, runtime validation, and forward-compatibility with additive hub API changes"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-5.1",
+          "ears_pattern": "ubiquitous",
+          "system": "all Pydantic models in afhub.models",
+          "action": "use model_config = ConfigDict(extra='ignore') so that unknown fields in hub responses are silently discarded",
+          "return_contract": "model instances are created successfully even when the hub response contains fields not declared in the model"
+        },
+        {
+          "id": "01-REQ-5.2",
+          "ears_pattern": "event_driven",
+          "system": "Workspace model",
+          "action": "validate and populate required fields (slug, git_url, workspace_mode, status, clone_status, sync_status) and optional fields (clone_error, sync_error, sync_mode, upstream_url, upstream_head_sha, head_sha, integration_branch, last_sync_at) defaulting to None",
+          "return_contract": "returns a Workspace instance; raises pydantic.ValidationError if any required field is absent",
+          "trigger": "a caller constructs a Workspace from a hub response dict"
+        },
+        {
+          "id": "01-REQ-5.3",
+          "ears_pattern": "event_driven",
+          "system": "Patch model",
+          "action": "validate and populate required fields (id, workspace_slug, branch_name, position, status, added_at, updated_at) and optional fields (conflict_files, upstream_pr_url, description, deleted_at) defaulting to None",
+          "return_contract": "returns a Patch instance; raises pydantic.ValidationError if any required field is absent",
+          "trigger": "a caller constructs a Patch from a hub response dict"
+        },
+        {
+          "id": "01-REQ-5.4",
+          "ears_pattern": "event_driven",
+          "system": "RebuildJob model",
+          "action": "validate and populate required fields (id, status, created_at) and optional fields (strategy, error, patch_results, integration_head_sha, previous_integration_head_sha, completed_at) defaulting to None",
+          "return_contract": "returns a RebuildJob instance; raises pydantic.ValidationError if any required field is absent",
+          "trigger": "a caller constructs a RebuildJob from a hub response dict"
+        },
+        {
+          "id": "01-REQ-5.5",
+          "ears_pattern": "ubiquitous",
+          "system": "afhub package",
+          "action": "export all models (Workspace, Patch, RebuildJob, PatchResult, SyncResult, RerereEntry, PatchStatusDashboard, PatchDetail, PatchSummary, RebuildPreview, RebuildPreviewPatchResult) from afhub.__init__ so callers can import them from the top-level package",
+          "return_contract": "all listed model classes are importable directly from the afhub namespace"
+        },
+        {
+          "id": "01-REQ-5.6",
+          "ears_pattern": "ubiquitous",
+          "system": "afhub.models",
+          "action": "define no Variable model; variable endpoint responses are treated as opaque and callers use get_resolved_variables for read access",
+          "return_contract": "importing afhub.models does not expose a Variable class"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "Workspace model",
+          "action": "raise pydantic.ValidationError listing the missing field",
+          "return_contract": "raises pydantic.ValidationError; the HubClient propagates this exception to the caller",
+          "error_condition": "the hub response omits a required field such as slug"
+        },
+        {
+          "id": "01-REQ-5.E2",
+          "ears_pattern": "event_driven",
+          "system": "all Pydantic models",
+          "action": "silently discard the unknown field due to extra_ignore configuration",
+          "return_contract": "returns a valid model instance with no error",
+          "trigger": "the hub response includes an unrecognized field not declared in the model"
+        },
+        {
+          "id": "01-REQ-5.E3",
+          "ears_pattern": "event_driven",
+          "system": "PatchSummary model",
+          "action": "default total_rerere_resolutions to 0",
+          "return_contract": "returns a PatchSummary instance with total_rerere_resolutions == 0",
+          "trigger": "the hub response omits the total_rerere_resolutions field"
+        },
+        {
+          "id": "01-REQ-5.E4",
+          "ears_pattern": "unwanted",
+          "system": "RebuildJob model",
+          "action": "raise pydantic.ValidationError",
+          "return_contract": "raises pydantic.ValidationError",
+          "error_condition": "the hub response provides a non-string value for the id field"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-6",
+      "title": "Error hierarchy",
+      "user_story": {
+        "role": "developer using the afhub package",
+        "goal": "catch specific typed exceptions for different hub error conditions",
+        "benefit": "I can write precise error handling without parsing raw HTTP status codes or error envelopes manually"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "HubError",
+          "action": "serve as the base exception class for all hub errors, carrying status_code (int), message (str), and error_type (str) attributes",
+          "return_contract": "HubError instances expose .status_code, .message, and .error_type attributes"
+        },
+        {
+          "id": "01-REQ-6.2",
+          "ears_pattern": "event_driven",
+          "system": "HubClient error handling",
+          "action": "raise HubAuthError, a subclass of HubError, populated from the error envelope",
+          "return_contract": "raises HubAuthError with status_code=401",
+          "trigger": "the hub returns HTTP 401"
+        },
+        {
+          "id": "01-REQ-6.3",
+          "ears_pattern": "event_driven",
+          "system": "HubClient error handling",
+          "action": "raise HubForbiddenError, a subclass of HubError, populated from the error envelope",
+          "return_contract": "raises HubForbiddenError with status_code=403",
+          "trigger": "the hub returns HTTP 403"
+        },
+        {
+          "id": "01-REQ-6.4",
+          "ears_pattern": "event_driven",
+          "system": "HubClient error handling",
+          "action": "raise HubNotFoundError, a subclass of HubError, populated from the error envelope",
+          "return_contract": "raises HubNotFoundError with status_code=404",
+          "trigger": "the hub returns HTTP 404"
+        },
+        {
+          "id": "01-REQ-6.5",
+          "ears_pattern": "event_driven",
+          "system": "HubClient error handling",
+          "action": "raise HubConflictError, a subclass of HubError, with the error_type from the envelope stored on the exception for caller inspection",
+          "return_contract": "raises HubConflictError with status_code=409 and .error_type set",
+          "trigger": "the hub returns HTTP 409"
+        },
+        {
+          "id": "01-REQ-6.6",
+          "ears_pattern": "event_driven",
+          "system": "HubClient error handling",
+          "action": "raise HubModeError, a subclass of HubError",
+          "return_contract": "raises HubModeError with status_code=400 and error_type='workspace_mode_mismatch'",
+          "trigger": "the hub returns HTTP 400 with error_type 'workspace_mode_mismatch'"
+        },
+        {
+          "id": "01-REQ-6.7",
+          "ears_pattern": "event_driven",
+          "system": "HubClient error handling",
+          "action": "raise HubNoActivePatchesError, a subclass of HubError",
+          "return_contract": "raises HubNoActivePatchesError with status_code=400 and error_type='no_active_patches'",
+          "trigger": "the hub returns HTTP 400 with error_type 'no_active_patches'"
+        },
+        {
+          "id": "01-REQ-6.8",
+          "ears_pattern": "event_driven",
+          "system": "HubClient error handling",
+          "action": "raise the base HubError",
+          "return_contract": "raises HubError with status_code=400 and .error_type set to the unrecognized value",
+          "trigger": "the hub returns HTTP 400 with an unrecognized error_type"
+        },
+        {
+          "id": "01-REQ-6.9",
+          "ears_pattern": "ubiquitous",
+          "system": "afhub package",
+          "action": "export all error classes (HubError, HubAuthError, HubForbiddenError, HubNotFoundError, HubConflictError, HubConnectionError, HubModeError, HubNoActivePatchesError) from afhub.__init__",
+          "return_contract": "all listed error classes are importable directly from the afhub namespace"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "HubClient error handling",
+          "action": "raise HubError with the raw status code and a best-effort message; do not crash with an unhandled JSON parse error",
+          "return_contract": "raises HubError with status_code set to the HTTP status code",
+          "error_condition": "the hub returns an error status code but the response body is not valid JSON or does not match the error envelope schema"
+        },
+        {
+          "id": "01-REQ-6.E2",
+          "ears_pattern": "unwanted",
+          "system": "HubClient error handling",
+          "action": "raise HubError with the 5xx status code and the parsed or raw message",
+          "return_contract": "raises HubError with status_code set to the 5xx value",
+          "error_condition": "the hub returns an unexpected 5xx status code"
+        },
+        {
+          "id": "01-REQ-6.E3",
+          "ears_pattern": "ubiquitous",
+          "system": "HubError subclasses",
+          "action": "be catchable as HubError via 'except HubError' since all subclasses inherit from it",
+          "return_contract": "isinstance(HubAuthError(...), HubError) is True for all subclasses"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-7",
+      "title": "Auth helpers",
+      "user_story": {
+        "role": "developer or tool author using the afhub package",
+        "goal": "resolve the hub PAT and URL from multiple sources in a defined priority order",
+        "benefit": "I can support CLI flags, environment variables, and config files without writing custom resolution logic"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-7.1",
+          "ears_pattern": "event_driven",
+          "system": "resolve_hub_pat",
+          "action": "return token_flag if it is not None, else return the value of the AF_HUB_TOKEN environment variable if set, else return None",
+          "return_contract": "returns str (the PAT) or None",
+          "trigger": "a caller invokes resolve_hub_pat(token_flag=<value>, env_var='AF_HUB_TOKEN')"
+        },
+        {
+          "id": "01-REQ-7.2",
+          "ears_pattern": "event_driven",
+          "system": "resolve_hub_url",
+          "action": "return hub_url_flag if not None, else return the value of the AF_HUB_URL environment variable if set, else return config_url if it is a non-empty string, else return None",
+          "return_contract": "returns str (the URL) or None",
+          "trigger": "a caller invokes resolve_hub_url(hub_url_flag=<value>, config_url='', env_var='AF_HUB_URL')"
+        },
+        {
+          "id": "01-REQ-7.3",
+          "ears_pattern": "ubiquitous",
+          "system": "resolve_hub_url",
+          "action": "never read any config file directly; the config_url parameter is the caller's responsibility to populate from their own config source",
+          "return_contract": "resolve_hub_url has no file I/O side effects"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-7.E1",
+          "ears_pattern": "event_driven",
+          "system": "resolve_hub_pat",
+          "action": "return None",
+          "return_contract": "returns None",
+          "trigger": "a caller invokes resolve_hub_pat() with no arguments and AF_HUB_TOKEN is not set in the environment"
+        },
+        {
+          "id": "01-REQ-7.E2",
+          "ears_pattern": "event_driven",
+          "system": "resolve_hub_url",
+          "action": "return None",
+          "return_contract": "returns None",
+          "trigger": "a caller invokes resolve_hub_url() with no arguments, AF_HUB_URL is not set, and config_url is an empty string"
+        },
+        {
+          "id": "01-REQ-7.E3",
+          "ears_pattern": "event_driven",
+          "system": "resolve_hub_pat",
+          "action": "return token_flag, ignoring the environment variable",
+          "return_contract": "returns the token_flag value",
+          "trigger": "both token_flag and AF_HUB_TOKEN are set"
+        },
+        {
+          "id": "01-REQ-7.E4",
+          "ears_pattern": "event_driven",
+          "system": "resolve_hub_url",
+          "action": "return config_url",
+          "return_contract": "returns the config_url string",
+          "trigger": "hub_url_flag is None, AF_HUB_URL is not set, and config_url is a non-empty string"
+        },
+        {
+          "id": "01-REQ-7.E5",
+          "ears_pattern": "event_driven",
+          "system": "resolve_hub_url",
+          "action": "return the AF_HUB_URL environment variable value, ignoring config_url",
+          "return_contract": "returns the AF_HUB_URL value",
+          "trigger": "hub_url_flag is None, AF_HUB_URL is set, and config_url is also a non-empty string"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-8",
+      "title": "Polling helpers",
+      "user_story": {
+        "role": "developer using the afhub package",
+        "goal": "wait for a rebuild job or workspace clone to reach a terminal state without implementing a polling loop manually",
+        "benefit": "I can block until an async hub operation completes without writing retry/sleep logic"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-8.1",
+          "ears_pattern": "event_driven",
+          "system": "poll_rebuild",
+          "action": "repeatedly call client.get_rebuild(slug, rebuild_id) sleeping interval seconds between polls via asyncio.sleep, until the RebuildJob status is one of 'completed', 'failed', 'dead_letter', or 'cancelled'",
+          "return_contract": "returns the terminal RebuildJob instance",
+          "trigger": "a caller invokes poll_rebuild(client, slug, rebuild_id, timeout=600.0, interval=5.0)"
+        },
+        {
+          "id": "01-REQ-8.2",
+          "ears_pattern": "event_driven",
+          "system": "poll_clone_ready",
+          "action": "repeatedly call client.get_workspace(slug) sleeping interval seconds between polls via asyncio.sleep, until clone_status is 'ready' or 'failed'",
+          "return_contract": "returns the Workspace instance when clone_status is 'ready'",
+          "trigger": "a caller invokes poll_clone_ready(client, slug, timeout=300.0, interval=5.0)"
+        },
+        {
+          "id": "01-REQ-8.3",
+          "ears_pattern": "complex_event",
+          "system": "poll_clone_ready",
+          "action": "raise HubError with status_code=0, error_type='clone_failed', and message set to workspace.clone_error if present or 'Workspace clone failed' otherwise",
+          "return_contract": "raises HubError(status_code=0, error_type='clone_failed', message=<clone_error or default>)",
+          "trigger": "get_workspace returns a Workspace",
+          "condition": "clone_status is 'failed'"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "poll_rebuild",
+          "action": "raise TimeoutError",
+          "return_contract": "raises TimeoutError",
+          "error_condition": "timeout seconds elapse before the RebuildJob reaches a terminal status"
+        },
+        {
+          "id": "01-REQ-8.E2",
+          "ears_pattern": "unwanted",
+          "system": "poll_clone_ready",
+          "action": "raise TimeoutError",
+          "return_contract": "raises TimeoutError",
+          "error_condition": "timeout seconds elapse before clone_status reaches 'ready' or 'failed'"
+        },
+        {
+          "id": "01-REQ-8.E3",
+          "ears_pattern": "unwanted",
+          "system": "poll_rebuild",
+          "action": "abort the poll immediately and surface the HubConnectionError to the caller without further retries",
+          "return_contract": "raises HubConnectionError",
+          "error_condition": "HubConnectionError propagates from get_rebuild after HTTP-layer retries are exhausted"
+        },
+        {
+          "id": "01-REQ-8.E4",
+          "ears_pattern": "unwanted",
+          "system": "poll_clone_ready",
+          "action": "abort the poll immediately and surface the HubConnectionError to the caller without further retries",
+          "return_contract": "raises HubConnectionError",
+          "error_condition": "HubConnectionError propagates from get_workspace after HTTP-layer retries are exhausted"
+        },
+        {
+          "id": "01-REQ-8.E5",
+          "ears_pattern": "event_driven",
+          "system": "poll_rebuild and poll_clone_ready",
+          "action": "patch asyncio.sleep with unittest.mock.AsyncMock so no real delays occur during the test suite",
+          "return_contract": "tests complete without real sleep delays; asyncio.sleep call count is verifiable",
+          "trigger": "tests invoke either polling helper"
+        },
+        {
+          "id": "01-REQ-8.E6",
+          "ears_pattern": "unwanted",
+          "system": "poll_rebuild",
+          "action": "raise TimeoutError immediately after the first non-terminal poll",
+          "return_contract": "raises TimeoutError",
+          "error_condition": "timeout is set to 0.0 and the first poll returns a non-terminal status"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-9",
+      "title": "Transient error retry with exponential backoff",
+      "user_story": {
+        "role": "developer using the afhub package",
+        "goal": "have transient network errors retried automatically without writing retry logic",
+        "benefit": "my code is resilient to brief network interruptions without additional complexity"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-9.1",
+          "ears_pattern": "event_driven",
+          "system": "HubClient HTTP layer",
+          "action": "retry the request up to 3 times with exponential backoff: wait base 1 s * (factor 2 ^ attempt), capped at 30 s per interval, using asyncio.sleep between retries",
+          "return_contract": "the request succeeds if a retry succeeds; raises HubConnectionError after 3 failed retries",
+          "trigger": "httpx raises ConnectTimeout, ReadTimeout, or ConnectError during a request"
+        },
+        {
+          "id": "01-REQ-9.2",
+          "ears_pattern": "ubiquitous",
+          "system": "HubClient HTTP layer",
+          "action": "only retry on ConnectTimeout, ReadTimeout, and ConnectError — not on other httpx exceptions or HTTP error status codes",
+          "return_contract": "non-retryable errors are raised immediately without any retry delay"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-9.E1",
+          "ears_pattern": "unwanted",
+          "system": "HubClient HTTP layer",
+          "action": "raise HubConnectionError after the third failure",
+          "return_contract": "raises HubConnectionError; exactly 3 retry attempts were made (4 total attempts including the original)",
+          "error_condition": "all 3 retry attempts raise ConnectTimeout, ReadTimeout, or ConnectError"
+        },
+        {
+          "id": "01-REQ-9.E2",
+          "ears_pattern": "event_driven",
+          "system": "HubClient HTTP layer",
+          "action": "return the successful response without raising any exception",
+          "return_contract": "returns the parsed response as if no error occurred",
+          "trigger": "a ConnectTimeout is raised on the first attempt but the second attempt succeeds"
+        },
+        {
+          "id": "01-REQ-9.E3",
+          "ears_pattern": "ubiquitous",
+          "system": "HubClient HTTP layer",
+          "action": "cap each backoff sleep at 30 s regardless of the attempt number, so no single retry wait exceeds 30 s",
+          "return_contract": "asyncio.sleep is never called with a value greater than 30.0"
+        },
+        {
+          "id": "01-REQ-9.E4",
+          "ears_pattern": "unwanted",
+          "system": "HubClient HTTP layer",
+          "action": "propagate the exception immediately without retrying",
+          "return_contract": "the original httpx exception propagates to the caller",
+          "error_condition": "httpx raises a base TimeoutException that is not one of ConnectTimeout, ReadTimeout, or ConnectError"
+        }
+      ]
+    },
+    {
+      "id": "01-REQ-10",
+      "title": "API versioning and package layout",
+      "user_story": {
+        "role": "developer integrating the afhub package into a monorepo",
+        "goal": "have a well-structured package that targets hub API v1 exclusively and declares compatible dependency bounds",
+        "benefit": "I can install afhub alongside afissues and agentfox without version conflicts"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "01-REQ-10.1",
+          "ears_pattern": "ubiquitous",
+          "system": "HubClient",
+          "action": "prefix all endpoint paths with /api/v1/ so that every request targets hub API v1 exclusively",
+          "return_contract": "every HTTP request URL contains /api/v1/ as the path prefix"
+        },
+        {
+          "id": "01-REQ-10.2",
+          "ears_pattern": "ubiquitous",
+          "system": "afhub pyproject.toml",
+          "action": "declare runtime dependencies as httpx>=0.27 and pydantic>=2.0, and dev/test dependencies as pytest and pytest-asyncio, with Python >=3.12",
+          "return_contract": "the package installs successfully in a Python 3.12+ environment alongside afissues and agentfox without dependency conflicts"
+        },
+        {
+          "id": "01-REQ-10.3",
+          "ears_pattern": "ubiquitous",
+          "system": "afhub package",
+          "action": "organize source files as: afhub/__init__.py, afhub/client.py, afhub/models.py, afhub/errors.py, afhub/auth.py, afhub/polling.py, afhub/_http.py, and tests/ directory with test_client.py, test_models.py, test_errors.py, test_auth.py, test_polling.py",
+          "return_contract": "the package layout matches the specified structure"
+        },
+        {
+          "id": "01-REQ-10.4",
+          "ears_pattern": "ubiquitous",
+          "system": "afhub test suite",
+          "action": "use pytest with asyncio_mode=auto so all async test functions run as asyncio coroutines without explicit decorators, and use unittest.mock.AsyncMock and MagicMock for httpx mocking with no external mock library",
+          "return_contract": "pytest --asyncio-mode=auto runs all tests successfully"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "01-REQ-10.E1",
+          "ears_pattern": "ubiquitous",
+          "system": "HubClient",
+          "action": "never include version negotiation logic or attempt to detect the hub API version at runtime",
+          "return_contract": "no version negotiation requests are issued; breaking hub API changes require a new client version"
+        },
+        {
+          "id": "01-REQ-10.E2",
+          "ears_pattern": "ubiquitous",
+          "system": "afhub package",
+          "action": "tolerate additive hub API response changes (new fields) via extra_ignore on all Pydantic models without requiring a package update",
+          "return_contract": "new fields in hub responses do not cause validation errors"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "01-PROP-1",
+      "title": "Authorization header on every request",
+      "for_any": "HubClient instance with a given PAT",
+      "invariant": "every HTTP request issued by the HubClient carries an Authorization: Bearer <pat> header matching the PAT provided at construction time",
+      "validates": [
+        "01-REQ-1.1",
+        "01-REQ-10.1"
+      ]
+    },
+    {
+      "id": "01-PROP-2",
+      "title": "API v1 path prefix on every request",
+      "for_any": "any HubClient method call",
+      "invariant": "the URL of every outgoing HTTP request contains /api/v1/ as the path prefix",
+      "validates": [
+        "01-REQ-10.1"
+      ]
+    },
+    {
+      "id": "01-PROP-3",
+      "title": "Extra fields are silently discarded by all models",
+      "for_any": "any Pydantic model in afhub.models and any dict containing arbitrary extra keys",
+      "invariant": "constructing the model from the dict succeeds and the extra keys are not present on the resulting instance",
+      "validates": [
+        "01-REQ-5.1",
+        "01-REQ-5.E2",
+        "01-REQ-10.E2"
+      ]
+    },
+    {
+      "id": "01-PROP-4",
+      "title": "Retry count is bounded at 3",
+      "for_any": "any HubClient request that raises ConnectTimeout, ReadTimeout, or ConnectError on every attempt",
+      "invariant": "the HTTP layer makes exactly 4 total attempts (1 original + 3 retries) before raising HubConnectionError; it never makes more than 4 attempts",
+      "validates": [
+        "01-REQ-9.1",
+        "01-REQ-9.E1"
+      ]
+    },
+    {
+      "id": "01-PROP-5",
+      "title": "Backoff sleep is capped at 30 seconds",
+      "for_any": "any retry sequence of any length",
+      "invariant": "asyncio.sleep is never called with a value greater than 30.0 during retry backoff",
+      "validates": [
+        "01-REQ-9.1",
+        "01-REQ-9.E3"
+      ]
+    },
+    {
+      "id": "01-PROP-6",
+      "title": "HubError subclass hierarchy is consistent",
+      "for_any": "any instance of HubAuthError, HubForbiddenError, HubNotFoundError, HubConflictError, HubConnectionError, HubModeError, or HubNoActivePatchesError",
+      "invariant": "isinstance(instance, HubError) is True for every subclass instance",
+      "validates": [
+        "01-REQ-6.1",
+        "01-REQ-6.E3"
+      ]
+    },
+    {
+      "id": "01-PROP-7",
+      "title": "resolve_hub_pat priority order is stable",
+      "for_any": "any combination of token_flag and AF_HUB_TOKEN environment variable values",
+      "invariant": "resolve_hub_pat returns token_flag when it is not None, regardless of the AF_HUB_TOKEN value",
+      "validates": [
+        "01-REQ-7.1",
+        "01-REQ-7.E3"
+      ]
+    },
+    {
+      "id": "01-PROP-8",
+      "title": "poll_rebuild terminates on terminal status",
+      "for_any": "any sequence of get_rebuild responses where the final response has status in {'completed', 'failed', 'dead_letter', 'cancelled'}",
+      "invariant": "poll_rebuild returns the terminal RebuildJob and does not issue any further get_rebuild calls after observing a terminal status",
+      "validates": [
+        "01-REQ-8.1",
+        "01-REQ-8.E1"
+      ]
+    },
+    {
+      "id": "01-PROP-9",
+      "title": "set_variable does not issue a prior GET",
+      "for_any": "any invocation of set_variable",
+      "invariant": "set_variable issues at most two HTTP requests (PATCH then optionally POST) and never issues a GET /vars/:key request",
+      "validates": [
+        "01-REQ-4.5",
+        "01-REQ-4.6"
+      ]
+    },
+    {
+      "id": "01-PROP-10",
+      "title": "No-content responses return None",
+      "for_any": "any invocation of remove_patch, forget_rerere, delete_variable, create_variable, update_variable, or create_secret",
+      "invariant": "the method returns None and does not attempt to parse the response body",
+      "validates": [
+        "01-REQ-2.5",
+        "01-REQ-4.2",
+        "01-REQ-4.3",
+        "01-REQ-4.4",
+        "01-REQ-4.7",
+        "01-REQ-4.9"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "01-PATH-1",
+      "title": "Happy path: submit rebuild and poll to completion",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "instantiate HubClient(endpoint_url, pat) to obtain a client"
+        },
+        {
+          "actor": "HubClient",
+          "action": "create a shared httpx.AsyncClient with Authorization: Bearer <pat> header"
+        },
+        {
+          "actor": "Caller",
+          "action": "call submit_rebuild(slug, strategy='merge', fail_mode='stop')"
+        },
+        {
+          "actor": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/rebuild with JSON body and receive HTTP 202 with RebuildJob JSON"
+        },
+        {
+          "actor": "HubClient",
+          "action": "parse response into RebuildJob and return it to the caller"
+        },
+        {
+          "actor": "Caller",
+          "action": "call poll_rebuild(client, slug, rebuild_id, timeout=600.0, interval=5.0)"
+        },
+        {
+          "actor": "poll_rebuild",
+          "action": "call client.get_rebuild(slug, rebuild_id) and receive a non-terminal RebuildJob"
+        },
+        {
+          "actor": "poll_rebuild",
+          "action": "call asyncio.sleep(5.0) and repeat the poll"
+        },
+        {
+          "actor": "poll_rebuild",
+          "action": "call client.get_rebuild(slug, rebuild_id) and receive a RebuildJob with status 'completed'"
+        },
+        {
+          "actor": "poll_rebuild",
+          "action": "return the terminal RebuildJob to the caller"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-2",
+      "title": "Happy path: resolve auth and create a workspace variable",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "call resolve_hub_pat(token_flag=None) with AF_HUB_TOKEN set in the environment"
+        },
+        {
+          "actor": "resolve_hub_pat",
+          "action": "read AF_HUB_TOKEN from the environment and return the PAT string"
+        },
+        {
+          "actor": "Caller",
+          "action": "call resolve_hub_url(hub_url_flag=None, config_url='https://hub.example.com') with AF_HUB_URL not set"
+        },
+        {
+          "actor": "resolve_hub_url",
+          "action": "return config_url 'https://hub.example.com' as the resolved URL"
+        },
+        {
+          "actor": "Caller",
+          "action": "instantiate HubClient(endpoint_url='https://hub.example.com', pat=<resolved PAT>)"
+        },
+        {
+          "actor": "Caller",
+          "action": "call create_variable(slug, key='MY_KEY', value='my_value')"
+        },
+        {
+          "actor": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/vars with JSON body {key, value} and receive HTTP 201"
+        },
+        {
+          "actor": "HubClient",
+          "action": "return None to the caller"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-3",
+      "title": "Transient network error retried successfully",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "call get_workspace(slug) on an existing HubClient"
+        },
+        {
+          "actor": "HubClient._http",
+          "action": "send GET /api/v1/workspaces/:slug; httpx raises ConnectTimeout"
+        },
+        {
+          "actor": "HubClient._http",
+          "action": "call asyncio.sleep(1.0) for the first backoff interval"
+        },
+        {
+          "actor": "HubClient._http",
+          "action": "retry GET /api/v1/workspaces/:slug; hub returns HTTP 200 with Workspace JSON"
+        },
+        {
+          "actor": "HubClient",
+          "action": "parse the response into a Workspace model and return it to the caller"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-4",
+      "title": "set_variable upsert: PATCH 404 falls back to POST",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "call set_variable(slug, key='NEW_KEY', value='val') on an existing HubClient"
+        },
+        {
+          "actor": "HubClient",
+          "action": "send PATCH /api/v1/workspaces/:slug/vars/NEW_KEY; hub returns HTTP 404"
+        },
+        {
+          "actor": "HubClient",
+          "action": "catch HubNotFoundError from the PATCH response"
+        },
+        {
+          "actor": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/vars with JSON body {key: 'NEW_KEY', value: 'val'}; hub returns HTTP 201"
+        },
+        {
+          "actor": "HubClient",
+          "action": "return None to the caller"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-5",
+      "title": "poll_clone_ready: clone fails and raises HubError",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "call poll_clone_ready(client, slug, timeout=300.0, interval=5.0)"
+        },
+        {
+          "actor": "poll_clone_ready",
+          "action": "call client.get_workspace(slug) and receive a Workspace with clone_status='pending'"
+        },
+        {
+          "actor": "poll_clone_ready",
+          "action": "call asyncio.sleep(5.0) and repeat the poll"
+        },
+        {
+          "actor": "poll_clone_ready",
+          "action": "call client.get_workspace(slug) and receive a Workspace with clone_status='failed' and clone_error='disk full'"
+        },
+        {
+          "actor": "poll_clone_ready",
+          "action": "raise HubError(status_code=0, error_type='clone_failed', message='disk full') to the caller"
+        }
+      ]
+    },
+    {
+      "id": "01-PATH-6",
+      "title": "add_patch and add_patches_batch use distinct request bodies",
+      "steps": [
+        {
+          "actor": "Caller",
+          "action": "call add_patch(slug, 'feature/my-branch', position=1) on an existing HubClient"
+        },
+        {
+          "actor": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/patches with a single-object JSON body and receive HTTP 201 with Patch JSON"
+        },
+        {
+          "actor": "HubClient",
+          "action": "parse the response into a Patch model and return it to the caller"
+        },
+        {
+          "actor": "Caller",
+          "action": "call add_patches_batch(slug, [{...}, {...}]) on the same HubClient"
+        },
+        {
+          "actor": "HubClient",
+          "action": "send POST /api/v1/workspaces/:slug/patches with a JSON array body and receive HTTP 201 with list[Patch] JSON"
+        },
+        {
+          "actor": "HubClient",
+          "action": "parse the response into list[Patch] and return it to the caller"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "01-ERR-1",
+      "condition": "Hub returns HTTP 401 on any request",
+      "behavior": "Raise HubAuthError(status_code=401, message=<envelope message>, error_type=<envelope error_type>)",
+      "requirement_id": "01-REQ-6.2"
+    },
+    {
+      "id": "01-ERR-2",
+      "condition": "Hub returns HTTP 403 on any request",
+      "behavior": "Raise HubForbiddenError(status_code=403, message=<envelope message>, error_type=<envelope error_type>)",
+      "requirement_id": "01-REQ-6.3"
+    },
+    {
+      "id": "01-ERR-3",
+      "condition": "Hub returns HTTP 404 on any request",
+      "behavior": "Raise HubNotFoundError(status_code=404, message=<envelope message>, error_type=<envelope error_type>)",
+      "requirement_id": "01-REQ-6.4"
+    },
+    {
+      "id": "01-ERR-4",
+      "condition": "Hub returns HTTP 409 on any request",
+      "behavior": "Raise HubConflictError(status_code=409, message=<envelope message>, error_type=<envelope error_type>); error_type is stored for caller inspection",
+      "requirement_id": "01-REQ-6.5"
+    },
+    {
+      "id": "01-ERR-5",
+      "condition": "Hub returns HTTP 400 with error_type 'workspace_mode_mismatch'",
+      "behavior": "Raise HubModeError(status_code=400, error_type='workspace_mode_mismatch')",
+      "requirement_id": "01-REQ-6.6"
+    },
+    {
+      "id": "01-ERR-6",
+      "condition": "Hub returns HTTP 400 with error_type 'no_active_patches'",
+      "behavior": "Raise HubNoActivePatchesError(status_code=400, error_type='no_active_patches')",
+      "requirement_id": "01-REQ-6.7"
+    },
+    {
+      "id": "01-ERR-7",
+      "condition": "Hub returns HTTP 400 with an unrecognized error_type",
+      "behavior": "Raise HubError(status_code=400, message=<envelope message>, error_type=<unrecognized value>)",
+      "requirement_id": "01-REQ-6.8"
+    },
+    {
+      "id": "01-ERR-8",
+      "condition": "ConnectTimeout, ReadTimeout, or ConnectError raised on all 3 retry attempts",
+      "behavior": "Raise HubConnectionError after the third retry; no further attempts are made",
+      "requirement_id": "01-REQ-9.E1"
+    },
+    {
+      "id": "01-ERR-9",
+      "condition": "poll_rebuild timeout elapses before a terminal RebuildJob status is observed",
+      "behavior": "Raise TimeoutError",
+      "requirement_id": "01-REQ-8.E1"
+    },
+    {
+      "id": "01-ERR-10",
+      "condition": "poll_clone_ready observes clone_status='failed' on the Workspace",
+      "behavior": "Raise HubError(status_code=0, error_type='clone_failed', message=workspace.clone_error or 'Workspace clone failed')",
+      "requirement_id": "01-REQ-8.3"
+    },
+    {
+      "id": "01-ERR-11",
+      "condition": "poll_clone_ready timeout elapses before clone_status reaches 'ready' or 'failed'",
+      "behavior": "Raise TimeoutError",
+      "requirement_id": "01-REQ-8.E2"
+    },
+    {
+      "id": "01-ERR-12",
+      "condition": "Hub error response body is not valid JSON or does not match the error envelope schema",
+      "behavior": "Raise HubError with the raw HTTP status code and a best-effort message; do not propagate a JSON parse exception",
+      "requirement_id": "01-REQ-6.E1"
+    },
+    {
+      "id": "01-ERR-13",
+      "condition": "Hub returns an unexpected 5xx status code",
+      "behavior": "Raise HubError(status_code=<5xx>, message=<parsed or raw message>)",
+      "requirement_id": "01-REQ-6.E2"
+    },
+    {
+      "id": "01-ERR-14",
+      "condition": "HubConnectionError propagates from get_rebuild during poll_rebuild",
+      "behavior": "Abort the poll immediately and surface the HubConnectionError to the caller",
+      "requirement_id": "01-REQ-8.E3"
+    },
+    {
+      "id": "01-ERR-15",
+      "condition": "HubConnectionError propagates from get_workspace during poll_clone_ready",
+      "behavior": "Abort the poll immediately and surface the HubConnectionError to the caller",
+      "requirement_id": "01-REQ-8.E4"
+    },
+    {
+      "id": "01-ERR-16",
+      "condition": "rollback_rebuild response body is missing the 'previous_integration_head_sha' key",
+      "behavior": "Raise an exception (KeyError or HubError) indicating the expected field is absent; do not return None silently",
+      "requirement_id": "01-REQ-3.E4"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "httpx",
+      "version": ">=0.27",
+      "symbols": [
+        {
+          "name": "AsyncClient",
+          "import_path": "httpx.AsyncClient",
+          "signature": "AsyncClient(*, base_url: str = '', headers: dict | None = None, timeout: float | None = None, **kwargs) -> AsyncClient",
+          "notes": "Used as the shared HTTP session inside HubClient. Supports async context manager protocol. Must be closed via aclose() or used as 'async with'."
+        },
+        {
+          "name": "ConnectTimeout",
+          "import_path": "httpx.ConnectTimeout",
+          "signature": "class ConnectTimeout(TimeoutException)",
+          "notes": "Raised when a TCP connection attempt exceeds the configured timeout. Triggers retry in HubClient._http."
+        },
+        {
+          "name": "ReadTimeout",
+          "import_path": "httpx.ReadTimeout",
+          "signature": "class ReadTimeout(TimeoutException)",
+          "notes": "Raised when reading a response body exceeds the configured timeout. Triggers retry in HubClient._http."
+        },
+        {
+          "name": "ConnectError",
+          "import_path": "httpx.ConnectError",
+          "signature": "class ConnectError(NetworkError)",
+          "notes": "Raised when a TCP connection cannot be established. Triggers retry in HubClient._http."
+        }
+      ]
+    },
+    {
+      "package": "pydantic",
+      "version": ">=2.0",
+      "symbols": [
+        {
+          "name": "BaseModel",
+          "import_path": "pydantic.BaseModel",
+          "signature": "class BaseModel",
+          "notes": "Base class for all afhub Pydantic models."
+        },
+        {
+          "name": "ConfigDict",
+          "import_path": "pydantic.ConfigDict",
+          "signature": "ConfigDict(*, extra: Literal['ignore', 'allow', 'forbid'] = 'ignore', ...) -> ConfigDict",
+          "notes": "Used to set model_config = ConfigDict(extra='ignore') on all afhub models."
+        },
+        {
+          "name": "ValidationError",
+          "import_path": "pydantic.ValidationError",
+          "signature": "class ValidationError(ValueError)",
+          "notes": "Raised by Pydantic when required fields are missing or field types are invalid."
+        }
+      ]
+    },
+    {
+      "package": "pytest-asyncio",
+      "version": ">=0.21",
+      "symbols": [
+        {
+          "name": "asyncio_mode",
+          "import_path": "pytest_asyncio",
+          "signature": "asyncio_mode = 'auto'  # in pytest.ini or pyproject.toml [tool.pytest.ini_options]",
+          "notes": "When set to 'auto', all async test functions are automatically treated as asyncio coroutines without requiring @pytest.mark.asyncio decorators."
+        }
+      ]
+    }
+  ]
+}

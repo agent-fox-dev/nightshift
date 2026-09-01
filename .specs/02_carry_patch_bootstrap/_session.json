@@ -1,0 +1,442 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "needs_refinement",
+      "summary": "The `carry_patch_bootstrap` PRD is well-structured and substantive. It covers goals, out-of-scope items, tech stack, a detailed dependency declaration (correctly referencing the active `afhub_client` spec), and granular requirements with file-level change tracking and test coverage targets. The main gaps are: (1) the `afhub` external API surface is partially assumed rather than fully documented within this spec \u2014 specifically the `get_workspace`, `set_variable`, `resolve_hub_url`, and `resolve_hub_pat` call shapes and their failure modes; (2) `HubNotFoundError` is referenced in REQ-3 but is not listed in the known `afhub_client` terms/exports; (3) the Background/motivation section is absent; (4) measurable success criteria (Goals) are stated as deliverables rather than outcomes; and (5) the owner field is empty.",
+      "gaps": [
+        "Background section is missing \u2014 there is no context explaining why carry-patch mode is needed, what problem it solves, or what prior art (e.g., docs/proposals/carry_patch_support.md) established the motivation.",
+        "Goals are stated as deliverables/tasks (add models, add flags, validate CWD) rather than measurable outcomes (e.g., 'nightshift startup fails within 2 s with a human-readable error when the workspace slug is wrong').",
+        "HubNotFoundError is used in REQ-3 but does not appear in the afhub_client spec's exported terms. It must either be confirmed as an export of afhub_client or defined elsewhere.",
+        "The afhub API surface consumed by this spec (get_workspace response shape, set_variable contract, resolve_hub_url/resolve_hub_pat signatures) is not documented here. If afhub_client's spec fully covers these, a cross-reference is needed; if not, the assumptions must be stated explicitly.",
+        "REQ-3 step 4 invokes a subprocess ('git remote get-url origin') but does not specify how stdout/stderr are captured, the timeout, or the error type raised \u2014 leaving implementation ambiguity.",
+        "REQ-4 does not specify file encoding, atomic write behavior (temp-file + rename vs. direct write), or what happens if .nightshift/ already exists but the file is malformed.",
+        "REQ-5 states set_variable uses 'PATCH-then-POST upsert' but does not specify what HTTP status codes constitute a 'non-fatal hub error' vs. a fatal one that should abort startup.",
+        "The owner field in the spec front-matter is empty.",
+        "No definition of done or acceptance criteria linking the test files to the requirements (e.g., which test cases in test_carry_patch_startup.py map to which REQ steps).",
+        "The Clamped validator used in REQ-1 (e.g., Annotated[int, Clamped(ge=60)]) is not a standard pydantic v2 construct \u2014 no import source or custom implementation reference is provided."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Is `HubNotFoundError` a confirmed export of the `afhub_client` package (Spec 01)? If not, where is it defined, and should it be added to that spec's API surface?",
+          "context": "REQ-3 calls `hub_client.get_workspace(slug)` and handles `HubNotFoundError`, but this exception does not appear in the afhub_client spec's listed terms (AF_HUB_TOKEN, AF_HUB_URL, ConnectError, ConnectTimeout, HubAuthError, HubClient, HubConflictError, HubConnectionError, HubError, HubForbiddenError). Using an undefined exception will cause an import error at runtime.",
+          "options": [
+            "Yes \u2014 HubNotFoundError exists in afhub_client; the spec's term list is just incomplete. Update afhub_client spec to add it.",
+            "No \u2014 it should be HubError with a 404 status check instead.",
+            "It will be added to afhub_client as part of that spec's implementation; update the dependency note here."
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "Can you provide or reference the `get_workspace` response shape (field names and types) and the `set_variable` call contract that this spec depends on from `afhub_client`?",
+          "context": "REQ-3 reads `workspace.workspace_mode`, `workspace.clone_status`, and `workspace.git_url`. REQ-4 reads `workspace.integration_branch`. REQ-5 calls `set_variable(slug, key, value)`. These field names and call signatures need to be verifiable against the afhub_client spec so generated code uses the correct attribute names. If afhub_client's spec already documents these, a section cross-referencing it is sufficient.",
+          "options": [
+            "afhub_client spec documents the full response model \u2014 add a cross-reference link here.",
+            "Document the response shape inline in this spec under a 'Verified External API' section.",
+            "The field names are provisional and will be confirmed during afhub_client implementation."
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "What is the source and behavior of the `Clamped` validator used in REQ-1 (e.g., `Annotated[int, Clamped(ge=60)]`)? Is this a custom pydantic v2 annotated type, a third-party library, or should it be replaced with `Field(ge=60)` validation?",
+          "context": "Pydantic v2 does not have a built-in `Clamped` type. Using `Field(ge=60)` raises a `ValidationError` on out-of-range values, while a clamping approach silently adjusts them. The distinction matters for user-facing config error behavior and needs an import reference for code generation.",
+          "options": [
+            "It is a custom annotated type defined in agentfox.core.validators \u2014 reference that module.",
+            "Replace with standard pydantic Field(ge=..., le=...) \u2014 validation error on bad values is acceptable.",
+            "It is a thin wrapper to be added as part of this spec \u2014 document it here."
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Should a Background section be added explaining why carry-patch mode is needed and summarizing the carry_patch_support.md proposal?",
+          "context": "The PRD references `docs/proposals/carry_patch_support.md` as its source but does not summarize the motivation or context. Without background, reviewers and code-generation tools lack the 'why' needed to make good implementation trade-offs.",
+          "options": [
+            "Yes \u2014 add a brief Background summarizing the carry-patch problem and proposal.",
+            "No \u2014 the source reference to the proposal doc is sufficient."
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "For REQ-5, which specific HTTP status codes or exception types from `afhub_client` are considered 'non-fatal' (log warning and continue) vs. fatal (exit with error) when `set_variable` fails?",
+          "context": "The spec says 'connection error, 403 scope missing' are non-fatal, but does not enumerate the full set. For example, is a 500 Internal Server Error fatal? Is HubConflictError non-fatal? Precise error classification is needed to generate correct exception handling.",
+          "options": [
+            "All HubError subclasses are non-fatal for set_variable; only network-level exceptions (HubConnectionError) cause a warning.",
+            "Only HubConnectionError and HubForbiddenError are non-fatal; all others are fatal.",
+            "Any exception from set_variable is non-fatal \u2014 log and continue regardless."
+          ],
+          "required": true
+        },
+        {
+          "id": "q6",
+          "text": "Who is the owner of this spec? The front-matter `owner` field is currently empty.",
+          "context": "An empty owner makes it unclear who is responsible for approving requirement changes or resolving ambiguities during implementation.",
+          "options": [],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a well-structured, thorough PRD that covers the bootstrapping layer for carry-patch mode. Intent, Goals, Non-Goals, Background, Tech Stack, External API Surface, Requirements, File/Test coverage, and a requirement-to-test mapping are all present. The spec is largely self-contained and actionable. A few minor gaps exist around edge cases, implicit assumptions, and missing detail in specific requirements, but none are blocking for implementation.",
+      "gaps": [
+        "REQ-2: The 3-tier resolution logic for --hub-url is described in prose but the interaction between resolve_hub_url() and config.hub.endpoint_url is not spelled out precisely (e.g., does resolve_hub_url() also read AF_HUB_URL, or is the env-var tier handled separately before calling it?).",
+        "REQ-3 step 4: No explicit mention of what happens if git is not installed on the system (FileNotFoundError from subprocess), which is a distinct failure mode from a non-zero return code.",
+        "REQ-4: The temporary file naming convention within .nightshift/ is unspecified (e.g., config.toml.tmp), leaving room for inconsistency across implementations.",
+        "REQ-4: It is unclear whether the generated config.toml is expected to be re-loaded into the in-process AgentFoxConfig after writing, or whether the written file is only useful on the next startup.",
+        "REQ-5: The spec says 'await hub_client.set_variable(...)' implying async, but the tech stack references click which is typically synchronous. The async execution context (asyncio.run, anyio, etc.) for these calls is not described.",
+        "Non-Goals: There is no mention of whether token rotation or PAT refresh during a running session is out of scope.",
+        "Background: The reference to docs/proposals/carry_patch_support.md is not accompanied by even a brief inline summary, so reviewers without repo access lack full motivation context.",
+        "Test coverage: test_config_not_overwritten_if_exists is listed but there is no corresponding requirement stating explicitly that an existing config.toml must never be overwritten \u2014 this implicit behavior should be stated in REQ-4."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "In REQ-2, does resolve_hub_url() from afhub.auth already encapsulate reading AF_HUB_URL from the environment, or should the 3-tier resolution call resolve_hub_url() only as the env-var tier and handle the config-file tier separately?",
+          "context": "The relationship between resolve_hub_url() and the env-var tier is ambiguous. If resolve_hub_url() already reads AF_HUB_URL, the implementation could accidentally skip the config-file fallback or double-read the env var.",
+          "options": [
+            "resolve_hub_url() reads AF_HUB_URL internally; call it as the env-var tier, then fall back to config.hub.endpoint_url if it returns None/empty",
+            "resolve_hub_url() is just a helper that returns AF_HUB_URL os.environ.get; the 3-tier logic should be written explicitly in app.py without relying on it for fallback chaining",
+            "Other (please describe)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "In REQ-3 step 4, what should nightshift do if git is not installed and the subprocess raises FileNotFoundError (distinct from a non-zero return code)?",
+          "context": "A missing git binary is a realistic operator environment issue. Without explicit handling it would surface as an unhandled exception rather than a clean exit(1) with a helpful message.",
+          "options": [
+            "Catch FileNotFoundError, emit a clear error ('git not found in PATH'), and exit(1)",
+            "Let it propagate as an unhandled exception (acceptable since git is a hard prerequisite)",
+            "Other (please describe)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "In REQ-5, what is the async execution context for the await hub_client.set_variable(...) calls? Is nightshift's main() already an async function run under asyncio/anyio, or do these calls need to be wrapped (e.g., asyncio.run())?",
+          "context": "The spec uses 'await' syntax but click entry points are synchronous by default. Without clarity, implementers may introduce inconsistent patterns (nested event loops, etc.).",
+          "options": [
+            "nightshift.app.main() is already async and run via anyio.run() or asyncio.run() at the top level",
+            "set_variable is actually synchronous despite the await notation in the spec (notation error)",
+            "The startup validation block should be extracted into an async helper called via asyncio.run() before the synchronous daemon loop starts",
+            "Other (please describe)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Should an existing .nightshift/config.toml be explicitly protected from overwrite, and if so, should this be stated as a formal requirement in REQ-4?",
+          "context": "test_config_not_overwritten_if_exists implies this behavior is required, but REQ-4 currently only says 'when no .nightshift/config.toml exists'. Making it explicit prevents misinterpretation.",
+          "options": [
+            "Yes \u2014 add an explicit statement to REQ-4: 'If config.toml already exists, skip generation entirely (never overwrite)'",
+            "The current wording ('when none exists') is sufficient and no change is needed",
+            "Other (please describe)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "After writing the default config.toml in REQ-4, should nightshift re-load it into the live AgentFoxConfig for the current process, or is the file only consumed on the next startup?",
+          "context": "If the written config is not reloaded, values like hub.endpoint_url and carry_patch.workspace are already resolved in memory \u2014 but if it is reloaded, the implementation must handle potential conflicts between the in-memory and on-disk state.",
+          "options": [
+            "Do not reload \u2014 the file is for future startups only; in-memory resolved values are used for the current session",
+            "Reload the config after writing so the in-process state reflects the file",
+            "Other (please describe)"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Is token rotation or PAT refresh during a running nightshift session in scope, or should it be explicitly added to Non-Goals?",
+          "context": "The spec handles PAT resolution only at startup. If a PAT expires mid-session, the behavior is undefined. Calling it out as a Non-Goal prevents future scope creep discussions.",
+          "options": [
+            "Add to Non-Goals: 'Token rotation or PAT refresh during a running session'",
+            "It is already implied by the single-startup design and does not need to be explicit",
+            "Other (please describe)"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, well-structured PRD. It covers intent, goals, non-goals, background, tech stack, external API surface, detailed requirements, file change inventory, and a requirement-to-test mapping. All six quality dimensions are substantially satisfied. The few remaining gaps are minor: some edge cases in REQ-3/REQ-4 could be more explicit, and one behavioral ambiguity around `--hub-url` mode-activation rules warrants clarification. The PRD is implementable as-is, but the questions below would eliminate the last ambiguities.",
+      "gaps": [
+        "REQ-2 mode-activation rules: it is unclear whether a resolved `--hub-url` alone (without `--workspace` or `--token`) triggers carry-patch mode or is silently ignored alongside normal nightshift operation.",
+        "REQ-3 step 4: the behavior when `subprocess.TimeoutExpired` is raised is noted as 'exit with error' but no exit message or detail is specified, unlike the `FileNotFoundError` path which provides a verbatim error string.",
+        "REQ-4: the `[workspace]` section written to the generated config references `merge_strategy = 'direct'`, but `merge_strategy` is not defined in any Pydantic model documented in this spec \u2014 it is unclear if this field belongs to an existing model or needs to be added.",
+        "REQ-4: no guidance on the maximum acceptable file size or line length for the generated TOML, which matters if `integration_branch` or `endpoint_url` values contain unusual characters or are unusually long.",
+        "REQ-5: the async helper function is described but not named, and its exact signature is not specified \u2014 this could lead to inconsistency between the implementation and the tests listed in the test mapping.",
+        "Test file `test_carry_patch_startup.py` lists `test_git_not_installed_exits` separately from `test_no_git_repo_exits`, but REQ-3 step 4 conflates 'not a git repo' and 'FileNotFoundError' under step 4 \u2014 the distinction between these two cases could be made more explicit in the requirements text."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "In REQ-2, if only `--hub-url` is resolved (but neither `--workspace` nor `--token` are present from any source), does nightshift silently skip carry-patch mode and run normally, or does it exit with an error?",
+          "context": "The mode-activation rules state that the absence of both `--workspace` and `--token` skips carry-patch, but it is ambiguous whether a resolved `--hub-url` alone changes that behavior. Clarifying this prevents an implementation inconsistency.",
+          "options": [
+            "Silently skip carry-patch and run normally (--hub-url alone is insufficient to activate carry-patch mode)",
+            "Exit with an error explaining that --workspace is also required when --hub-url is provided",
+            "Log a warning and skip carry-patch (--hub-url alone is treated as a misconfiguration but not fatal)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "In REQ-3 step 4, what error message should nightshift emit when `subprocess.TimeoutExpired` is raised by the git subprocess?",
+          "context": "The FileNotFoundError path has a verbatim message specified. Having the same for TimeoutExpired ensures consistent operator UX and allows tests to assert on the exact string.",
+          "options": [
+            "'git remote get-url origin timed out after 10 seconds; check that the repository is accessible'",
+            "'git command timed out; ensure the local repository is reachable and try again'",
+            "Any clear message is acceptable \u2014 leave the exact wording to the implementer"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "In REQ-4, the generated `[workspace]` section includes `merge_strategy = \"direct\"`. Is `merge_strategy` a field that already exists in an existing Pydantic model (e.g., a `WorkspaceConfig`), or does this spec need to add it? If it already exists, which model owns it?",
+          "context": "The spec defines HubConfig and CarryPatchConfig explicitly, but does not mention a WorkspaceConfig model. If merge_strategy needs a new model, it should be listed as a requirement. If it is already defined elsewhere, a cross-reference would make the spec self-contained.",
+          "options": [
+            "merge_strategy already exists in an existing WorkspaceConfig model in agentfox.core.config \u2014 no new model needed",
+            "A new WorkspaceConfig Pydantic model needs to be defined in this spec and added to AgentFoxConfig",
+            "merge_strategy is written to the TOML file as a static default string only and does not correspond to any Pydantic model field"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "What should the async helper function introduced in REQ-5 be named, and what is its signature?",
+          "context": "The PRD describes the function's behavior in detail but does not name it. Naming it in the spec ensures the listed test cases (e.g., test_set_variable_called_with_correct_args) can reference a stable, agreed-upon interface.",
+          "options": [
+            "async def _bootstrap_carry_patch(hub_client, slug, workspace, hub_url, config_path) -> None",
+            "async def run_carry_patch_startup(hub_client: HubClient, slug: str, hub_url: str, cwd: Path) -> None",
+            "Leave naming to the implementer \u2014 the PRD describes behavior sufficiently"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, well-structured PRD. It clearly defines intent, goals, non-goals, background, tech stack, dependencies, external API surface, and requirements. Each requirement is specific and actionable, with explicit failure modes, error messages, and test mappings. The spec is nearly implementation-ready. A few minor gaps exist around edge cases and implicit assumptions that could benefit from clarification, but none are blockers.",
+      "gaps": [
+        "REQ-2: The `--workspace` 3-tier resolution mentions `AF_WORKSPACE` env var, but there is no corresponding mention of this env var in the Tech Stack or External API Surface sections, and it's unclear whether `resolve_hub_url`-style helper exists for workspace slug resolution or if it's done inline.",
+        "REQ-3: The validation sequence specifies `asyncio.run()` invocation, but does not address what happens if the event loop is already running (e.g. in test environments using pytest-asyncio), which could cause a RuntimeError.",
+        "REQ-3 Step 4: The spec does not clarify whether the git subprocess runs in an async-compatible way (e.g. `asyncio.create_subprocess_exec`) or as a blocking subprocess within the async helper \u2014 this matters for correctness and testability.",
+        "REQ-4: The spec does not define what 'log a warning' means (e.g. Python `logging.warning`, `click.echo`, or a structured logger), which may cause inconsistency with the rest of the codebase.",
+        "REQ-4: The generated config omits the `rebuild_timeout`, `rebuild_poll_interval`, and `max_resolve_retries` fields from `[carry_patch]`. It is not stated whether these fields are intentionally excluded from the generated file or if it's an oversight.",
+        "REQ-5: There is no mention of what `HubClient` constructor arguments are required (e.g. base URL, PAT, timeout), or whether a shared client instance is constructed once and reused across REQ-3 and REQ-5.",
+        "Files Modified table: `config_gen.py` is listed as a modified file, but it is not referenced anywhere in the requirements \u2014 its role and the scope of changes to it are not described."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "For `--workspace` 3-tier resolution (CLI flag > `AF_WORKSPACE` env var > config file), is this resolution handled inline in `app.py`, or is there a helper (similar to `resolve_hub_url`) in `afhub.auth` for it?",
+          "context": "REQ-2 describes the resolution chain for `--workspace` but does not clarify whether a reusable helper exists or if the implementer should write inline resolution logic. This affects the implementation pattern and testability.",
+          "options": [
+            "Inline resolution in app.py (no helper)",
+            "A new helper function in afhub.auth (e.g. resolve_workspace_slug)",
+            "Inline resolution, but documented as a pattern to follow"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Does the git subprocess call in REQ-3 Step 4 use the blocking `subprocess.run()` (called from within an async function) or the async-native `asyncio.create_subprocess_exec()`?",
+          "context": "The CWD validation is inside an async helper invoked via asyncio.run(). Using blocking subprocess.run() inside an async function can block the event loop, while asyncio.create_subprocess_exec() is non-blocking but changes error-handling patterns. The spec should be explicit to avoid implementation ambiguity.",
+          "options": [
+            "Blocking subprocess.run() \u2014 acceptable here since it's a short-lived startup call",
+            "asyncio.create_subprocess_exec() \u2014 fully async",
+            "Either is acceptable; leave to implementer"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Are `rebuild_timeout`, `rebuild_poll_interval`, and `max_resolve_retries` intentionally excluded from the generated `.nightshift/config.toml` (REQ-4), or should they be included for operator visibility?",
+          "context": "The CarryPatchConfig model defines these three fields, but the generated config template in REQ-4 only writes `enabled`, `workspace`, `check_interval`, and `auto_resolve`. Omitting them means operators won't see tunable fields unless they read the source. Including them with default values makes the file more self-documenting.",
+          "options": [
+            "Intentionally excluded \u2014 keep the generated file minimal",
+            "Include them with default values for operator discoverability",
+            "Include them but commented out"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "What is the expected logging mechanism for warnings and success messages in this spec (e.g. Python standard `logging` module, `click.echo`, or a project-specific structured logger)?",
+          "context": "REQ-3 Step 6 says 'log success' and REQ-4/REQ-5 say 'log a warning'. Consistency with the existing nightshift/agentfox logging pattern is important. If the project uses a structured logger (e.g. structlog or a custom wrapper), the implementer should use it rather than ad-hoc click.echo calls.",
+          "options": [
+            "Python standard logging module",
+            "click.echo (stderr for warnings, stdout for info)",
+            "Project-specific structured logger (e.g. structlog)",
+            "Leave to implementer to match existing app.py patterns"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "What are the `HubClient` constructor arguments, and is a single shared instance constructed once and reused across both REQ-3 (get_workspace) and REQ-5 (set_variable)?",
+          "context": "REQ-3 and REQ-5 both use hub_client, but the spec never shows how HubClient is instantiated (e.g. HubClient(base_url=..., pat=...)). Clarifying this prevents the implementer from creating multiple client instances or guessing constructor arguments not covered by 01_afhub_client's cross-reference summary.",
+          "options": [
+            "Single shared instance constructed in app.py before asyncio.run()",
+            "Single shared instance constructed inside the async helper",
+            "Defer to 01_afhub_client spec for constructor details; single instance assumed"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "What changes are expected in `config_gen.py` (listed in Files Modified but not described in any requirement)?",
+          "context": "The Files Modified table lists packages/agentfox/agentfox/core/config_gen.py with 'Add hub and carry_patch sections to generated default config', but no requirement describes this file's role, its existing behavior, or what exactly should be added. Without this, the implementer may duplicate or conflict with REQ-4's config generation logic.",
+          "options": [
+            "config_gen.py generates the default AgentFoxConfig (not the .nightshift/config.toml); it needs hub and carry_patch sections added to match new models",
+            "config_gen.py is the implementation of REQ-4's config writing logic; the Files Modified entry is just clarifying where that code lives",
+            "config_gen.py should be removed from Files Modified \u2014 it's an error in the table"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "This is a high-quality, well-structured PRD with exceptional detail across all evaluated dimensions. Intent is clear and single-scoped. Goals are concrete and implementation-traceable. Non-Goals explicitly fence downstream specs and known limitations. Background provides sufficient context for an unfamiliar reader. The External API Surface section is thorough \u2014 it documents all consumed types, function signatures, failure modes, and cross-spec references. The Tech Stack is fully specified. Requirements are unambiguous, include exact error message strings where precision matters, and enumerate all test cases with requirement-to-test mappings. There are only minor gaps worth clarifying, primarily around edge cases in REQ-2 activation logic and REQ-4 integration_branch handling.",
+      "gaps": [
+        "REQ-2 activation logic: The spec states carry-patch mode is active when both --workspace and --token are resolved, but does not clarify whether a resolved --hub-url is also required at the point of mode activation or only validated after mode is determined active (the error exit for missing hub-url implies the latter, but the sequencing is implicit).",
+        "REQ-2: The behavior when --workspace is resolved but --token is absent is defined as an error exit, but the symmetric case \u2014 --token resolved but --workspace absent \u2014 is not explicitly addressed (the general rule implies skip, but it is not stated).",
+        "REQ-4: The spec says integration_branch defaults to empty string if None, but does not clarify whether an empty string should be written as integration_branch = '' or omitted from the generated TOML entirely.",
+        "REQ-4: The atomic write uses a .tmp file then renames, but the spec does not specify whether the .tmp file is cleaned up on write failure (e.g. after a disk-full error mid-write).",
+        "REQ-3/REQ-5: The async helper's return value (if any) and how resolved state \u2014 e.g. the Workspace object \u2014 is passed back to synchronous main() is not specified, which may leave implementers to choose incompatible patterns.",
+        "Files Modified table: config_gen.py is listed as modified to add [hub] and [carry_patch] sections to the global default TOML template, but no requirements, test cases, or content specification cover this file, leaving its expected output undefined."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "In REQ-2, when carry-patch mode is determined to be active (workspace + token both resolved), is a resolved hub-url also required before proceeding, or is the hub-url error exit checked separately after mode activation?",
+          "context": "The spec implies the hub-url check happens after mode activation, but the exact sequencing of the three validation checks (workspace present, token present, hub-url present) is not stated. Implementers need to know the order to produce consistent error messages.",
+          "options": [
+            "Hub-url is checked first, before workspace/token \u2014 if absent and any carry-patch flag is present, exit immediately",
+            "Mode is activated by workspace+token; hub-url is then validated as a separate subsequent check before calling the async helper",
+            "All three are resolved first, then all three are validated together before mode is activated"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "What is the expected behavior when --token is resolved but --workspace is absent (no flag, no AF_WORKSPACE env var, no config value)?",
+          "context": "REQ-2 explicitly handles workspace-present/token-absent (error exit) but is silent on token-present/workspace-absent. Implementers need to know whether this is a silent skip (normal run) or an error exit.",
+          "options": [
+            "Silent skip \u2014 nightshift runs normally without carry-patch, token is ignored",
+            "Error exit \u2014 --workspace is required when --token is provided",
+            "Emit a warning log and skip carry-patch mode"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "In the generated .nightshift/config.toml (REQ-4), if workspace.integration_branch is None, should the field be written as integration_branch = '' (empty string) or omitted from the file entirely?",
+          "context": "The spec says 'empty string if None' in the table notes, which implies the field is always written. However, omitting it would also be a valid self-documenting choice since the default is None/empty. Clarifying this prevents divergent implementations.",
+          "options": [
+            "Always write the field, using an empty string: integration_branch = \"\"",
+            "Omit the field entirely when None, relying on the model default",
+            "Write a commented-out line: # integration_branch = \"\""
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "Should the .tmp file created during the atomic config write (REQ-4) be explicitly deleted on write failure, or is cleanup left to the OS/caller?",
+          "context": "The spec says emit a warning and continue on failure, but does not address whether a partially-written config.toml.tmp file should be removed. Leaving stale .tmp files could confuse operators or interfere with future startups.",
+          "options": [
+            "Explicitly delete the .tmp file in the exception handler before continuing",
+            "Leave cleanup to the OS \u2014 the .tmp file is ignored on next startup since only config.toml is read",
+            "Rename .tmp to a timestamped error artifact for diagnostics"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "What does the async startup helper return (if anything), and how is state \u2014 such as the resolved Workspace object \u2014 made available to synchronous main() after asyncio.run() completes?",
+          "context": "REQ-3 and REQ-5 are inside an async helper invoked via asyncio.run(). If downstream synchronous code (e.g. DaemonRunner) needs the Workspace object or other resolved state, the return convention must be specified to avoid incompatible implementations.",
+          "options": [
+            "The helper returns a named tuple or dataclass with resolved state (Workspace, slug, etc.) that main() uses after asyncio.run()",
+            "The helper returns None \u2014 all needed state is already captured in local variables in main() before the async call",
+            "The helper mutates a shared mutable config object that main() reads after asyncio.run()"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "What is the expected content and format of the [hub] and [carry_patch] additions to the global default config template in config_gen.py?",
+          "context": "config_gen.py is listed in Files Modified but has no associated requirements, test cases, or content specification. Without a template, implementers may produce inconsistent comment annotations or field ordering relative to the existing template style.",
+          "options": [
+            "Mirror the exact fields and defaults from the Pydantic models, with comment annotations matching the existing template style in config_gen.py",
+            "Write a minimal stub with only endpoint_url and enabled, with a comment pointing to the workspace-level config for full options",
+            "This file change is out of scope for this spec and should be deferred to a follow-up"
+          ],
+          "required": false
+        }
+      ]
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "Yes \u2014 HubNotFoundError is a confirmed export of afhub_client. It maps to HTTP 404 responses. The afhub_client spec's error hierarchy lists it as: class HubNotFoundError(HubError): 404 - workspace/patch/rebuild not found.",
+        "q2": "afhub_client spec (01_afhub_client) documents the full Workspace model. Cross-reference: Workspace fields used in this spec: workspace_mode (str), clone_status (str, values: pending/cloning/ready/failed), git_url (str, required), integration_branch (str | None = None). set_variable signature: set_variable(slug: str, key: str, value: str) -> None, uses PATCH-then-POST upsert as documented in 01_afhub_client REQ-4.",
+        "q3": "Clamped is a custom annotated type already defined in agentfox.core.config itself (the same file being modified). It is an internal utility class in the existing config.py file used throughout NightShiftConfig and other existing models. The import is local \u2014 no new module needed. It silently clamps values rather than raising ValidationError, matching the existing pattern in the codebase.",
+        "q4": "No \u2014 the source reference to docs/proposals/carry_patch_support.md is sufficient. The spec is focused on implementation, not motivation.",
+        "q5": "Any exception from set_variable is non-fatal \u2014 log warning and continue regardless. The daemon can function correctly even if these variables are not set, because it handles concurrent rebuild (409) gracefully.",
+        "q6": "Owner: nightshift (Michael Kuehl / candlekeep)"
+      },
+      "timestamp": "2026-09-01T10:28:46.173089+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "resolve_hub_url() from afhub.auth already encapsulates all three tiers: it reads from hub_url_flag first, then AF_HUB_URL env var, then config_url parameter. The caller passes all three sources. So in app.py: resolved_hub_url = resolve_hub_url(hub_url_flag=hub_url_flag, config_url=config.hub.endpoint_url). A single call handles the full chain.",
+        "q2": "Catch FileNotFoundError, emit a clear error message ('git is not installed or not in PATH; nightshift requires git'), and sys.exit(1). Same error handling pattern as for non-zero return code.",
+        "q3": "The startup validation block (CWD validation + variable init) is extracted into an async helper function called via asyncio.run() at startup, before the synchronous daemon loop (DaemonRunner.run()) begins. The existing app.py already uses asyncio.run() for the daemon (asyncio.run(runner.run())) so the pattern is consistent.",
+        "q4": "Yes \u2014 add explicit statement to REQ-4: if .nightshift/config.toml already exists, skip generation entirely (never overwrite).",
+        "q5": "Do not reload. The file is for future startups only. All values are already resolved in memory for the current session.",
+        "q6": "Add to Non-Goals: 'Token rotation or PAT refresh during a running session; a PAT that expires mid-run causes hub API errors that are logged as HubAuthError.'"
+      },
+      "timestamp": "2026-09-01T10:30:33.061668+00:00"
+    },
+    {
+      "assessment_index": 2,
+      "answers": {
+        "q1": "Silently skip carry-patch and run normally. --hub-url alone is insufficient to activate carry-patch mode. Only when both --workspace and --token (from any source) are resolved does carry-patch mode activate. --hub-url is only used when carry-patch mode is active.",
+        "q2": "Leave the exact wording to the implementer \u2014 any clear message is acceptable.",
+        "q3": "merge_strategy already exists in the existing WorkspaceConfig model in agentfox.core.config. The WorkspaceConfig class has a merge_strategy field with Literal['direct', 'branch', 'pr'] = 'direct'. No new model needed.",
+        "q4": "Leave naming to the implementer \u2014 the PRD describes behavior sufficiently."
+      },
+      "timestamp": "2026-09-01T10:32:21.302759+00:00"
+    },
+    {
+      "assessment_index": 3,
+      "answers": {
+        "q1": "Inline resolution in app.py. No new helper for workspace slug. The pattern is: resolved_slug = workspace_flag or os.environ.get('AF_WORKSPACE', '') or config.carry_patch.workspace.",
+        "q2": "Blocking subprocess.run() \u2014 acceptable for this short-lived startup call. The async helper is called via asyncio.run() which runs the event loop; a single blocking subprocess.run() of git is fine at startup.",
+        "q3": "Include them with default values for operator discoverability. The generated config should show all tunable CarryPatchConfig fields.",
+        "q4": "Python standard logging module (logging.warning, logging.info, logging.error). Use click.echo only for user-facing error messages before sys.exit(1), matching the existing app.py pattern.",
+        "q5": "Single shared instance constructed inside the async helper before use. Constructor: HubClient(endpoint_url=resolved_hub_url, pat=resolved_pat) \u2014 as documented in 01_afhub_client REQ-1.",
+        "q6": "config_gen.py generates the global default AgentFoxConfig comment-annotated TOML shown when no config exists \u2014 not the workspace-level .nightshift/config.toml. It needs hub and carry_patch sections added to expose these new config keys to operators who read the generated template. This is separate from and complementary to REQ-4."
+      },
+      "timestamp": "2026-09-01T10:34:32.606706+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

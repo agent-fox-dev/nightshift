@@ -1,0 +1,1798 @@
+{
+  "$schema": null,
+  "spec_id": "01",
+  "spec_name": "afhub_client",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-01-1",
+      "requirement_id": "01-REQ-1.1",
+      "kind": "unit",
+      "description": "HubClient constructor creates a single shared httpx.AsyncClient with the correct base URL and Authorization Bearer header applied to every request.",
+      "preconditions": [
+        "afhub package is installed in a Python 3.12+ environment",
+        "httpx>=0.27 is available"
+      ],
+      "input": {
+        "endpoint_url": "https://hub.example.com",
+        "pat": "test-pat-123"
+      },
+      "expected": "HubClient instance is created; its internal httpx.AsyncClient has base_url='https://hub.example.com' and default headers include 'Authorization: Bearer test-pat-123'",
+      "assertion_pseudocode": "client = HubClient('https://hub.example.com', 'test-pat-123'); assert client._http_client.base_url == 'https://hub.example.com'; assert client._http_client.headers['authorization'] == 'Bearer test-pat-123'"
+    },
+    {
+      "id": "TS-01-2",
+      "requirement_id": "01-REQ-1.2",
+      "kind": "unit",
+      "description": "get_workspace sends GET /api/v1/workspaces/:slug and returns a parsed Workspace model on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a valid Workspace JSON body"
+      ],
+      "input": {
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a Workspace instance with fields matching the mocked response body",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=200, json=lambda: {'slug': 'my-workspace', 'git_url': 'https://git.example.com/repo.git', 'workspace_mode': 'carry', 'status': 'active', 'clone_status': 'ready', 'sync_status': 'ok'}); client._http_client.get = AsyncMock(return_value=mock_response); result = await client.get_workspace('my-workspace'); assert isinstance(result, Workspace); assert result.slug == 'my-workspace'"
+    },
+    {
+      "id": "TS-01-3",
+      "requirement_id": "01-REQ-1.3",
+      "kind": "unit",
+      "description": "sync_workspace sends POST /api/v1/workspaces/:slug/sync with reset_to_upstream in the JSON body and returns a SyncResult on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a valid SyncResult JSON body"
+      ],
+      "input": {
+        "reset_to_upstream": false,
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a SyncResult instance; the POST request body contains reset_to_upstream=false",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=200, json=lambda: {'patches_merged': 2, 'rebuild_triggered': true, 'rebuild_job_id': 'job-1', 'force_push_detected': false}); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.sync_workspace('my-workspace', reset_to_upstream=False); assert isinstance(result, SyncResult); assert result.patches_merged == 2; call_kwargs = client._http_client.post.call_args; assert '/api/v1/workspaces/my-workspace/sync' in str(call_kwargs); assert call_kwargs.kwargs['json']['reset_to_upstream'] == False"
+    },
+    {
+      "id": "TS-01-4",
+      "requirement_id": "01-REQ-1.4",
+      "kind": "unit",
+      "description": "get_patch_status sends GET /api/v1/workspaces/:slug/patch-status and returns a PatchStatusDashboard on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a valid PatchStatusDashboard JSON body"
+      ],
+      "input": {
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a PatchStatusDashboard instance with patches list and summary fields populated",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=200, json=lambda: {'patches': [], 'summary': {'total_patches': 0, 'active': 0, 'merged_upstream': 0, 'conflict': 0, 'disabled': 0, 'total_rerere_resolutions': 0}}); client._http_client.get = AsyncMock(return_value=mock_response); result = await client.get_patch_status('my-workspace'); assert isinstance(result, PatchStatusDashboard); assert isinstance(result.summary, PatchSummary)"
+    },
+    {
+      "id": "TS-01-5",
+      "requirement_id": "01-REQ-1.5",
+      "kind": "unit",
+      "description": "reclone_workspace sends POST /api/v1/workspaces/:slug/reclone and returns a Workspace on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a valid Workspace JSON body"
+      ],
+      "input": {
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a Workspace instance; the POST request targets /api/v1/workspaces/my-workspace/reclone",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=200, json=lambda: {'slug': 'my-workspace', 'git_url': 'https://git.example.com/repo.git', 'workspace_mode': 'carry', 'status': 'active', 'clone_status': 'pending', 'sync_status': 'ok'}); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.reclone_workspace('my-workspace'); assert isinstance(result, Workspace); assert '/api/v1/workspaces/my-workspace/reclone' in str(client._http_client.post.call_args)"
+    },
+    {
+      "id": "TS-01-6",
+      "requirement_id": "01-REQ-1.6",
+      "kind": "unit",
+      "description": "aclose() closes the underlying httpx.AsyncClient and releases connection pool resources.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient whose aclose is an AsyncMock"
+      ],
+      "input": {},
+      "expected": "aclose() returns None; the underlying httpx.AsyncClient.aclose() is called exactly once",
+      "assertion_pseudocode": "client._http_client.aclose = AsyncMock(); result = await client.aclose(); assert result is None; client._http_client.aclose.assert_called_once()"
+    },
+    {
+      "id": "TS-01-7",
+      "requirement_id": "01-REQ-1.7",
+      "kind": "unit",
+      "description": "HubClient used as async context manager calls aclose() on exit and yields the client instance.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient whose aclose is an AsyncMock"
+      ],
+      "input": {},
+      "expected": "The context variable is the HubClient instance; aclose() is called exactly once on exit",
+      "assertion_pseudocode": "client._http_client.aclose = AsyncMock(); async with HubClient('https://hub.example.com', 'pat') as c: assert c is the HubClient instance; client._http_client.aclose.assert_called_once()"
+    },
+    {
+      "id": "TS-01-8",
+      "requirement_id": "01-REQ-2.1",
+      "kind": "unit",
+      "description": "list_patches sends GET /api/v1/workspaces/:slug/patches and returns a list of Patch models on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a JSON array of two Patch objects"
+      ],
+      "input": {
+        "slug": "my-workspace"
+      },
+      "expected": "Returns list[Patch] with two elements; returns empty list when hub returns empty array",
+      "assertion_pseudocode": "patch_data = {'id': 'p1', 'workspace_slug': 'my-workspace', 'branch_name': 'feat/x', 'position': 1, 'status': 'active', 'added_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z'}; mock_response = MagicMock(status_code=200, json=lambda: [patch_data]); client._http_client.get = AsyncMock(return_value=mock_response); result = await client.list_patches('my-workspace'); assert len(result) == 1; assert isinstance(result[0], Patch); assert result[0].id == 'p1'"
+    },
+    {
+      "id": "TS-01-9",
+      "requirement_id": "01-REQ-2.2",
+      "kind": "unit",
+      "description": "add_patch sends POST /api/v1/workspaces/:slug/patches with a single-object JSON body and returns a Patch on HTTP 201.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 201 with a valid Patch JSON body"
+      ],
+      "input": {
+        "branch_name": "feat/my-branch",
+        "description": null,
+        "if_not_exists": false,
+        "position": 1,
+        "skip_branch_check": false,
+        "slug": "my-workspace",
+        "upstream_pr_url": null
+      },
+      "expected": "Returns a Patch instance; the POST body is a single JSON object (not an array) containing branch_name and position",
+      "assertion_pseudocode": "patch_data = {'id': 'p1', 'workspace_slug': 'my-workspace', 'branch_name': 'feat/my-branch', 'position': 1, 'status': 'active', 'added_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z'}; mock_response = MagicMock(status_code=201, json=lambda: patch_data); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.add_patch('my-workspace', 'feat/my-branch', position=1); assert isinstance(result, Patch); sent_body = client._http_client.post.call_args.kwargs['json']; assert isinstance(sent_body, dict); assert sent_body['branch_name'] == 'feat/my-branch'"
+    },
+    {
+      "id": "TS-01-10",
+      "requirement_id": "01-REQ-2.3",
+      "kind": "unit",
+      "description": "add_patches_batch sends POST /api/v1/workspaces/:slug/patches with a JSON array body and returns list[Patch] on HTTP 201.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 201 with a JSON array of Patch objects"
+      ],
+      "input": {
+        "patches": [
+          {
+            "branch_name": "feat/a",
+            "position": 1
+          },
+          {
+            "branch_name": "feat/b",
+            "position": 2
+          }
+        ],
+        "slug": "my-workspace"
+      },
+      "expected": "Returns list[Patch] with two elements; the POST body is a JSON array (not a single object)",
+      "assertion_pseudocode": "patch_data = [{'id': 'p1', 'workspace_slug': 'my-workspace', 'branch_name': 'feat/a', 'position': 1, 'status': 'active', 'added_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z'}, {'id': 'p2', 'workspace_slug': 'my-workspace', 'branch_name': 'feat/b', 'position': 2, 'status': 'active', 'added_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z'}]; mock_response = MagicMock(status_code=201, json=lambda: patch_data); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.add_patches_batch('my-workspace', [{'branch_name': 'feat/a', 'position': 1}]); assert isinstance(result, list); assert all(isinstance(p, Patch) for p in result); sent_body = client._http_client.post.call_args.kwargs['json']; assert isinstance(sent_body, list)"
+    },
+    {
+      "id": "TS-01-11",
+      "requirement_id": "01-REQ-2.4",
+      "kind": "unit",
+      "description": "update_patch sends PATCH /api/v1/workspaces/:slug/patches/:id with kwargs as JSON body and returns a Patch on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a valid Patch JSON body"
+      ],
+      "input": {
+        "kwargs": {
+          "description": "updated desc"
+        },
+        "patch_id": "p1",
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a Patch instance; the PATCH request targets /api/v1/workspaces/my-workspace/patches/p1 with body {'description': 'updated desc'}",
+      "assertion_pseudocode": "patch_data = {'id': 'p1', 'workspace_slug': 'my-workspace', 'branch_name': 'feat/x', 'position': 1, 'status': 'active', 'added_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-02T00:00:00Z', 'description': 'updated desc'}; mock_response = MagicMock(status_code=200, json=lambda: patch_data); client._http_client.patch = AsyncMock(return_value=mock_response); result = await client.update_patch('my-workspace', 'p1', description='updated desc'); assert isinstance(result, Patch); assert result.description == 'updated desc'"
+    },
+    {
+      "id": "TS-01-12",
+      "requirement_id": "01-REQ-2.5",
+      "kind": "unit",
+      "description": "remove_patch sends DELETE /api/v1/workspaces/:slug/patches/:id and returns None on HTTP 204 without parsing the body.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 204 with no body"
+      ],
+      "input": {
+        "patch_id": "p1",
+        "slug": "my-workspace"
+      },
+      "expected": "Returns None; no attempt is made to parse the response body",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=204); mock_response.json = MagicMock(side_effect=Exception('should not be called')); client._http_client.delete = AsyncMock(return_value=mock_response); result = await client.remove_patch('my-workspace', 'p1'); assert result is None; mock_response.json.assert_not_called()"
+    },
+    {
+      "id": "TS-01-13",
+      "requirement_id": "01-REQ-2.6",
+      "kind": "unit",
+      "description": "restore_patch sends POST /api/v1/workspaces/:slug/patches/:id/restore and returns a Patch on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a valid Patch JSON body"
+      ],
+      "input": {
+        "patch_id": "p1",
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a Patch instance; the POST request targets /api/v1/workspaces/my-workspace/patches/p1/restore",
+      "assertion_pseudocode": "patch_data = {'id': 'p1', 'workspace_slug': 'my-workspace', 'branch_name': 'feat/x', 'position': 1, 'status': 'active', 'added_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z'}; mock_response = MagicMock(status_code=200, json=lambda: patch_data); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.restore_patch('my-workspace', 'p1'); assert isinstance(result, Patch); assert '/api/v1/workspaces/my-workspace/patches/p1/restore' in str(client._http_client.post.call_args)"
+    },
+    {
+      "id": "TS-01-14",
+      "requirement_id": "01-REQ-2.7",
+      "kind": "unit",
+      "description": "reorder_patches sends POST /api/v1/workspaces/:slug/patches/reorder with ordered patch_ids and returns list[Patch] on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a JSON array of Patch objects in the new order"
+      ],
+      "input": {
+        "patch_ids": [
+          "p2",
+          "p1"
+        ],
+        "slug": "my-workspace"
+      },
+      "expected": "Returns list[Patch]; the POST body contains the patch_ids list in the specified order",
+      "assertion_pseudocode": "patch_data = [{'id': 'p2', 'workspace_slug': 'my-workspace', 'branch_name': 'feat/b', 'position': 1, 'status': 'active', 'added_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z'}]; mock_response = MagicMock(status_code=200, json=lambda: patch_data); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.reorder_patches('my-workspace', ['p2', 'p1']); assert isinstance(result, list); sent_body = client._http_client.post.call_args.kwargs['json']; assert sent_body['patch_ids'] == ['p2', 'p1']"
+    },
+    {
+      "id": "TS-01-15",
+      "requirement_id": "01-REQ-3.1",
+      "kind": "unit",
+      "description": "submit_rebuild sends POST /api/v1/workspaces/:slug/rebuild with strategy and fail_mode in the JSON body and returns a RebuildJob on HTTP 202.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 202 with a valid RebuildJob JSON body"
+      ],
+      "input": {
+        "fail_mode": "stop",
+        "slug": "my-workspace",
+        "strategy": "merge"
+      },
+      "expected": "Returns a RebuildJob instance; the POST body contains strategy='merge' and fail_mode='stop'; None values are omitted",
+      "assertion_pseudocode": "job_data = {'id': 'job-1', 'status': 'pending', 'created_at': '2026-01-01T00:00:00Z'}; mock_response = MagicMock(status_code=202, json=lambda: job_data); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.submit_rebuild('my-workspace', strategy='merge', fail_mode='stop'); assert isinstance(result, RebuildJob); sent_body = client._http_client.post.call_args.kwargs['json']; assert sent_body.get('strategy') == 'merge'; assert sent_body.get('fail_mode') == 'stop'"
+    },
+    {
+      "id": "TS-01-16",
+      "requirement_id": "01-REQ-3.2",
+      "kind": "unit",
+      "description": "get_rebuild sends GET /api/v1/workspaces/:slug/rebuilds/:id and returns a RebuildJob on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a valid RebuildJob JSON body"
+      ],
+      "input": {
+        "rebuild_id": "job-1",
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a RebuildJob instance with id='job-1'",
+      "assertion_pseudocode": "job_data = {'id': 'job-1', 'status': 'running', 'created_at': '2026-01-01T00:00:00Z'}; mock_response = MagicMock(status_code=200, json=lambda: job_data); client._http_client.get = AsyncMock(return_value=mock_response); result = await client.get_rebuild('my-workspace', 'job-1'); assert isinstance(result, RebuildJob); assert result.id == 'job-1'"
+    },
+    {
+      "id": "TS-01-17",
+      "requirement_id": "01-REQ-3.3",
+      "kind": "unit",
+      "description": "list_rebuilds sends GET /api/v1/workspaces/:slug/rebuilds, unwraps the 'jobs' array, and returns list[RebuildJob] on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with {'jobs': [...]} envelope"
+      ],
+      "input": {
+        "slug": "my-workspace"
+      },
+      "expected": "Returns list[RebuildJob]; returns empty list when 'jobs' is an empty array",
+      "assertion_pseudocode": "job_data = {'id': 'job-1', 'status': 'completed', 'created_at': '2026-01-01T00:00:00Z'}; mock_response = MagicMock(status_code=200, json=lambda: {'jobs': [job_data]}); client._http_client.get = AsyncMock(return_value=mock_response); result = await client.list_rebuilds('my-workspace'); assert isinstance(result, list); assert len(result) == 1; assert isinstance(result[0], RebuildJob)"
+    },
+    {
+      "id": "TS-01-18",
+      "requirement_id": "01-REQ-3.4",
+      "kind": "unit",
+      "description": "cancel_rebuild sends DELETE /api/v1/workspaces/:slug/rebuilds/:id and returns a RebuildJob representing the cancelled job on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a RebuildJob JSON body with status='cancelled'"
+      ],
+      "input": {
+        "rebuild_id": "job-1",
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a RebuildJob instance with status='cancelled'",
+      "assertion_pseudocode": "job_data = {'id': 'job-1', 'status': 'cancelled', 'created_at': '2026-01-01T00:00:00Z'}; mock_response = MagicMock(status_code=200, json=lambda: job_data); client._http_client.delete = AsyncMock(return_value=mock_response); result = await client.cancel_rebuild('my-workspace', 'job-1'); assert isinstance(result, RebuildJob); assert result.status == 'cancelled'"
+    },
+    {
+      "id": "TS-01-19",
+      "requirement_id": "01-REQ-3.5",
+      "kind": "unit",
+      "description": "requeue_rebuild sends POST /api/v1/workspaces/:slug/rebuilds/:id/requeue and returns a RebuildJob on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a valid RebuildJob JSON body"
+      ],
+      "input": {
+        "rebuild_id": "job-1",
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a RebuildJob instance; the POST request targets /api/v1/workspaces/my-workspace/rebuilds/job-1/requeue",
+      "assertion_pseudocode": "job_data = {'id': 'job-1', 'status': 'pending', 'created_at': '2026-01-01T00:00:00Z'}; mock_response = MagicMock(status_code=200, json=lambda: job_data); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.requeue_rebuild('my-workspace', 'job-1'); assert isinstance(result, RebuildJob); assert '/api/v1/workspaces/my-workspace/rebuilds/job-1/requeue' in str(client._http_client.post.call_args)"
+    },
+    {
+      "id": "TS-01-20",
+      "requirement_id": "01-REQ-3.6",
+      "kind": "unit",
+      "description": "rollback_rebuild sends POST /api/v1/workspaces/:slug/rebuilds/:id/rollback and extracts the 'previous_integration_head_sha' value as a plain string on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with {'previous_integration_head_sha': 'abc123'}"
+      ],
+      "input": {
+        "rebuild_id": "job-1",
+        "slug": "my-workspace"
+      },
+      "expected": "Returns the string 'abc123'; does not return the full dict",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=200, json=lambda: {'previous_integration_head_sha': 'abc123'}); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.rollback_rebuild('my-workspace', 'job-1'); assert result == 'abc123'; assert isinstance(result, str)"
+    },
+    {
+      "id": "TS-01-21",
+      "requirement_id": "01-REQ-3.7",
+      "kind": "unit",
+      "description": "get_rebuild_preview sends GET /api/v1/workspaces/:slug/rebuild-preview and returns a RebuildPreview on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a valid RebuildPreview JSON body"
+      ],
+      "input": {
+        "slug": "my-workspace"
+      },
+      "expected": "Returns a RebuildPreview instance with patch_results list",
+      "assertion_pseudocode": "preview_data = {'patch_results': [{'patch_id': 'p1', 'branch_name': 'feat/x', 'position': 1, 'status': 'would_succeed', 'tree_sha': None, 'conflict_files': None}]}; mock_response = MagicMock(status_code=200, json=lambda: preview_data); client._http_client.get = AsyncMock(return_value=mock_response); result = await client.get_rebuild_preview('my-workspace'); assert isinstance(result, RebuildPreview); assert len(result.patch_results) == 1"
+    },
+    {
+      "id": "TS-01-22",
+      "requirement_id": "01-REQ-4.1",
+      "kind": "unit",
+      "description": "list_rerere sends GET /api/v1/workspaces/:slug/rerere, unwraps the 'resolutions' array, and returns list[RerereEntry] on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with {'resolutions': [...]} envelope"
+      ],
+      "input": {
+        "slug": "my-workspace"
+      },
+      "expected": "Returns list[RerereEntry]; returns empty list when 'resolutions' is empty",
+      "assertion_pseudocode": "entry_data = {'path': 'src/foo.py', 'recorded_at': '2026-01-01T00:00:00Z'}; mock_response = MagicMock(status_code=200, json=lambda: {'resolutions': [entry_data]}); client._http_client.get = AsyncMock(return_value=mock_response); result = await client.list_rerere('my-workspace'); assert isinstance(result, list); assert len(result) == 1; assert isinstance(result[0], RerereEntry); assert result[0].path == 'src/foo.py'"
+    },
+    {
+      "id": "TS-01-23",
+      "requirement_id": "01-REQ-4.2",
+      "kind": "unit",
+      "description": "forget_rerere sends DELETE /api/v1/workspaces/:slug/rerere/*pathspec and returns None on HTTP 204 without parsing the body.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 204 with no body"
+      ],
+      "input": {
+        "pathspec": "src/foo.py",
+        "slug": "my-workspace"
+      },
+      "expected": "Returns None; no attempt is made to parse the response body",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=204); mock_response.json = MagicMock(side_effect=Exception('should not be called')); client._http_client.delete = AsyncMock(return_value=mock_response); result = await client.forget_rerere('my-workspace', 'src/foo.py'); assert result is None; mock_response.json.assert_not_called()"
+    },
+    {
+      "id": "TS-01-24",
+      "requirement_id": "01-REQ-4.3",
+      "kind": "unit",
+      "description": "create_variable sends POST /api/v1/workspaces/:slug/vars with key and value in the JSON body and returns None on HTTP 201.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 201"
+      ],
+      "input": {
+        "key": "MY_KEY",
+        "slug": "my-workspace",
+        "value": "my_value"
+      },
+      "expected": "Returns None; the POST body contains key='MY_KEY' and value='my_value'",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=201); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.create_variable('my-workspace', 'MY_KEY', 'my_value'); assert result is None; sent_body = client._http_client.post.call_args.kwargs['json']; assert sent_body['key'] == 'MY_KEY'; assert sent_body['value'] == 'my_value'"
+    },
+    {
+      "id": "TS-01-25",
+      "requirement_id": "01-REQ-4.4",
+      "kind": "unit",
+      "description": "update_variable sends PATCH /api/v1/workspaces/:slug/vars/:key with the new value in the JSON body and returns None on HTTP 200.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200"
+      ],
+      "input": {
+        "key": "MY_KEY",
+        "slug": "my-workspace",
+        "value": "new_value"
+      },
+      "expected": "Returns None; the PATCH request targets /api/v1/workspaces/my-workspace/vars/MY_KEY with body containing value='new_value'",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=200); client._http_client.patch = AsyncMock(return_value=mock_response); result = await client.update_variable('my-workspace', 'MY_KEY', 'new_value'); assert result is None; sent_body = client._http_client.patch.call_args.kwargs['json']; assert sent_body['value'] == 'new_value'"
+    },
+    {
+      "id": "TS-01-26",
+      "requirement_id": "01-REQ-4.5",
+      "kind": "unit",
+      "description": "set_variable sends PATCH /api/v1/workspaces/:slug/vars/:key first; on HTTP 200 returns None without issuing a prior GET.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 for PATCH"
+      ],
+      "input": {
+        "key": "EXISTING_KEY",
+        "slug": "my-workspace",
+        "value": "val"
+      },
+      "expected": "Returns None; exactly one PATCH request is issued; no GET request is issued",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=200); client._http_client.patch = AsyncMock(return_value=mock_response); client._http_client.get = AsyncMock(); result = await client.set_variable('my-workspace', 'EXISTING_KEY', 'val'); assert result is None; client._http_client.patch.assert_called_once(); client._http_client.get.assert_not_called()"
+    },
+    {
+      "id": "TS-01-27",
+      "requirement_id": "01-REQ-4.6",
+      "kind": "unit",
+      "description": "set_variable falls back to POST /api/v1/workspaces/:slug/vars when PATCH returns HTTP 404, and returns None on HTTP 201 from the fallback POST.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "PATCH mock returns HTTP 404 with error envelope",
+        "POST mock returns HTTP 201"
+      ],
+      "input": {
+        "key": "NEW_KEY",
+        "slug": "my-workspace",
+        "value": "val"
+      },
+      "expected": "Returns None; PATCH is called first, then POST is called as fallback; no GET is issued",
+      "assertion_pseudocode": "patch_404 = MagicMock(status_code=404, json=lambda: {'error': {'code': 404, 'message': 'not found', 'error_type': 'not_found'}}); post_201 = MagicMock(status_code=201); client._http_client.patch = AsyncMock(return_value=patch_404); client._http_client.post = AsyncMock(return_value=post_201); result = await client.set_variable('my-workspace', 'NEW_KEY', 'val'); assert result is None; client._http_client.patch.assert_called_once(); client._http_client.post.assert_called_once()"
+    },
+    {
+      "id": "TS-01-28",
+      "requirement_id": "01-REQ-4.7",
+      "kind": "unit",
+      "description": "delete_variable sends DELETE /api/v1/workspaces/:slug/vars/:key and returns None on HTTP 204 without parsing the body.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 204 with no body"
+      ],
+      "input": {
+        "key": "MY_KEY",
+        "slug": "my-workspace"
+      },
+      "expected": "Returns None; no attempt is made to parse the response body",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=204); mock_response.json = MagicMock(side_effect=Exception('should not be called')); client._http_client.delete = AsyncMock(return_value=mock_response); result = await client.delete_variable('my-workspace', 'MY_KEY'); assert result is None; mock_response.json.assert_not_called()"
+    },
+    {
+      "id": "TS-01-29",
+      "requirement_id": "01-REQ-4.8",
+      "kind": "unit",
+      "description": "get_resolved_variables sends GET /api/v1/workspaces/:slug/vars/resolved and returns dict[str, str] on HTTP 200; returns empty dict for empty response.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a JSON object of string key-value pairs"
+      ],
+      "input": {
+        "slug": "my-workspace"
+      },
+      "expected": "Returns {'KEY1': 'val1', 'KEY2': 'val2'}; returns {} when hub returns empty object",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=200, json=lambda: {'KEY1': 'val1', 'KEY2': 'val2'}); client._http_client.get = AsyncMock(return_value=mock_response); result = await client.get_resolved_variables('my-workspace'); assert result == {'KEY1': 'val1', 'KEY2': 'val2'}; assert isinstance(result, dict)"
+    },
+    {
+      "id": "TS-01-30",
+      "requirement_id": "01-REQ-4.9",
+      "kind": "unit",
+      "description": "create_secret sends POST /api/v1/workspaces/:slug/secrets with key and value in the JSON body and returns None on HTTP 201.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 201"
+      ],
+      "input": {
+        "key": "MY_SECRET",
+        "slug": "my-workspace",
+        "value": "s3cr3t"
+      },
+      "expected": "Returns None; the POST body contains key='MY_SECRET' and value='s3cr3t'",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=201); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.create_secret('my-workspace', 'MY_SECRET', 's3cr3t'); assert result is None; sent_body = client._http_client.post.call_args.kwargs['json']; assert sent_body['key'] == 'MY_SECRET'; assert sent_body['value'] == 's3cr3t'"
+    },
+    {
+      "id": "TS-01-31",
+      "requirement_id": "01-REQ-5.1",
+      "kind": "unit",
+      "description": "All Pydantic models in afhub.models use model_config = ConfigDict(extra='ignore') so unknown fields are silently discarded.",
+      "preconditions": [
+        "afhub.models module is importable"
+      ],
+      "input": {
+        "extra_field": "unexpected_value"
+      },
+      "expected": "Each model class has model_config with extra='ignore'; constructing a model with extra fields succeeds without error",
+      "assertion_pseudocode": "from afhub.models import Workspace, Patch, RebuildJob, PatchResult, SyncResult, RerereEntry, PatchStatusDashboard, PatchDetail, PatchSummary, RebuildPreview, RebuildPreviewPatchResult; for model_cls in [Workspace, Patch, RebuildJob, ...]: assert model_cls.model_config.get('extra') == 'ignore'"
+    },
+    {
+      "id": "TS-01-32",
+      "requirement_id": "01-REQ-5.2",
+      "kind": "unit",
+      "description": "Workspace model validates required fields and defaults optional fields to None.",
+      "preconditions": [
+        "afhub.models.Workspace is importable"
+      ],
+      "input": {
+        "clone_status": "ready",
+        "git_url": "https://git.example.com/repo.git",
+        "slug": "ws1",
+        "status": "active",
+        "sync_status": "ok",
+        "workspace_mode": "carry"
+      },
+      "expected": "Returns a Workspace instance with all required fields set and optional fields defaulting to None",
+      "assertion_pseudocode": "ws = Workspace(slug='ws1', git_url='https://git.example.com/repo.git', workspace_mode='carry', status='active', clone_status='ready', sync_status='ok'); assert ws.slug == 'ws1'; assert ws.clone_error is None; assert ws.sync_error is None; assert ws.upstream_url is None"
+    },
+    {
+      "id": "TS-01-33",
+      "requirement_id": "01-REQ-5.3",
+      "kind": "unit",
+      "description": "Patch model validates required fields and defaults optional fields to None.",
+      "preconditions": [
+        "afhub.models.Patch is importable"
+      ],
+      "input": {
+        "added_at": "2026-01-01T00:00:00Z",
+        "branch_name": "feat/x",
+        "id": "p1",
+        "position": 1,
+        "status": "active",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "workspace_slug": "ws1"
+      },
+      "expected": "Returns a Patch instance with all required fields set and optional fields defaulting to None",
+      "assertion_pseudocode": "p = Patch(id='p1', workspace_slug='ws1', branch_name='feat/x', position=1, status='active', added_at='2026-01-01T00:00:00Z', updated_at='2026-01-01T00:00:00Z'); assert p.id == 'p1'; assert p.conflict_files is None; assert p.upstream_pr_url is None; assert p.description is None; assert p.deleted_at is None"
+    },
+    {
+      "id": "TS-01-34",
+      "requirement_id": "01-REQ-5.4",
+      "kind": "unit",
+      "description": "RebuildJob model validates required fields (id, status, created_at) and defaults all other fields to None.",
+      "preconditions": [
+        "afhub.models.RebuildJob is importable"
+      ],
+      "input": {
+        "created_at": "2026-01-01T00:00:00Z",
+        "id": "job-1",
+        "status": "pending"
+      },
+      "expected": "Returns a RebuildJob instance with required fields set and optional fields (strategy, error, patch_results, integration_head_sha, previous_integration_head_sha, completed_at) defaulting to None",
+      "assertion_pseudocode": "job = RebuildJob(id='job-1', status='pending', created_at='2026-01-01T00:00:00Z'); assert job.id == 'job-1'; assert job.strategy is None; assert job.error is None; assert job.patch_results is None; assert job.completed_at is None"
+    },
+    {
+      "id": "TS-01-35",
+      "requirement_id": "01-REQ-5.5",
+      "kind": "unit",
+      "description": "All model classes are importable directly from the afhub top-level namespace.",
+      "preconditions": [
+        "afhub package is installed"
+      ],
+      "input": {},
+      "expected": "All listed model classes can be imported from afhub without ImportError",
+      "assertion_pseudocode": "from afhub import Workspace, Patch, RebuildJob, PatchResult, SyncResult, RerereEntry, PatchStatusDashboard, PatchDetail, PatchSummary, RebuildPreview, RebuildPreviewPatchResult; assert all(cls is not None for cls in [Workspace, Patch, RebuildJob, PatchResult, SyncResult, RerereEntry, PatchStatusDashboard, PatchDetail, PatchSummary, RebuildPreview, RebuildPreviewPatchResult])"
+    },
+    {
+      "id": "TS-01-36",
+      "requirement_id": "01-REQ-5.6",
+      "kind": "unit",
+      "description": "afhub.models does not define a Variable model; importing afhub.models does not expose a Variable class.",
+      "preconditions": [
+        "afhub.models module is importable"
+      ],
+      "input": {},
+      "expected": "AttributeError or ImportError is raised when attempting to import Variable from afhub.models",
+      "assertion_pseudocode": "import afhub.models as m; assert not hasattr(m, 'Variable'); try: from afhub.models import Variable; assert False, 'Should not be importable'; except ImportError: pass"
+    },
+    {
+      "id": "TS-01-37",
+      "requirement_id": "01-REQ-6.1",
+      "kind": "unit",
+      "description": "HubError base class carries status_code, message, and error_type attributes.",
+      "preconditions": [
+        "afhub.errors.HubError is importable"
+      ],
+      "input": {
+        "error_type": "server_error",
+        "message": "internal error",
+        "status_code": 500
+      },
+      "expected": "HubError instance exposes .status_code=500, .message='internal error', .error_type='server_error'",
+      "assertion_pseudocode": "err = HubError(status_code=500, message='internal error', error_type='server_error'); assert err.status_code == 500; assert err.message == 'internal error'; assert err.error_type == 'server_error'; assert isinstance(err, Exception)"
+    },
+    {
+      "id": "TS-01-38",
+      "requirement_id": "01-REQ-6.2",
+      "kind": "unit",
+      "description": "HubClient raises HubAuthError when the hub returns HTTP 401.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 401 with error envelope JSON"
+      ],
+      "input": {
+        "status_code": 401
+      },
+      "expected": "HubAuthError is raised with status_code=401 and message/error_type from the envelope",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=401, json=lambda: {'error': {'code': 401, 'message': 'unauthorized', 'error_type': 'auth_error'}}); client._http_client.get = AsyncMock(return_value=mock_response); with pytest.raises(HubAuthError) as exc_info: await client.get_workspace('ws1'); assert exc_info.value.status_code == 401; assert exc_info.value.message == 'unauthorized'"
+    },
+    {
+      "id": "TS-01-39",
+      "requirement_id": "01-REQ-6.3",
+      "kind": "unit",
+      "description": "HubClient raises HubForbiddenError when the hub returns HTTP 403.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 403 with error envelope JSON"
+      ],
+      "input": {
+        "status_code": 403
+      },
+      "expected": "HubForbiddenError is raised with status_code=403",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=403, json=lambda: {'error': {'code': 403, 'message': 'forbidden', 'error_type': 'forbidden'}}); client._http_client.get = AsyncMock(return_value=mock_response); with pytest.raises(HubForbiddenError) as exc_info: await client.get_workspace('ws1'); assert exc_info.value.status_code == 403"
+    },
+    {
+      "id": "TS-01-40",
+      "requirement_id": "01-REQ-6.4",
+      "kind": "unit",
+      "description": "HubClient raises HubNotFoundError when the hub returns HTTP 404.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 404 with error envelope JSON"
+      ],
+      "input": {
+        "status_code": 404
+      },
+      "expected": "HubNotFoundError is raised with status_code=404",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=404, json=lambda: {'error': {'code': 404, 'message': 'not found', 'error_type': 'not_found'}}); client._http_client.get = AsyncMock(return_value=mock_response); with pytest.raises(HubNotFoundError) as exc_info: await client.get_workspace('ws1'); assert exc_info.value.status_code == 404"
+    },
+    {
+      "id": "TS-01-41",
+      "requirement_id": "01-REQ-6.5",
+      "kind": "unit",
+      "description": "HubClient raises HubConflictError with error_type stored on the exception when the hub returns HTTP 409.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 409 with error envelope JSON containing error_type"
+      ],
+      "input": {
+        "error_type": "duplicate_patch",
+        "status_code": 409
+      },
+      "expected": "HubConflictError is raised with status_code=409 and .error_type='duplicate_patch'",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=409, json=lambda: {'error': {'code': 409, 'message': 'conflict', 'error_type': 'duplicate_patch'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubConflictError) as exc_info: await client.add_patch('ws1', 'feat/x'); assert exc_info.value.status_code == 409; assert exc_info.value.error_type == 'duplicate_patch'"
+    },
+    {
+      "id": "TS-01-42",
+      "requirement_id": "01-REQ-6.6",
+      "kind": "unit",
+      "description": "HubClient raises HubModeError when the hub returns HTTP 400 with error_type 'workspace_mode_mismatch'.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 400 with error_type='workspace_mode_mismatch'"
+      ],
+      "input": {
+        "error_type": "workspace_mode_mismatch",
+        "status_code": 400
+      },
+      "expected": "HubModeError is raised with status_code=400 and error_type='workspace_mode_mismatch'",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=400, json=lambda: {'error': {'code': 400, 'message': 'mode mismatch', 'error_type': 'workspace_mode_mismatch'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubModeError) as exc_info: await client.add_patch('ws1', 'feat/x'); assert exc_info.value.status_code == 400; assert exc_info.value.error_type == 'workspace_mode_mismatch'"
+    },
+    {
+      "id": "TS-01-43",
+      "requirement_id": "01-REQ-6.7",
+      "kind": "unit",
+      "description": "HubClient raises HubNoActivePatchesError when the hub returns HTTP 400 with error_type 'no_active_patches'.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 400 with error_type='no_active_patches'"
+      ],
+      "input": {
+        "error_type": "no_active_patches",
+        "status_code": 400
+      },
+      "expected": "HubNoActivePatchesError is raised with status_code=400 and error_type='no_active_patches'",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=400, json=lambda: {'error': {'code': 400, 'message': 'no active patches', 'error_type': 'no_active_patches'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubNoActivePatchesError) as exc_info: await client.submit_rebuild('ws1'); assert exc_info.value.status_code == 400; assert exc_info.value.error_type == 'no_active_patches'"
+    },
+    {
+      "id": "TS-01-44",
+      "requirement_id": "01-REQ-6.8",
+      "kind": "unit",
+      "description": "HubClient raises base HubError when the hub returns HTTP 400 with an unrecognized error_type.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 400 with an unrecognized error_type"
+      ],
+      "input": {
+        "error_type": "some_unknown_error",
+        "status_code": 400
+      },
+      "expected": "HubError is raised (not a subclass) with status_code=400 and error_type='some_unknown_error'",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=400, json=lambda: {'error': {'code': 400, 'message': 'bad request', 'error_type': 'some_unknown_error'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubError) as exc_info: await client.add_patch('ws1', 'feat/x'); assert type(exc_info.value) is HubError; assert exc_info.value.status_code == 400; assert exc_info.value.error_type == 'some_unknown_error'"
+    },
+    {
+      "id": "TS-01-45",
+      "requirement_id": "01-REQ-6.9",
+      "kind": "unit",
+      "description": "All error classes are importable directly from the afhub top-level namespace.",
+      "preconditions": [
+        "afhub package is installed"
+      ],
+      "input": {},
+      "expected": "All listed error classes can be imported from afhub without ImportError",
+      "assertion_pseudocode": "from afhub import HubError, HubAuthError, HubForbiddenError, HubNotFoundError, HubConflictError, HubConnectionError, HubModeError, HubNoActivePatchesError; assert all(cls is not None for cls in [HubError, HubAuthError, HubForbiddenError, HubNotFoundError, HubConflictError, HubConnectionError, HubModeError, HubNoActivePatchesError])"
+    },
+    {
+      "id": "TS-01-46",
+      "requirement_id": "01-REQ-7.1",
+      "kind": "unit",
+      "description": "resolve_hub_pat returns token_flag when provided, then falls back to AF_HUB_TOKEN env var, then returns None.",
+      "preconditions": [
+        "afhub.auth.resolve_hub_pat is importable",
+        "Environment variable AF_HUB_TOKEN is set to 'env-token' for the env-var test case"
+      ],
+      "input": {
+        "env_var": "AF_HUB_TOKEN",
+        "token_flag": "flag-token"
+      },
+      "expected": "Returns 'flag-token' when token_flag is provided; returns 'env-token' when token_flag is None and AF_HUB_TOKEN is set; returns None when both are absent",
+      "assertion_pseudocode": "assert resolve_hub_pat(token_flag='flag-token') == 'flag-token'; with patch.dict(os.environ, {'AF_HUB_TOKEN': 'env-token'}): assert resolve_hub_pat() == 'env-token'; with patch.dict(os.environ, {}, clear=True): assert resolve_hub_pat() is None"
+    },
+    {
+      "id": "TS-01-47",
+      "requirement_id": "01-REQ-7.2",
+      "kind": "unit",
+      "description": "resolve_hub_url returns hub_url_flag, then AF_HUB_URL env var, then non-empty config_url, then None.",
+      "preconditions": [
+        "afhub.auth.resolve_hub_url is importable",
+        "Environment variable AF_HUB_URL is set for the env-var test case"
+      ],
+      "input": {
+        "config_url": "",
+        "env_var": "AF_HUB_URL",
+        "hub_url_flag": "https://flag.example.com"
+      },
+      "expected": "Returns 'https://flag.example.com' when hub_url_flag is provided; returns env var value when flag is None and env var is set; returns config_url when flag and env var are absent and config_url is non-empty; returns None when all are absent",
+      "assertion_pseudocode": "assert resolve_hub_url(hub_url_flag='https://flag.example.com') == 'https://flag.example.com'; with patch.dict(os.environ, {'AF_HUB_URL': 'https://env.example.com'}): assert resolve_hub_url() == 'https://env.example.com'; with patch.dict(os.environ, {}, clear=True): assert resolve_hub_url(config_url='https://config.example.com') == 'https://config.example.com'; assert resolve_hub_url() is None"
+    },
+    {
+      "id": "TS-01-48",
+      "requirement_id": "01-REQ-7.3",
+      "kind": "unit",
+      "description": "resolve_hub_url never reads any config file directly; it only evaluates the pre-resolved config_url string parameter.",
+      "preconditions": [
+        "afhub.auth.resolve_hub_url is importable"
+      ],
+      "input": {},
+      "expected": "resolve_hub_url has no file I/O side effects; calling it with no arguments and no env var set returns None without any file access",
+      "assertion_pseudocode": "import builtins; original_open = builtins.open; builtins.open = MagicMock(side_effect=AssertionError('file I/O should not occur')); try: result = resolve_hub_url(); assert result is None; finally: builtins.open = original_open; MagicMock.assert_not_called()"
+    },
+    {
+      "id": "TS-01-49",
+      "requirement_id": "01-REQ-8.1",
+      "kind": "unit",
+      "description": "poll_rebuild polls get_rebuild until status is a terminal value and returns the terminal RebuildJob.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "client.get_rebuild is an AsyncMock returning non-terminal then terminal RebuildJob"
+      ],
+      "input": {
+        "interval": 5.0,
+        "rebuild_id": "job-1",
+        "slug": "ws1",
+        "timeout": 600.0
+      },
+      "expected": "Returns the terminal RebuildJob with status='completed'; asyncio.sleep was called with 5.0 between polls",
+      "assertion_pseudocode": "non_terminal = RebuildJob(id='job-1', status='running', created_at='2026-01-01T00:00:00Z'); terminal = RebuildJob(id='job-1', status='completed', created_at='2026-01-01T00:00:00Z'); client.get_rebuild = AsyncMock(side_effect=[non_terminal, terminal]); with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep: result = await poll_rebuild(client, 'ws1', 'job-1', timeout=600.0, interval=5.0); assert result.status == 'completed'; mock_sleep.assert_called_with(5.0)"
+    },
+    {
+      "id": "TS-01-50",
+      "requirement_id": "01-REQ-8.2",
+      "kind": "unit",
+      "description": "poll_clone_ready polls get_workspace until clone_status is 'ready' and returns the Workspace.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "client.get_workspace is an AsyncMock returning pending then ready Workspace"
+      ],
+      "input": {
+        "interval": 5.0,
+        "slug": "ws1",
+        "timeout": 300.0
+      },
+      "expected": "Returns the Workspace instance with clone_status='ready'; asyncio.sleep was called with 5.0 between polls",
+      "assertion_pseudocode": "pending_ws = Workspace(slug='ws1', git_url='https://git.example.com/repo.git', workspace_mode='carry', status='active', clone_status='pending', sync_status='ok'); ready_ws = Workspace(slug='ws1', git_url='https://git.example.com/repo.git', workspace_mode='carry', status='active', clone_status='ready', sync_status='ok'); client.get_workspace = AsyncMock(side_effect=[pending_ws, ready_ws]); with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep: result = await poll_clone_ready(client, 'ws1', timeout=300.0, interval=5.0); assert result.clone_status == 'ready'; mock_sleep.assert_called_with(5.0)"
+    },
+    {
+      "id": "TS-01-51",
+      "requirement_id": "01-REQ-8.3",
+      "kind": "unit",
+      "description": "poll_clone_ready raises HubError with status_code=0, error_type='clone_failed', and message from clone_error when clone_status is 'failed'.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "client.get_workspace returns a Workspace with clone_status='failed' and clone_error='disk full'"
+      ],
+      "input": {
+        "interval": 5.0,
+        "slug": "ws1",
+        "timeout": 300.0
+      },
+      "expected": "HubError is raised with status_code=0, error_type='clone_failed', message='disk full'",
+      "assertion_pseudocode": "failed_ws = Workspace(slug='ws1', git_url='https://git.example.com/repo.git', workspace_mode='carry', status='active', clone_status='failed', sync_status='ok', clone_error='disk full'); client.get_workspace = AsyncMock(return_value=failed_ws); with patch('asyncio.sleep', new_callable=AsyncMock): with pytest.raises(HubError) as exc_info: await poll_clone_ready(client, 'ws1'); assert exc_info.value.status_code == 0; assert exc_info.value.error_type == 'clone_failed'; assert exc_info.value.message == 'disk full'"
+    },
+    {
+      "id": "TS-01-52",
+      "requirement_id": "01-REQ-9.1",
+      "kind": "unit",
+      "description": "HubClient retries up to 3 times with exponential backoff when httpx raises ConnectTimeout, ReadTimeout, or ConnectError, then raises HubConnectionError.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "httpx.AsyncClient is mocked to always raise ConnectTimeout"
+      ],
+      "input": {
+        "retryable_exception": "httpx.ConnectTimeout"
+      },
+      "expected": "HubConnectionError is raised after exactly 4 total attempts (1 original + 3 retries); asyncio.sleep is called 3 times with backoff values 1.0, 2.0, 4.0",
+      "assertion_pseudocode": "client._http_client.get = AsyncMock(side_effect=httpx.ConnectTimeout('timeout')); with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep: with pytest.raises(HubConnectionError): await client.get_workspace('ws1'); assert client._http_client.get.call_count == 4; sleep_calls = [call.args[0] for call in mock_sleep.call_args_list]; assert sleep_calls == [1.0, 2.0, 4.0]"
+    },
+    {
+      "id": "TS-01-53",
+      "requirement_id": "01-REQ-9.2",
+      "kind": "unit",
+      "description": "HubClient does not retry on non-retryable httpx exceptions; the exception propagates immediately.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock raises httpx.TimeoutException (base class, not ConnectTimeout/ReadTimeout)"
+      ],
+      "input": {
+        "exception": "httpx.TimeoutException (base class)"
+      },
+      "expected": "The original httpx.TimeoutException propagates immediately; no retry sleep is called",
+      "assertion_pseudocode": "client._http_client.get = AsyncMock(side_effect=httpx.TimeoutException('base timeout')); with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep: with pytest.raises(httpx.TimeoutException): await client.get_workspace('ws1'); assert client._http_client.get.call_count == 1; mock_sleep.assert_not_called()"
+    },
+    {
+      "id": "TS-01-54",
+      "requirement_id": "01-REQ-10.1",
+      "kind": "unit",
+      "description": "Every HTTP request issued by HubClient contains /api/v1/ as the path prefix.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient that records all request URLs"
+      ],
+      "input": {
+        "endpoint_url": "https://hub.example.com"
+      },
+      "expected": "All captured request URLs contain '/api/v1/' in the path",
+      "assertion_pseudocode": "captured_urls = []; original_get = client._http_client.get; async def capture_get(url, **kwargs): captured_urls.append(url); return MagicMock(status_code=200, json=lambda: {...}); client._http_client.get = capture_get; await client.get_workspace('ws1'); assert all('/api/v1/' in url for url in captured_urls)"
+    },
+    {
+      "id": "TS-01-55",
+      "requirement_id": "01-REQ-10.2",
+      "kind": "unit",
+      "description": "afhub pyproject.toml declares correct runtime and dev dependencies with Python >=3.12.",
+      "preconditions": [
+        "packages/afhub/pyproject.toml exists"
+      ],
+      "input": {},
+      "expected": "pyproject.toml contains httpx>=0.27, pydantic>=2.0 as runtime deps; pytest and pytest-asyncio as dev deps; python_requires='>=3.12'",
+      "assertion_pseudocode": "import tomllib; with open('packages/afhub/pyproject.toml', 'rb') as f: config = tomllib.load(f); deps = config['project']['dependencies']; assert any('httpx>=0.27' in d for d in deps); assert any('pydantic>=2.0' in d for d in deps); assert config['project']['requires-python'] == '>=3.12'"
+    },
+    {
+      "id": "TS-01-56",
+      "requirement_id": "01-REQ-10.3",
+      "kind": "unit",
+      "description": "afhub package source files and test files exist at the specified paths.",
+      "preconditions": [
+        "packages/afhub/ directory exists"
+      ],
+      "input": {},
+      "expected": "All specified files exist: afhub/__init__.py, afhub/client.py, afhub/models.py, afhub/errors.py, afhub/auth.py, afhub/polling.py, afhub/_http.py, tests/test_client.py, tests/test_models.py, tests/test_errors.py, tests/test_auth.py, tests/test_polling.py",
+      "assertion_pseudocode": "import os; base = 'packages/afhub'; expected_files = ['afhub/__init__.py', 'afhub/client.py', 'afhub/models.py', 'afhub/errors.py', 'afhub/auth.py', 'afhub/polling.py', 'afhub/_http.py', 'tests/test_client.py', 'tests/test_models.py', 'tests/test_errors.py', 'tests/test_auth.py', 'tests/test_polling.py']; assert all(os.path.exists(os.path.join(base, f)) for f in expected_files)"
+    },
+    {
+      "id": "TS-01-57",
+      "requirement_id": "01-REQ-10.4",
+      "kind": "unit",
+      "description": "pytest with asyncio_mode=auto runs all async test functions without explicit decorators; unittest.mock is used for httpx mocking.",
+      "preconditions": [
+        "packages/afhub/pyproject.toml or pytest.ini configures asyncio_mode=auto",
+        "pytest and pytest-asyncio are installed"
+      ],
+      "input": {},
+      "expected": "pytest --asyncio-mode=auto collects and runs all async test functions successfully; no external mock library is imported in test files",
+      "assertion_pseudocode": "import tomllib; with open('packages/afhub/pyproject.toml', 'rb') as f: config = tomllib.load(f); ini_opts = config.get('tool', {}).get('pytest', {}).get('ini_options', {}); assert ini_opts.get('asyncio_mode') == 'auto'; import subprocess; result = subprocess.run(['pytest', 'packages/afhub/tests/', '--asyncio-mode=auto', '--collect-only'], capture_output=True); assert result.returncode == 0"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-01-P1",
+      "property_id": "01-PROP-1",
+      "validates": [],
+      "description": "For any HubClient instance with any PAT, every HTTP request carries an Authorization: Bearer <pat> header matching the PAT provided at construction time.",
+      "for_any_strategy": "Sample arbitrary non-empty PAT strings (e.g. random alphanumeric strings of length 8-64) and arbitrary endpoint URLs; for each combination, instantiate HubClient and call any method (get_workspace, list_patches, etc.) with a mocked httpx.AsyncClient that records request headers",
+      "invariant_check": "captured_headers = [call.kwargs.get('headers', {}) or client._http_client.headers for call in mock_http.call_args_list]; assert all('authorization' in h and h['authorization'] == f'Bearer {pat}' for h in captured_headers)"
+    },
+    {
+      "id": "TS-01-P2",
+      "property_id": "01-PROP-2",
+      "validates": [],
+      "description": "For any HubClient method call, the URL of every outgoing HTTP request contains /api/v1/ as the path prefix.",
+      "for_any_strategy": "Sample arbitrary workspace slugs (random URL-safe strings), patch IDs, rebuild IDs, and variable keys; call each HubClient method with a mocked httpx.AsyncClient that records all request URLs",
+      "invariant_check": "captured_urls = [call.args[0] for call in mock_http.call_args_list]; assert all('/api/v1/' in url for url in captured_urls)"
+    },
+    {
+      "id": "TS-01-P3",
+      "property_id": "01-PROP-3",
+      "validates": [],
+      "description": "For any Pydantic model in afhub.models and any dict containing arbitrary extra keys, constructing the model succeeds and extra keys are not present on the resulting instance.",
+      "for_any_strategy": "For each model class (Workspace, Patch, RebuildJob, PatchResult, SyncResult, RerereEntry, PatchStatusDashboard, PatchDetail, PatchSummary, RebuildPreview, RebuildPreviewPatchResult), generate valid required field values plus 1-10 random extra string keys with random string values",
+      "invariant_check": "instance = ModelClass(**valid_fields, **extra_fields); assert all(not hasattr(instance, k) for k in extra_fields.keys()); assert isinstance(instance, ModelClass)"
+    },
+    {
+      "id": "TS-01-P4",
+      "property_id": "01-PROP-4",
+      "validates": [],
+      "description": "For any HubClient request where ConnectTimeout, ReadTimeout, or ConnectError is raised on every attempt, the HTTP layer makes exactly 4 total attempts before raising HubConnectionError.",
+      "for_any_strategy": "For each of the three retryable exception types (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError), mock the httpx.AsyncClient method to always raise that exception; call any HubClient method; patch asyncio.sleep with AsyncMock",
+      "invariant_check": "with patch('asyncio.sleep', new_callable=AsyncMock): with pytest.raises(HubConnectionError): await client.get_workspace('ws1'); assert mock_http_method.call_count == 4"
+    },
+    {
+      "id": "TS-01-P5",
+      "property_id": "01-PROP-5",
+      "validates": [],
+      "description": "For any retry sequence, asyncio.sleep is never called with a value greater than 30.0 during retry backoff.",
+      "for_any_strategy": "Mock httpx.AsyncClient to always raise ConnectTimeout; patch asyncio.sleep with AsyncMock; call any HubClient method; collect all sleep call arguments",
+      "invariant_check": "sleep_values = [call.args[0] for call in mock_sleep.call_args_list]; assert all(v <= 30.0 for v in sleep_values); assert len(sleep_values) == 3"
+    },
+    {
+      "id": "TS-01-P6",
+      "property_id": "01-PROP-6",
+      "validates": [],
+      "description": "For any instance of any HubError subclass, isinstance(instance, HubError) is True.",
+      "for_any_strategy": "For each subclass in [HubAuthError, HubForbiddenError, HubNotFoundError, HubConflictError, HubConnectionError, HubModeError, HubNoActivePatchesError], instantiate with arbitrary status_code (0-599), message (random string), and error_type (random string)",
+      "invariant_check": "for cls in subclasses: instance = cls(status_code=random_code, message=random_msg, error_type=random_type); assert isinstance(instance, HubError); assert issubclass(cls, HubError)"
+    },
+    {
+      "id": "TS-01-P7",
+      "property_id": "01-PROP-7",
+      "validates": [],
+      "description": "For any combination of token_flag and AF_HUB_TOKEN environment variable values, resolve_hub_pat returns token_flag when it is not None, regardless of the AF_HUB_TOKEN value.",
+      "for_any_strategy": "Sample arbitrary non-None token_flag strings (random alphanumeric, length 1-64) and arbitrary AF_HUB_TOKEN env var values (random strings or absent); call resolve_hub_pat(token_flag=flag) in each combination",
+      "invariant_check": "with patch.dict(os.environ, {'AF_HUB_TOKEN': random_env_token}): result = resolve_hub_pat(token_flag=random_flag); assert result == random_flag"
+    },
+    {
+      "id": "TS-01-P8",
+      "property_id": "01-PROP-8",
+      "validates": [],
+      "description": "For any sequence of get_rebuild responses where the final response has a terminal status, poll_rebuild returns the terminal RebuildJob and does not issue any further get_rebuild calls after observing a terminal status.",
+      "for_any_strategy": "Generate sequences of 1-10 non-terminal RebuildJob responses followed by one terminal RebuildJob (status in {'completed', 'failed', 'dead_letter', 'cancelled'}); mock client.get_rebuild with these side effects; patch asyncio.sleep with AsyncMock",
+      "invariant_check": "result = await poll_rebuild(client, 'ws1', 'job-1', timeout=600.0, interval=5.0); assert result.status in {'completed', 'failed', 'dead_letter', 'cancelled'}; assert client.get_rebuild.call_count == len(sequence); assert result is terminal_job"
+    },
+    {
+      "id": "TS-01-P9",
+      "property_id": "01-PROP-9",
+      "validates": [],
+      "description": "For any invocation of set_variable, it issues at most two HTTP requests (PATCH then optionally POST) and never issues a GET /vars/:key request.",
+      "for_any_strategy": "Sample arbitrary slug, key, and value strings; mock httpx.AsyncClient to return HTTP 200 for PATCH (success path) or HTTP 404 for PATCH then HTTP 201 for POST (fallback path); record all HTTP method calls",
+      "invariant_check": "all_calls = mock_http.call_args_list; assert len(all_calls) <= 2; get_calls = [c for c in all_calls if 'GET' in str(c) or c == mock_http.get.call_args]; assert len(get_calls) == 0"
+    },
+    {
+      "id": "TS-01-P10",
+      "property_id": "01-PROP-10",
+      "validates": [],
+      "description": "For any invocation of remove_patch, forget_rerere, delete_variable, create_variable, update_variable, or create_secret, the method returns None and does not attempt to parse the response body.",
+      "for_any_strategy": "For each of the six void methods, mock httpx.AsyncClient to return the appropriate success status code (204 or 201) with a json() method that raises an exception if called; call each method with arbitrary slug, key, and value arguments",
+      "invariant_check": "result = await void_method(*args); assert result is None; mock_response.json.assert_not_called()"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-01-E1",
+      "requirement_id": "01-REQ-1.E1",
+      "kind": "unit",
+      "description": "get_workspace raises HubNotFoundError with parsed error envelope fields when the hub returns HTTP 404.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 404 with error envelope JSON"
+      ],
+      "input": {
+        "slug": "nonexistent-workspace"
+      },
+      "expected": "HubNotFoundError is raised with status_code=404, message from envelope, error_type from envelope",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=404, json=lambda: {'error': {'code': 404, 'message': 'workspace not found', 'error_type': 'not_found'}}); client._http_client.get = AsyncMock(return_value=mock_response); with pytest.raises(HubNotFoundError) as exc_info: await client.get_workspace('nonexistent-workspace'); assert exc_info.value.status_code == 404; assert exc_info.value.message == 'workspace not found'; assert exc_info.value.error_type == 'not_found'"
+    },
+    {
+      "id": "TS-01-E2",
+      "requirement_id": "01-REQ-1.E2",
+      "kind": "unit",
+      "description": "Any workspace operation raises HubAuthError with parsed error envelope fields when the hub returns HTTP 401.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 401 with error envelope JSON"
+      ],
+      "input": {
+        "slug": "ws1"
+      },
+      "expected": "HubAuthError is raised with status_code=401, message and error_type from the envelope",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=401, json=lambda: {'error': {'code': 401, 'message': 'invalid token', 'error_type': 'auth_error'}}); client._http_client.get = AsyncMock(return_value=mock_response); with pytest.raises(HubAuthError) as exc_info: await client.get_workspace('ws1'); assert exc_info.value.status_code == 401; assert exc_info.value.message == 'invalid token'"
+    },
+    {
+      "id": "TS-01-E3",
+      "requirement_id": "01-REQ-1.E3",
+      "kind": "unit",
+      "description": "HubClient raises HubConnectionError after all retries are exhausted on a workspace operation; the httpx.AsyncClient is not closed by the retry logic.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "httpx.AsyncClient.get always raises ConnectTimeout"
+      ],
+      "input": {
+        "slug": "ws1"
+      },
+      "expected": "HubConnectionError is raised; the underlying httpx.AsyncClient.aclose() is NOT called by the retry logic",
+      "assertion_pseudocode": "client._http_client.get = AsyncMock(side_effect=httpx.ConnectTimeout('timeout')); client._http_client.aclose = AsyncMock(); with patch('asyncio.sleep', new_callable=AsyncMock): with pytest.raises(HubConnectionError): await client.get_workspace('ws1'); client._http_client.aclose.assert_not_called()"
+    },
+    {
+      "id": "TS-01-E4",
+      "requirement_id": "01-REQ-1.E4",
+      "kind": "unit",
+      "description": "After aclose() is called, subsequent workspace method calls propagate the error from the closed httpx.AsyncClient without masking it.",
+      "preconditions": [
+        "HubClient is instantiated",
+        "aclose() has been called"
+      ],
+      "input": {},
+      "expected": "An exception from httpx indicating the client is closed is raised; it is not swallowed or replaced",
+      "assertion_pseudocode": "client = HubClient('https://hub.example.com', 'pat'); await client.aclose(); with pytest.raises(Exception) as exc_info: await client.get_workspace('ws1'); assert exc_info.value is not None"
+    },
+    {
+      "id": "TS-01-E5",
+      "requirement_id": "01-REQ-1.E5",
+      "kind": "unit",
+      "description": "When an exception is raised inside an 'async with HubClient(...)' block, aclose() is called exactly once before the exception propagates.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient whose aclose is an AsyncMock"
+      ],
+      "input": {},
+      "expected": "The original exception propagates to the caller; aclose() is called exactly once",
+      "assertion_pseudocode": "aclose_mock = AsyncMock(); with patch.object(HubClient, 'aclose', aclose_mock): with pytest.raises(ValueError): async with HubClient('https://hub.example.com', 'pat') as c: raise ValueError('test error'); aclose_mock.assert_called_once()"
+    },
+    {
+      "id": "TS-01-E6",
+      "requirement_id": "01-REQ-2.E1",
+      "kind": "unit",
+      "description": "remove_patch raises HubNotFoundError (not None) when the hub returns HTTP 404.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 404 with error envelope JSON"
+      ],
+      "input": {
+        "patch_id": "nonexistent-patch",
+        "slug": "ws1"
+      },
+      "expected": "HubNotFoundError is raised with status_code=404; None is not returned",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=404, json=lambda: {'error': {'code': 404, 'message': 'patch not found', 'error_type': 'not_found'}}); client._http_client.delete = AsyncMock(return_value=mock_response); with pytest.raises(HubNotFoundError) as exc_info: await client.remove_patch('ws1', 'nonexistent-patch'); assert exc_info.value.status_code == 404"
+    },
+    {
+      "id": "TS-01-E7",
+      "requirement_id": "01-REQ-2.E2",
+      "kind": "unit",
+      "description": "add_patch raises HubConflictError with error_type stored on the exception when the hub returns HTTP 409.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 409 with error envelope JSON"
+      ],
+      "input": {
+        "branch_name": "feat/existing",
+        "slug": "ws1"
+      },
+      "expected": "HubConflictError is raised with status_code=409 and .error_type set to the value from the envelope",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=409, json=lambda: {'error': {'code': 409, 'message': 'patch already exists', 'error_type': 'duplicate_patch'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubConflictError) as exc_info: await client.add_patch('ws1', 'feat/existing'); assert exc_info.value.status_code == 409; assert exc_info.value.error_type == 'duplicate_patch'"
+    },
+    {
+      "id": "TS-01-E8",
+      "requirement_id": "01-REQ-2.E3",
+      "kind": "unit",
+      "description": "add_patches_batch with an empty list sends POST with an empty JSON array body and returns an empty list[Patch] on HTTP 201.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 201 with an empty JSON array"
+      ],
+      "input": {
+        "patches": [],
+        "slug": "ws1"
+      },
+      "expected": "Returns an empty list; the POST body is an empty JSON array []",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=201, json=lambda: []); client._http_client.post = AsyncMock(return_value=mock_response); result = await client.add_patches_batch('ws1', []); assert result == []; sent_body = client._http_client.post.call_args.kwargs['json']; assert sent_body == []"
+    },
+    {
+      "id": "TS-01-E9",
+      "requirement_id": "01-REQ-2.E4",
+      "kind": "unit",
+      "description": "A patch operation raises HubModeError when the hub returns HTTP 400 with error_type 'workspace_mode_mismatch'.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 400 with error_type='workspace_mode_mismatch'"
+      ],
+      "input": {
+        "branch_name": "feat/x",
+        "slug": "ws1"
+      },
+      "expected": "HubModeError is raised with status_code=400 and error_type='workspace_mode_mismatch'",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=400, json=lambda: {'error': {'code': 400, 'message': 'mode mismatch', 'error_type': 'workspace_mode_mismatch'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubModeError) as exc_info: await client.add_patch('ws1', 'feat/x'); assert exc_info.value.status_code == 400; assert exc_info.value.error_type == 'workspace_mode_mismatch'"
+    },
+    {
+      "id": "TS-01-E10",
+      "requirement_id": "01-REQ-2.E5",
+      "kind": "unit",
+      "description": "A patch operation raises base HubError when the hub returns HTTP 400 with an unrecognized error_type.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 400 with an unrecognized error_type"
+      ],
+      "input": {
+        "branch_name": "feat/x",
+        "slug": "ws1"
+      },
+      "expected": "HubError (not a typed subclass) is raised with status_code=400 and error_type set to the unrecognized value",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=400, json=lambda: {'error': {'code': 400, 'message': 'bad request', 'error_type': 'totally_unknown'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubError) as exc_info: await client.add_patch('ws1', 'feat/x'); assert type(exc_info.value) is HubError; assert exc_info.value.error_type == 'totally_unknown'"
+    },
+    {
+      "id": "TS-01-E11",
+      "requirement_id": "01-REQ-3.E1",
+      "kind": "unit",
+      "description": "get_rebuild raises HubNotFoundError when the hub returns HTTP 404.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 404 with error envelope JSON"
+      ],
+      "input": {
+        "rebuild_id": "nonexistent-job",
+        "slug": "ws1"
+      },
+      "expected": "HubNotFoundError is raised with status_code=404",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=404, json=lambda: {'error': {'code': 404, 'message': 'rebuild not found', 'error_type': 'not_found'}}); client._http_client.get = AsyncMock(return_value=mock_response); with pytest.raises(HubNotFoundError) as exc_info: await client.get_rebuild('ws1', 'nonexistent-job'); assert exc_info.value.status_code == 404"
+    },
+    {
+      "id": "TS-01-E12",
+      "requirement_id": "01-REQ-3.E2",
+      "kind": "unit",
+      "description": "submit_rebuild raises HubNoActivePatchesError when the hub returns HTTP 400 with error_type 'no_active_patches'.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 400 with error_type='no_active_patches'"
+      ],
+      "input": {
+        "slug": "ws1"
+      },
+      "expected": "HubNoActivePatchesError is raised with status_code=400 and error_type='no_active_patches'",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=400, json=lambda: {'error': {'code': 400, 'message': 'no active patches', 'error_type': 'no_active_patches'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubNoActivePatchesError) as exc_info: await client.submit_rebuild('ws1'); assert exc_info.value.status_code == 400; assert exc_info.value.error_type == 'no_active_patches'"
+    },
+    {
+      "id": "TS-01-E13",
+      "requirement_id": "01-REQ-3.E3",
+      "kind": "unit",
+      "description": "requeue_rebuild raises HubConflictError with error_type stored on the exception when the hub returns HTTP 409.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 409 with error envelope JSON"
+      ],
+      "input": {
+        "rebuild_id": "job-1",
+        "slug": "ws1"
+      },
+      "expected": "HubConflictError is raised with status_code=409 and .error_type set",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=409, json=lambda: {'error': {'code': 409, 'message': 'conflict', 'error_type': 'rebuild_in_progress'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubConflictError) as exc_info: await client.requeue_rebuild('ws1', 'job-1'); assert exc_info.value.status_code == 409; assert exc_info.value.error_type == 'rebuild_in_progress'"
+    },
+    {
+      "id": "TS-01-E14",
+      "requirement_id": "01-REQ-3.E4",
+      "kind": "unit",
+      "description": "rollback_rebuild raises an exception (KeyError or HubError) when the response body is missing the 'previous_integration_head_sha' key; it does not return None silently.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 200 with a JSON body missing the expected key"
+      ],
+      "input": {
+        "rebuild_id": "job-1",
+        "slug": "ws1"
+      },
+      "expected": "An exception (KeyError or HubError) is raised indicating the missing field; None is not returned",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=200, json=lambda: {'some_other_key': 'value'}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises((KeyError, HubError)): await client.rollback_rebuild('ws1', 'job-1')"
+    },
+    {
+      "id": "TS-01-E15",
+      "requirement_id": "01-REQ-3.E5",
+      "kind": "unit",
+      "description": "submit_rebuild raises HubForbiddenError when the hub returns HTTP 403.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 403 with error envelope JSON"
+      ],
+      "input": {
+        "slug": "ws1"
+      },
+      "expected": "HubForbiddenError is raised with status_code=403",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=403, json=lambda: {'error': {'code': 403, 'message': 'forbidden', 'error_type': 'forbidden'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubForbiddenError) as exc_info: await client.submit_rebuild('ws1'); assert exc_info.value.status_code == 403"
+    },
+    {
+      "id": "TS-01-E16",
+      "requirement_id": "01-REQ-4.E1",
+      "kind": "unit",
+      "description": "forget_rerere raises HubNotFoundError when the hub returns HTTP 404.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 404 with error envelope JSON"
+      ],
+      "input": {
+        "pathspec": "nonexistent/file.py",
+        "slug": "ws1"
+      },
+      "expected": "HubNotFoundError is raised with status_code=404",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=404, json=lambda: {'error': {'code': 404, 'message': 'rerere entry not found', 'error_type': 'not_found'}}); client._http_client.delete = AsyncMock(return_value=mock_response); with pytest.raises(HubNotFoundError) as exc_info: await client.forget_rerere('ws1', 'nonexistent/file.py'); assert exc_info.value.status_code == 404"
+    },
+    {
+      "id": "TS-01-E17",
+      "requirement_id": "01-REQ-4.E2",
+      "kind": "unit",
+      "description": "set_variable raises HubNotFoundError from the fallback POST when both PATCH and POST return 404; it does not retry further.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "PATCH mock returns HTTP 404",
+        "POST mock returns HTTP 404"
+      ],
+      "input": {
+        "key": "KEY",
+        "slug": "ws1",
+        "value": "val"
+      },
+      "expected": "HubNotFoundError is raised with status_code=404 from the POST failure; no further requests are made",
+      "assertion_pseudocode": "not_found_response = MagicMock(status_code=404, json=lambda: {'error': {'code': 404, 'message': 'not found', 'error_type': 'not_found'}}); client._http_client.patch = AsyncMock(return_value=not_found_response); client._http_client.post = AsyncMock(return_value=not_found_response); with pytest.raises(HubNotFoundError) as exc_info: await client.set_variable('ws1', 'KEY', 'val'); assert exc_info.value.status_code == 404; assert client._http_client.patch.call_count == 1; assert client._http_client.post.call_count == 1"
+    },
+    {
+      "id": "TS-01-E18",
+      "requirement_id": "01-REQ-4.E3",
+      "kind": "unit",
+      "description": "create_secret raises HubAuthError when the hub returns HTTP 401.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 401 with error envelope JSON"
+      ],
+      "input": {
+        "key": "MY_SECRET",
+        "slug": "ws1",
+        "value": "s3cr3t"
+      },
+      "expected": "HubAuthError is raised with status_code=401",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=401, json=lambda: {'error': {'code': 401, 'message': 'unauthorized', 'error_type': 'auth_error'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubAuthError) as exc_info: await client.create_secret('ws1', 'MY_SECRET', 's3cr3t'); assert exc_info.value.status_code == 401"
+    },
+    {
+      "id": "TS-01-E19",
+      "requirement_id": "01-REQ-4.E4",
+      "kind": "unit",
+      "description": "create_variable raises HubConflictError with error_type stored on the exception when the hub returns HTTP 409.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 409 with error envelope JSON"
+      ],
+      "input": {
+        "key": "EXISTING_KEY",
+        "slug": "ws1",
+        "value": "val"
+      },
+      "expected": "HubConflictError is raised with status_code=409 and .error_type set",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=409, json=lambda: {'error': {'code': 409, 'message': 'variable already exists', 'error_type': 'duplicate_variable'}}); client._http_client.post = AsyncMock(return_value=mock_response); with pytest.raises(HubConflictError) as exc_info: await client.create_variable('ws1', 'EXISTING_KEY', 'val'); assert exc_info.value.status_code == 409; assert exc_info.value.error_type == 'duplicate_variable'"
+    },
+    {
+      "id": "TS-01-E20",
+      "requirement_id": "01-REQ-4.E5",
+      "kind": "unit",
+      "description": "set_variable surfaces HubConnectionError immediately without attempting the fallback POST when the PATCH request raises HubConnectionError after retries.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "PATCH mock raises HubConnectionError after retries"
+      ],
+      "input": {
+        "key": "KEY",
+        "slug": "ws1",
+        "value": "val"
+      },
+      "expected": "HubConnectionError is raised immediately; the fallback POST is never called",
+      "assertion_pseudocode": "client._http_client.patch = AsyncMock(side_effect=httpx.ConnectTimeout('timeout')); client._http_client.post = AsyncMock(); with patch('asyncio.sleep', new_callable=AsyncMock): with pytest.raises(HubConnectionError): await client.set_variable('ws1', 'KEY', 'val'); client._http_client.post.assert_not_called()"
+    },
+    {
+      "id": "TS-01-E21",
+      "requirement_id": "01-REQ-5.E1",
+      "kind": "unit",
+      "description": "Workspace model raises pydantic.ValidationError when a required field such as 'slug' is absent from the hub response.",
+      "preconditions": [
+        "afhub.models.Workspace is importable"
+      ],
+      "input": {
+        "clone_status": "ready",
+        "git_url": "https://git.example.com/repo.git",
+        "status": "active",
+        "sync_status": "ok",
+        "workspace_mode": "carry"
+      },
+      "expected": "pydantic.ValidationError is raised listing the missing 'slug' field",
+      "assertion_pseudocode": "from pydantic import ValidationError; with pytest.raises(ValidationError) as exc_info: Workspace(git_url='https://git.example.com/repo.git', workspace_mode='carry', status='active', clone_status='ready', sync_status='ok'); assert 'slug' in str(exc_info.value)"
+    },
+    {
+      "id": "TS-01-E22",
+      "requirement_id": "01-REQ-5.E2",
+      "kind": "unit",
+      "description": "All Pydantic models silently discard unknown fields due to extra='ignore' configuration.",
+      "preconditions": [
+        "afhub.models module is importable"
+      ],
+      "input": {
+        "extra_unknown_field": "unexpected_value"
+      },
+      "expected": "Model instance is created successfully; the unknown field is not present on the instance",
+      "assertion_pseudocode": "ws = Workspace(slug='ws1', git_url='https://git.example.com/repo.git', workspace_mode='carry', status='active', clone_status='ready', sync_status='ok', extra_unknown_field='unexpected'); assert not hasattr(ws, 'extra_unknown_field')"
+    },
+    {
+      "id": "TS-01-E23",
+      "requirement_id": "01-REQ-5.E3",
+      "kind": "unit",
+      "description": "PatchSummary model defaults total_rerere_resolutions to 0 when the field is absent from the hub response.",
+      "preconditions": [
+        "afhub.models.PatchSummary is importable"
+      ],
+      "input": {
+        "active": 2,
+        "conflict": 1,
+        "disabled": 0,
+        "merged_upstream": 0,
+        "total_patches": 3
+      },
+      "expected": "PatchSummary instance is created with total_rerere_resolutions == 0",
+      "assertion_pseudocode": "summary = PatchSummary(total_patches=3, active=2, merged_upstream=0, conflict=1, disabled=0); assert summary.total_rerere_resolutions == 0"
+    },
+    {
+      "id": "TS-01-E24",
+      "requirement_id": "01-REQ-5.E4",
+      "kind": "unit",
+      "description": "RebuildJob model raises pydantic.ValidationError when the 'id' field is provided as a non-string value.",
+      "preconditions": [
+        "afhub.models.RebuildJob is importable"
+      ],
+      "input": {
+        "created_at": "2026-01-01T00:00:00Z",
+        "id": 12345,
+        "status": "pending"
+      },
+      "expected": "pydantic.ValidationError is raised indicating the type mismatch for 'id'",
+      "assertion_pseudocode": "from pydantic import ValidationError; with pytest.raises(ValidationError) as exc_info: RebuildJob(id=12345, status='pending', created_at='2026-01-01T00:00:00Z'); assert 'id' in str(exc_info.value)"
+    },
+    {
+      "id": "TS-01-E25",
+      "requirement_id": "01-REQ-6.E1",
+      "kind": "unit",
+      "description": "HubClient raises HubError with the raw HTTP status code when the error response body is not valid JSON.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 500 with a non-JSON body"
+      ],
+      "input": {
+        "body": "Internal Server Error (plain text)",
+        "status_code": 500
+      },
+      "expected": "HubError is raised with status_code=500; no JSON parse exception propagates to the caller",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=500); mock_response.json = MagicMock(side_effect=ValueError('not valid JSON')); mock_response.text = 'Internal Server Error'; client._http_client.get = AsyncMock(return_value=mock_response); with pytest.raises(HubError) as exc_info: await client.get_workspace('ws1'); assert exc_info.value.status_code == 500; assert not isinstance(exc_info.value.__cause__, ValueError)"
+    },
+    {
+      "id": "TS-01-E26",
+      "requirement_id": "01-REQ-6.E2",
+      "kind": "unit",
+      "description": "HubClient raises HubError with the 5xx status code when the hub returns an unexpected 5xx response.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient",
+        "Mock returns HTTP 503 with error envelope JSON"
+      ],
+      "input": {
+        "status_code": 503
+      },
+      "expected": "HubError is raised with status_code=503 and a message from the parsed or raw response",
+      "assertion_pseudocode": "mock_response = MagicMock(status_code=503, json=lambda: {'error': {'code': 503, 'message': 'service unavailable', 'error_type': 'server_error'}}); client._http_client.get = AsyncMock(return_value=mock_response); with pytest.raises(HubError) as exc_info: await client.get_workspace('ws1'); assert exc_info.value.status_code == 503"
+    },
+    {
+      "id": "TS-01-E27",
+      "requirement_id": "01-REQ-6.E3",
+      "kind": "unit",
+      "description": "All HubError subclass instances are catchable as HubError via 'except HubError'.",
+      "preconditions": [
+        "afhub.errors module is importable"
+      ],
+      "input": {},
+      "expected": "isinstance(instance, HubError) is True for every subclass instance",
+      "assertion_pseudocode": "subclasses = [HubAuthError, HubForbiddenError, HubNotFoundError, HubConflictError, HubConnectionError, HubModeError, HubNoActivePatchesError]; for cls in subclasses: instance = cls(status_code=0, message='test', error_type='test'); assert isinstance(instance, HubError)"
+    },
+    {
+      "id": "TS-01-E28",
+      "requirement_id": "01-REQ-7.E1",
+      "kind": "unit",
+      "description": "resolve_hub_pat returns None when called with no arguments and AF_HUB_TOKEN is not set in the environment.",
+      "preconditions": [
+        "AF_HUB_TOKEN is not set in the environment"
+      ],
+      "input": {},
+      "expected": "Returns None",
+      "assertion_pseudocode": "with patch.dict(os.environ, {}, clear=True): result = resolve_hub_pat(); assert result is None"
+    },
+    {
+      "id": "TS-01-E29",
+      "requirement_id": "01-REQ-7.E2",
+      "kind": "unit",
+      "description": "resolve_hub_url returns None when called with no arguments, AF_HUB_URL is not set, and config_url is an empty string.",
+      "preconditions": [
+        "AF_HUB_URL is not set in the environment"
+      ],
+      "input": {},
+      "expected": "Returns None",
+      "assertion_pseudocode": "with patch.dict(os.environ, {}, clear=True): result = resolve_hub_url(); assert result is None"
+    },
+    {
+      "id": "TS-01-E30",
+      "requirement_id": "01-REQ-7.E3",
+      "kind": "unit",
+      "description": "resolve_hub_pat returns token_flag and ignores AF_HUB_TOKEN when both are set.",
+      "preconditions": [
+        "AF_HUB_TOKEN is set to 'env-token' in the environment"
+      ],
+      "input": {
+        "token_flag": "flag-token"
+      },
+      "expected": "Returns 'flag-token', not 'env-token'",
+      "assertion_pseudocode": "with patch.dict(os.environ, {'AF_HUB_TOKEN': 'env-token'}): result = resolve_hub_pat(token_flag='flag-token'); assert result == 'flag-token'"
+    },
+    {
+      "id": "TS-01-E31",
+      "requirement_id": "01-REQ-7.E4",
+      "kind": "unit",
+      "description": "resolve_hub_url returns config_url when hub_url_flag is None, AF_HUB_URL is not set, and config_url is a non-empty string.",
+      "preconditions": [
+        "AF_HUB_URL is not set in the environment"
+      ],
+      "input": {
+        "config_url": "https://config.example.com",
+        "hub_url_flag": null
+      },
+      "expected": "Returns 'https://config.example.com'",
+      "assertion_pseudocode": "with patch.dict(os.environ, {}, clear=True): result = resolve_hub_url(config_url='https://config.example.com'); assert result == 'https://config.example.com'"
+    },
+    {
+      "id": "TS-01-E32",
+      "requirement_id": "01-REQ-7.E5",
+      "kind": "unit",
+      "description": "resolve_hub_url returns the AF_HUB_URL environment variable value and ignores config_url when both are set.",
+      "preconditions": [
+        "AF_HUB_URL is set to 'https://env.example.com' in the environment"
+      ],
+      "input": {
+        "config_url": "https://config.example.com",
+        "hub_url_flag": null
+      },
+      "expected": "Returns 'https://env.example.com', not 'https://config.example.com'",
+      "assertion_pseudocode": "with patch.dict(os.environ, {'AF_HUB_URL': 'https://env.example.com'}): result = resolve_hub_url(config_url='https://config.example.com'); assert result == 'https://env.example.com'"
+    },
+    {
+      "id": "TS-01-E33",
+      "requirement_id": "01-REQ-8.E1",
+      "kind": "unit",
+      "description": "poll_rebuild raises TimeoutError when timeout seconds elapse before the RebuildJob reaches a terminal status.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "client.get_rebuild always returns a non-terminal RebuildJob",
+        "timeout is set to a small value (e.g. 0.001)"
+      ],
+      "input": {
+        "interval": 5.0,
+        "rebuild_id": "job-1",
+        "slug": "ws1",
+        "timeout": 0.001
+      },
+      "expected": "TimeoutError is raised",
+      "assertion_pseudocode": "non_terminal = RebuildJob(id='job-1', status='running', created_at='2026-01-01T00:00:00Z'); client.get_rebuild = AsyncMock(return_value=non_terminal); with patch('asyncio.sleep', new_callable=AsyncMock): with patch('time.monotonic', side_effect=[0.0, 1.0]): with pytest.raises(TimeoutError): await poll_rebuild(client, 'ws1', 'job-1', timeout=0.001, interval=5.0)"
+    },
+    {
+      "id": "TS-01-E34",
+      "requirement_id": "01-REQ-8.E2",
+      "kind": "unit",
+      "description": "poll_clone_ready raises TimeoutError when timeout seconds elapse before clone_status reaches 'ready' or 'failed'.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "client.get_workspace always returns a Workspace with clone_status='pending'",
+        "timeout is set to a small value"
+      ],
+      "input": {
+        "interval": 5.0,
+        "slug": "ws1",
+        "timeout": 0.001
+      },
+      "expected": "TimeoutError is raised",
+      "assertion_pseudocode": "pending_ws = Workspace(slug='ws1', git_url='https://git.example.com/repo.git', workspace_mode='carry', status='active', clone_status='pending', sync_status='ok'); client.get_workspace = AsyncMock(return_value=pending_ws); with patch('asyncio.sleep', new_callable=AsyncMock): with patch('time.monotonic', side_effect=[0.0, 1.0]): with pytest.raises(TimeoutError): await poll_clone_ready(client, 'ws1', timeout=0.001, interval=5.0)"
+    },
+    {
+      "id": "TS-01-E35",
+      "requirement_id": "01-REQ-8.E3",
+      "kind": "unit",
+      "description": "poll_rebuild aborts immediately and surfaces HubConnectionError when get_rebuild raises HubConnectionError after HTTP-layer retries.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "client.get_rebuild raises HubConnectionError"
+      ],
+      "input": {
+        "rebuild_id": "job-1",
+        "slug": "ws1"
+      },
+      "expected": "HubConnectionError is raised immediately; no further get_rebuild calls are made after the error",
+      "assertion_pseudocode": "client.get_rebuild = AsyncMock(side_effect=HubConnectionError(status_code=0, message='connection failed', error_type='connection_error')); with patch('asyncio.sleep', new_callable=AsyncMock): with pytest.raises(HubConnectionError): await poll_rebuild(client, 'ws1', 'job-1'); assert client.get_rebuild.call_count == 1"
+    },
+    {
+      "id": "TS-01-E36",
+      "requirement_id": "01-REQ-8.E4",
+      "kind": "unit",
+      "description": "poll_clone_ready aborts immediately and surfaces HubConnectionError when get_workspace raises HubConnectionError after HTTP-layer retries.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "client.get_workspace raises HubConnectionError"
+      ],
+      "input": {
+        "slug": "ws1"
+      },
+      "expected": "HubConnectionError is raised immediately; no further get_workspace calls are made after the error",
+      "assertion_pseudocode": "client.get_workspace = AsyncMock(side_effect=HubConnectionError(status_code=0, message='connection failed', error_type='connection_error')); with patch('asyncio.sleep', new_callable=AsyncMock): with pytest.raises(HubConnectionError): await poll_clone_ready(client, 'ws1'); assert client.get_workspace.call_count == 1"
+    },
+    {
+      "id": "TS-01-E37",
+      "requirement_id": "01-REQ-8.E5",
+      "kind": "unit",
+      "description": "Tests for poll_rebuild and poll_clone_ready patch asyncio.sleep with AsyncMock so no real delays occur.",
+      "preconditions": [
+        "asyncio.sleep is patched with unittest.mock.AsyncMock in the test fixture"
+      ],
+      "input": {},
+      "expected": "Tests complete without real sleep delays; asyncio.sleep call count is verifiable via mock assertions",
+      "assertion_pseudocode": "with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep: terminal = RebuildJob(id='job-1', status='completed', created_at='2026-01-01T00:00:00Z'); client.get_rebuild = AsyncMock(side_effect=[RebuildJob(id='job-1', status='running', created_at='2026-01-01T00:00:00Z'), terminal]); await poll_rebuild(client, 'ws1', 'job-1', timeout=600.0, interval=5.0); assert mock_sleep.call_count >= 1; assert mock_sleep.call_args_list[0].args[0] == 5.0"
+    },
+    {
+      "id": "TS-01-E38",
+      "requirement_id": "01-REQ-8.E6",
+      "kind": "unit",
+      "description": "poll_rebuild raises TimeoutError immediately after the first non-terminal poll when timeout is set to 0.0.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "client.get_rebuild returns a non-terminal RebuildJob"
+      ],
+      "input": {
+        "interval": 5.0,
+        "rebuild_id": "job-1",
+        "slug": "ws1",
+        "timeout": 0.0
+      },
+      "expected": "TimeoutError is raised after the first non-terminal poll; no more than one get_rebuild call is made",
+      "assertion_pseudocode": "non_terminal = RebuildJob(id='job-1', status='running', created_at='2026-01-01T00:00:00Z'); client.get_rebuild = AsyncMock(return_value=non_terminal); with patch('asyncio.sleep', new_callable=AsyncMock): with pytest.raises(TimeoutError): await poll_rebuild(client, 'ws1', 'job-1', timeout=0.0, interval=5.0)"
+    },
+    {
+      "id": "TS-01-E39",
+      "requirement_id": "01-REQ-9.E1",
+      "kind": "unit",
+      "description": "HubClient raises HubConnectionError after exactly 3 retry attempts (4 total) when all attempts raise ConnectTimeout.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "httpx.AsyncClient.get always raises ConnectTimeout"
+      ],
+      "input": {},
+      "expected": "HubConnectionError is raised; the underlying HTTP method was called exactly 4 times",
+      "assertion_pseudocode": "client._http_client.get = AsyncMock(side_effect=httpx.ConnectTimeout('timeout')); with patch('asyncio.sleep', new_callable=AsyncMock): with pytest.raises(HubConnectionError): await client.get_workspace('ws1'); assert client._http_client.get.call_count == 4"
+    },
+    {
+      "id": "TS-01-E40",
+      "requirement_id": "01-REQ-9.E2",
+      "kind": "unit",
+      "description": "HubClient returns the successful response without raising any exception when ConnectTimeout occurs on the first attempt but the second attempt succeeds.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "httpx.AsyncClient.get raises ConnectTimeout on first call, returns HTTP 200 on second call"
+      ],
+      "input": {
+        "slug": "ws1"
+      },
+      "expected": "Returns a Workspace instance; no exception is raised; get was called exactly twice",
+      "assertion_pseudocode": "success_response = MagicMock(status_code=200, json=lambda: {'slug': 'ws1', 'git_url': 'https://git.example.com/repo.git', 'workspace_mode': 'carry', 'status': 'active', 'clone_status': 'ready', 'sync_status': 'ok'}); client._http_client.get = AsyncMock(side_effect=[httpx.ConnectTimeout('timeout'), success_response]); with patch('asyncio.sleep', new_callable=AsyncMock): result = await client.get_workspace('ws1'); assert isinstance(result, Workspace); assert client._http_client.get.call_count == 2"
+    },
+    {
+      "id": "TS-01-E41",
+      "requirement_id": "01-REQ-9.E3",
+      "kind": "unit",
+      "description": "HubClient never calls asyncio.sleep with a value greater than 30.0 during retry backoff regardless of attempt number.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "httpx.AsyncClient.get always raises ConnectTimeout"
+      ],
+      "input": {},
+      "expected": "All asyncio.sleep calls have argument <= 30.0",
+      "assertion_pseudocode": "client._http_client.get = AsyncMock(side_effect=httpx.ConnectTimeout('timeout')); with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep: with pytest.raises(HubConnectionError): await client.get_workspace('ws1'); sleep_values = [call.args[0] for call in mock_sleep.call_args_list]; assert all(v <= 30.0 for v in sleep_values)"
+    },
+    {
+      "id": "TS-01-E42",
+      "requirement_id": "01-REQ-9.E4",
+      "kind": "unit",
+      "description": "HubClient propagates a base httpx.TimeoutException immediately without retrying when it is not one of the specific retryable subclasses.",
+      "preconditions": [
+        "asyncio.sleep is patched with AsyncMock",
+        "httpx.AsyncClient.get raises httpx.TimeoutException (base class)"
+      ],
+      "input": {},
+      "expected": "httpx.TimeoutException propagates immediately; asyncio.sleep is never called; get is called exactly once",
+      "assertion_pseudocode": "client._http_client.get = AsyncMock(side_effect=httpx.TimeoutException('base timeout')); with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep: with pytest.raises(httpx.TimeoutException): await client.get_workspace('ws1'); assert client._http_client.get.call_count == 1; mock_sleep.assert_not_called()"
+    },
+    {
+      "id": "TS-01-E43",
+      "requirement_id": "01-REQ-10.E1",
+      "kind": "unit",
+      "description": "HubClient never includes version negotiation logic or issues version detection requests at runtime.",
+      "preconditions": [
+        "HubClient is instantiated with a mocked httpx.AsyncClient"
+      ],
+      "input": {},
+      "expected": "No requests to version negotiation endpoints are made during HubClient instantiation or any method call",
+      "assertion_pseudocode": "all_requests = []; client._http_client.get = AsyncMock(side_effect=lambda url, **kw: all_requests.append(url) or MagicMock(status_code=200, json=lambda: {...})); client2 = HubClient('https://hub.example.com', 'pat'); assert not any('version' in url or 'negotiate' in url for url in all_requests)"
+    },
+    {
+      "id": "TS-01-E44",
+      "requirement_id": "01-REQ-10.E2",
+      "kind": "unit",
+      "description": "New fields in hub responses do not cause validation errors due to extra='ignore' on all Pydantic models.",
+      "preconditions": [
+        "afhub.models module is importable"
+      ],
+      "input": {
+        "new_hub_field": "future_value"
+      },
+      "expected": "Model instance is created successfully with no ValidationError; the new field is not present on the instance",
+      "assertion_pseudocode": "job = RebuildJob(id='job-1', status='pending', created_at='2026-01-01T00:00:00Z', new_hub_field='future_value'); assert not hasattr(job, 'new_hub_field'); assert job.id == 'job-1'"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-01-SMOKE-1",
+      "execution_path_id": "01-PATH-1",
+      "description": "End-to-end smoke test: instantiate HubClient, submit a rebuild, and poll until the job reaches 'completed' status using mocked httpx responses.",
+      "trigger": "Instantiate HubClient with a mocked httpx.AsyncClient; call submit_rebuild then poll_rebuild with mocked get_rebuild responses",
+      "real_components": [
+        "HubClient",
+        "poll_rebuild",
+        "afhub.models.RebuildJob",
+        "afhub._http retry logic"
+      ],
+      "mockable": [
+        "httpx.AsyncClient (network I/O)",
+        "asyncio.sleep"
+      ],
+      "expected_effects": [
+        "submit_rebuild returns a RebuildJob with status='pending' from the HTTP 202 response",
+        "poll_rebuild calls get_rebuild twice: first returning status='running', then status='completed'",
+        "asyncio.sleep is called once with interval=5.0 between polls",
+        "poll_rebuild returns the terminal RebuildJob with status='completed'",
+        "No real network requests are made"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-2",
+      "execution_path_id": "01-PATH-2",
+      "description": "End-to-end smoke test: resolve auth from environment and config, instantiate HubClient, and create a workspace variable using mocked httpx responses.",
+      "trigger": "Set AF_HUB_TOKEN in environment; call resolve_hub_pat; call resolve_hub_url with config_url; instantiate HubClient; call create_variable with mocked HTTP 201 response",
+      "real_components": [
+        "resolve_hub_pat",
+        "resolve_hub_url",
+        "HubClient",
+        "afhub.auth"
+      ],
+      "mockable": [
+        "httpx.AsyncClient (network I/O)",
+        "os.environ (patched with test values)"
+      ],
+      "expected_effects": [
+        "resolve_hub_pat returns the AF_HUB_TOKEN value from the environment",
+        "resolve_hub_url returns config_url='https://hub.example.com' when AF_HUB_URL is not set",
+        "HubClient is instantiated with the resolved URL and PAT",
+        "create_variable sends POST /api/v1/workspaces/:slug/vars with key and value in the body",
+        "create_variable returns None on HTTP 201"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-3",
+      "execution_path_id": "01-PATH-3",
+      "description": "End-to-end smoke test: a transient ConnectTimeout on the first attempt is retried successfully and the Workspace is returned.",
+      "trigger": "Call get_workspace on a HubClient whose mocked httpx.AsyncClient raises ConnectTimeout on the first call and returns HTTP 200 on the second call; patch asyncio.sleep with AsyncMock",
+      "real_components": [
+        "HubClient",
+        "afhub._http retry logic",
+        "afhub.models.Workspace"
+      ],
+      "mockable": [
+        "httpx.AsyncClient (network I/O)",
+        "asyncio.sleep"
+      ],
+      "expected_effects": [
+        "httpx.AsyncClient.get is called exactly twice",
+        "asyncio.sleep is called once with value 1.0 (first backoff interval)",
+        "get_workspace returns a Workspace instance parsed from the successful HTTP 200 response",
+        "No HubConnectionError is raised"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-4",
+      "execution_path_id": "01-PATH-4",
+      "description": "End-to-end smoke test: set_variable PATCH returns 404 and the fallback POST succeeds, returning None.",
+      "trigger": "Call set_variable on a HubClient whose mocked httpx.AsyncClient returns HTTP 404 for PATCH and HTTP 201 for POST",
+      "real_components": [
+        "HubClient",
+        "afhub.client.set_variable"
+      ],
+      "mockable": [
+        "httpx.AsyncClient (network I/O)"
+      ],
+      "expected_effects": [
+        "PATCH /api/v1/workspaces/:slug/vars/NEW_KEY is called first and receives HTTP 404",
+        "HubNotFoundError is caught internally",
+        "POST /api/v1/workspaces/:slug/vars is called as fallback with key and value in the body",
+        "set_variable returns None",
+        "No GET request is issued"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-5",
+      "execution_path_id": "01-PATH-5",
+      "description": "End-to-end smoke test: poll_clone_ready observes clone_status='failed' and raises HubError with error_type='clone_failed'.",
+      "trigger": "Call poll_clone_ready on a HubClient whose mocked get_workspace returns clone_status='pending' then clone_status='failed' with clone_error='disk full'; patch asyncio.sleep with AsyncMock",
+      "real_components": [
+        "poll_clone_ready",
+        "HubClient",
+        "afhub.models.Workspace",
+        "afhub.errors.HubError"
+      ],
+      "mockable": [
+        "httpx.AsyncClient (network I/O)",
+        "asyncio.sleep"
+      ],
+      "expected_effects": [
+        "get_workspace is called twice: first returning clone_status='pending', then clone_status='failed'",
+        "asyncio.sleep is called once with interval=5.0 between polls",
+        "HubError is raised with status_code=0, error_type='clone_failed', message='disk full'",
+        "No TimeoutError is raised"
+      ]
+    },
+    {
+      "id": "TS-01-SMOKE-6",
+      "execution_path_id": "01-PATH-6",
+      "description": "End-to-end smoke test: add_patch sends a single-object body and add_patches_batch sends a JSON array body to the same endpoint, returning distinct response types.",
+      "trigger": "Call add_patch then add_patches_batch on the same HubClient with mocked httpx.AsyncClient returning HTTP 201 for both",
+      "real_components": [
+        "HubClient",
+        "afhub.client.add_patch",
+        "afhub.client.add_patches_batch",
+        "afhub.models.Patch"
+      ],
+      "mockable": [
+        "httpx.AsyncClient (network I/O)"
+      ],
+      "expected_effects": [
+        "add_patch sends POST /api/v1/workspaces/:slug/patches with a single JSON object body (dict)",
+        "add_patch returns a single Patch instance",
+        "add_patches_batch sends POST /api/v1/workspaces/:slug/patches with a JSON array body (list)",
+        "add_patches_batch returns a list of Patch instances",
+        "Both requests target the same URL path but with different body shapes"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

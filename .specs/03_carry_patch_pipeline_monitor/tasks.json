@@ -1,0 +1,1083 @@
+{
+  "$schema": null,
+  "spec_id": "03",
+  "spec_name": "carry_patch_pipeline_monitor",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "pytest packages/agentfox/tests/test_carry_patch_monitor.py packages/agentfox/tests/test_carry_patch_registration.py packages/agentfox/tests/test_carry_patch_stream.py packages/agentfox/tests/test_carry_patch_profile.py -q",
+    "all_tests": "pytest packages/agentfox/tests/ packages/afaudit/tests/ -q",
+    "linter": "ruff check packages/agentfox/agentfox/ packages/afaudit/afaudit/"
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "01",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "HubClient, poll_rebuild, model types, error types",
+      "sentinel": false
+    },
+    {
+      "depends_on_spec": "02",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "CarryPatchConfig fields, HubClient instance passed from app.py",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write tests: fix pipeline patch registration and CarryPatchMonitor class",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write tests for fix pipeline push and add_patch registration",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_registration.py`, write tests for the carry-patch integration phase of the fix pipeline.",
+            "Test that `push_to_remote()` is called before `hub_client.add_patch()` when `config.carry_patch.enabled=True` and a `HubClient` is provided.",
+            "Test that `add_patch()` is called with correct args: `slug`, `branch_name`, `description=...`, `skip_branch_check=True`, `if_not_exists=True`.",
+            "Assert that the local harvest/squash-merge path is NOT taken when carry-patch is enabled.",
+            "Use `unittest.mock.AsyncMock` for `hub_client` and `push_to_remote`."
+          ],
+          "test_spec_refs": [
+            "TS-03-1",
+            "TS-03-2"
+          ],
+          "requirement_refs": [
+            "03-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write tests for submit_rebuild and HubConflictError / HubNoActivePatchesError handling",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_registration.py`, add tests for `hub_client.submit_rebuild()` call after `add_patch()`.",
+            "Test the `HubConflictError` branch: when `submit_rebuild` raises `HubConflictError`, assert `list_rebuilds()` is called and the returned job is polled.",
+            "Test the `HubNoActivePatchesError` branch: assert a warning is logged and rebuild polling is skipped.",
+            "Test that `poll_rebuild()` is called with correct `hub_client`, `slug`, `job.id`, `timeout`, and `interval` arguments.",
+            "Mock `poll_rebuild` as an `AsyncMock` returning a completed `RebuildJob`."
+          ],
+          "test_spec_refs": [
+            "TS-03-3",
+            "TS-03-4"
+          ],
+          "requirement_refs": [
+            "03-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write tests for rebuild terminal status handling in fix pipeline",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_registration.py`, add tests for terminal rebuild status outcomes.",
+            "Test `completed` status: assert normal issue closure logic is invoked.",
+            "Test `failed` and `dead_letter` statuses: assert error is logged and issue is marked for retry (same as failed local harvest).",
+            "Emit `CARRY_PATCH_REBUILD_COMPLETED` and `CARRY_PATCH_REBUILD_FAILED` audit events at the correct points.",
+            "Verify `emit_audit_event` is called with the correct `AuditEventType` constant."
+          ],
+          "test_spec_refs": [
+            "TS-03-5",
+            "TS-03-23"
+          ],
+          "requirement_refs": [
+            "03-REQ-1",
+            "03-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Write tests for CarryPatchMonitor constructor and MonitorCycleResult dataclass",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_monitor.py`, write tests for `CarryPatchMonitor.__init__()` accepting `hub_client`, `workspace_slug`, `config`, and `engine`.",
+            "Test that `MonitorCycleResult` is a dataclass with fields: `conflicts_detected`, `conflicts_resolved`, `conflicts_failed`, `patches_merged`, `rebuild_triggered`.",
+            "Assert field types and default values are correct (all ints default to 0, bool defaults to False).",
+            "Test that the monitor stores all constructor arguments as instance attributes."
+          ],
+          "test_spec_refs": [
+            "TS-03-6",
+            "TS-03-7",
+            "TS-03-8"
+          ],
+          "requirement_refs": [
+            "03-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.5",
+          "title": "Write tests for run_cycle dashboard fetch and merged_upstream logging",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_monitor.py`, write tests for `run_cycle()` step 1: fetching `PatchStatusDashboard` via `hub_client.get_patch_status(slug)`.",
+            "Test that hub errors during `get_patch_status()` are caught, logged, and an empty `MonitorCycleResult` is returned (fail-open).",
+            "Test step 2: patches with `merged_upstream` status are logged and `patches_merged` count is incremented in the result.",
+            "Mock `hub_client.get_patch_status` as `AsyncMock` returning a `PatchStatusDashboard` with mixed-status patches."
+          ],
+          "test_spec_refs": [
+            "TS-03-9",
+            "TS-03-10"
+          ],
+          "requirement_refs": [
+            "03-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.6",
+          "title": "Write tests for run_cycle auto_resolve=False and retry counter logic",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_monitor.py`, add tests for `auto_resolve=False`: assert conflict count is logged and `run_cycle()` returns without invoking the coder.",
+            "Test the per-patch retry counter: when a patch has been attempted `max_resolve_retries` times, assert it is skipped and a warning is logged.",
+            "Test that the retry counter is tracked per `(slug, patch_id)` in-memory and persists across multiple `run_cycle()` calls on the same monitor instance.",
+            "Assert `conflicts_detected` is still populated even when `auto_resolve=False`."
+          ],
+          "test_spec_refs": [
+            "TS-03-11",
+            "TS-03-12"
+          ],
+          "requirement_refs": [
+            "03-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test files in group 1 are syntactically valid Python and importable: `python -m py_compile packages/agentfox/tests/test_carry_patch_registration.py packages/agentfox/tests/test_carry_patch_monitor.py`",
+          "Tests are collected without errors: `pytest packages/agentfox/tests/test_carry_patch_registration.py packages/agentfox/tests/test_carry_patch_monitor.py --collect-only -q`",
+          "No linter warnings in test files: `ruff check packages/agentfox/tests/test_carry_patch_registration.py packages/agentfox/tests/test_carry_patch_monitor.py`",
+          "Requirements 03-REQ-1, 03-REQ-2, 03-REQ-3 test stubs are present and traceable"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests: monitor cycle resolution, context assembly, stream, profile, and audit events",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write tests for run_cycle conflict resolution happy path",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_monitor.py`, write tests for the full conflict resolution path in `run_cycle()`.",
+            "Test that `fetch_remote()` and `checkout_branch()` are called for each conflicting patch in position order.",
+            "Test that `engine._run_coder_session()` is called with `archetype='coder'`, `mode='carry-patch'`, and a context dict.",
+            "Test successful resolution: assert commit, `push_to_remote()`, `hub_client.submit_rebuild()`, and `poll_rebuild()` are called in sequence.",
+            "Assert `conflicts_resolved` is incremented and `rebuild_triggered=True` in the returned `MonitorCycleResult`."
+          ],
+          "test_spec_refs": [
+            "TS-03-13",
+            "TS-03-14"
+          ],
+          "requirement_refs": [
+            "03-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write tests for conflict resolution context assembly",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_monitor.py`, write tests verifying the context dict passed to `_run_coder_session()`.",
+            "Assert `patch_description` is sourced from `PatchDetail` (or `None` if absent).",
+            "Assert `conflict_files` matches `PatchDetail.conflict_files`.",
+            "Assert `upstream_context` is the output of a local `git diff` between integration branch and upstream HEAD.",
+            "Assert `rerere_resolutions` is the list of paths from `hub_client.list_rerere(slug)`.",
+            "Mock `list_rerere` as `AsyncMock` and verify it is called with the correct slug."
+          ],
+          "test_spec_refs": [
+            "TS-03-15",
+            "TS-03-16"
+          ],
+          "requirement_refs": [
+            "03-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write tests for failed resolution and audit event emission in monitor",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_monitor.py`, write tests for failed coder resolution.",
+            "Test that on failed resolution, the retry counter is incremented for the `(slug, patch_id)` pair.",
+            "Assert `CARRY_PATCH_CONFLICT_FAILED` audit event is emitted via `emit_audit_event()`.",
+            "Assert `conflicts_failed` is incremented in `MonitorCycleResult`.",
+            "Test that `CARRY_PATCH_CONFLICT_DETECTED` is emitted when a conflict patch is found.",
+            "Test that `CARRY_PATCH_CONFLICT_RESOLVED` is emitted on successful resolution."
+          ],
+          "test_spec_refs": [
+            "TS-03-13",
+            "TS-03-24"
+          ],
+          "requirement_refs": [
+            "03-REQ-3",
+            "03-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write tests for carry-patch stream registration and enablement",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_stream.py`, write tests for `build_streams()` in `agentfox/nightshift/streams.py`.",
+            "Test that a `CarryPatchStream` with `name='carry-patch'` is included when `config.carry_patch.enabled=True` and a `HubClient` is provided.",
+            "Test that `CarryPatchStream.check_interval` equals `config.carry_patch.check_interval`.",
+            "Test that no `CarryPatchStream` is added when `config.carry_patch.enabled=False`.",
+            "Test that no `CarryPatchStream` is added when `hub_client=None`."
+          ],
+          "test_spec_refs": [
+            "TS-03-19",
+            "TS-03-20"
+          ],
+          "requirement_refs": [
+            "03-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Write tests for daemon display names and engine method",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_stream.py`, add tests verifying `'carry-patch'` key exists in `_STREAM_DISPLAY_NAMES` and `_STREAM_ACTIVE_LABELS` dicts in `daemon.py`.",
+            "Assert both dicts map `'carry-patch'` to non-empty string values.",
+            "In `packages/agentfox/tests/test_carry_patch_stream.py`, add a test that `NightShiftEngine._run_carry_patch_monitor(slug)` calls `CarryPatchMonitor.run_cycle()` and returns its `MonitorCycleResult`.",
+            "Mock `CarryPatchMonitor.run_cycle` as `AsyncMock` and assert the return value is propagated."
+          ],
+          "test_spec_refs": [
+            "TS-03-21",
+            "TS-03-22"
+          ],
+          "requirement_refs": [
+            "03-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.6",
+          "title": "Write tests for archetype mode and profile template",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_profile.py`, write a test that the `coder` archetype in `archetypes.py` contains a `'carry-patch'` key mapping to a `ModeConfig`.",
+            "Assert `ModeConfig` fields: `model_tier='STANDARD'`, `max_turns=200`, `thinking_mode='adaptive'`, `effort='high'`.",
+            "Write a test that `agentfox/_templates/profiles/coder_carry-patch.md` exists and is non-empty.",
+            "Assert the profile file contains keywords: `patch intent`, `conflict`, `conventional commits`, `fix: resolve conflict`.",
+            "Reference `TS-03-17` and `TS-03-18`."
+          ],
+          "test_spec_refs": [
+            "TS-03-17",
+            "TS-03-18"
+          ],
+          "requirement_refs": [
+            "03-REQ-5",
+            "03-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All test files in group 2 are syntactically valid and collected: `pytest packages/agentfox/tests/test_carry_patch_monitor.py packages/agentfox/tests/test_carry_patch_stream.py packages/agentfox/tests/test_carry_patch_profile.py --collect-only -q`",
+          "No linter warnings: `ruff check packages/agentfox/tests/test_carry_patch_stream.py packages/agentfox/tests/test_carry_patch_profile.py`",
+          "Requirements 03-REQ-3 through 03-REQ-8 test stubs are present and traceable",
+          "All 24 TS-03-* test IDs are referenced across groups 1 and 2"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "standard",
+      "title": "Implement audit event types and fix pipeline patch registration",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Add carry-patch audit event type constants to AuditEventType",
+          "details": [
+            "In `packages/afaudit/afaudit/events.py`, add 8 new constants to `AuditEventType`:",
+            "`CARRY_PATCH_CONFLICT_DETECTED = 'carry_patch.conflict_detected'`",
+            "`CARRY_PATCH_CONFLICT_RESOLVED = 'carry_patch.conflict_resolved'`",
+            "`CARRY_PATCH_CONFLICT_FAILED = 'carry_patch.conflict_failed'`",
+            "`CARRY_PATCH_PATCH_REGISTERED = 'carry_patch.patch_registered'`",
+            "`CARRY_PATCH_REBUILD_REQUESTED = 'carry_patch.rebuild_requested'`",
+            "`CARRY_PATCH_REBUILD_COMPLETED = 'carry_patch.rebuild_completed'`",
+            "`CARRY_PATCH_REBUILD_FAILED = 'carry_patch.rebuild_failed'`",
+            "`CARRY_PATCH_MERGED_DETECTED = 'carry_patch.merged_detected'`"
+          ],
+          "test_spec_refs": [
+            "TS-03-23",
+            "TS-03-24"
+          ],
+          "requirement_refs": [
+            "03-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Implement fix pipeline push and add_patch registration in carry-patch mode",
+          "details": [
+            "In `agentfox/nightshift/fix_pipeline.py`, add a carry-patch integration branch guarded by `config.carry_patch.enabled and hub_client is not None`.",
+            "Call `push_to_remote(branch_name, remote=hub_git_remote)` to push the fix branch to the hub git server.",
+            "Call `await hub_client.add_patch(slug, branch_name, description=issue_description, skip_branch_check=True, if_not_exists=True)`.",
+            "Emit `AuditEventType.CARRY_PATCH_PATCH_REGISTERED` via `emit_audit_event()` after successful `add_patch()`.",
+            "Skip the existing local harvest/squash-merge code path when carry-patch is active."
+          ],
+          "test_spec_refs": [
+            "TS-03-1",
+            "TS-03-2"
+          ],
+          "requirement_refs": [
+            "03-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Implement submit_rebuild with HubConflictError and HubNoActivePatchesError handling",
+          "details": [
+            "After `add_patch()`, call `await hub_client.submit_rebuild(slug)` to get a `RebuildJob`.",
+            "On `HubConflictError`: call `await hub_client.list_rebuilds(slug)`, take the first active job, and use it for polling.",
+            "On `HubNoActivePatchesError`: log a warning and return without polling.",
+            "Emit `AuditEventType.CARRY_PATCH_REBUILD_REQUESTED` after a successful `submit_rebuild()` or after recovering from `HubConflictError`.",
+            "Call `await poll_rebuild(hub_client, slug, job.id, timeout=config.carry_patch.rebuild_timeout, interval=config.carry_patch.rebuild_poll_interval)`."
+          ],
+          "test_spec_refs": [
+            "TS-03-3",
+            "TS-03-4"
+          ],
+          "requirement_refs": [
+            "03-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Implement terminal rebuild status handling in fix pipeline",
+          "details": [
+            "After `poll_rebuild()` returns, inspect the `RebuildJob.status` field.",
+            "On `completed`: proceed with normal issue closure logic (same as successful local harvest).",
+            "On `failed` or `dead_letter`: log the error with job details and mark the issue for retry using the existing retry mechanism.",
+            "Emit `AuditEventType.CARRY_PATCH_REBUILD_COMPLETED` on `completed` status.",
+            "Emit `AuditEventType.CARRY_PATCH_REBUILD_FAILED` on `failed` or `dead_letter` status."
+          ],
+          "test_spec_refs": [
+            "TS-03-5",
+            "TS-03-23"
+          ],
+          "requirement_refs": [
+            "03-REQ-1",
+            "03-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "Spec tests for fix pipeline registration pass: `pytest packages/agentfox/tests/test_carry_patch_registration.py -q`",
+          "Audit event constants are importable: `python -c 'from afaudit.events import AuditEventType; assert hasattr(AuditEventType, \"CARRY_PATCH_CONFLICT_DETECTED\")'`",
+          "No linter warnings: `ruff check packages/afaudit/afaudit/events.py packages/agentfox/agentfox/nightshift/fix_pipeline.py`",
+          "Requirements 03-REQ-1.1 through 03-REQ-1.5 and 03-REQ-8.1 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "standard",
+      "title": "Implement CarryPatchMonitor class and MonitorCycleResult dataclass",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Create carry_patch_monitor.py with MonitorCycleResult dataclass",
+          "details": [
+            "Create `packages/agentfox/agentfox/nightshift/carry_patch_monitor.py`.",
+            "Define `MonitorCycleResult` as a `@dataclass` with fields: `conflicts_detected: int = 0`, `conflicts_resolved: int = 0`, `conflicts_failed: int = 0`, `patches_merged: int = 0`, `rebuild_triggered: bool = False`.",
+            "Import `HubClient` from `afhub`, `AgentFoxConfig` from `agentfox.core.config`, and `NightShiftEngine` from `agentfox.nightshift.engine`.",
+            "Add module-level logger: `logger = logging.getLogger(__name__)`."
+          ],
+          "test_spec_refs": [
+            "TS-03-6",
+            "TS-03-7",
+            "TS-03-8"
+          ],
+          "requirement_refs": [
+            "03-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Implement CarryPatchMonitor.__init__ and in-memory retry counter",
+          "details": [
+            "Define `CarryPatchMonitor.__init__(self, hub_client: HubClient, workspace_slug: str, config: AgentFoxConfig, engine: NightShiftEngine) -> None`.",
+            "Store all four arguments as instance attributes.",
+            "Initialize `self._retry_counts: dict[tuple[str, str], int] = {}` for per-`(slug, patch_id)` retry tracking.",
+            "Do not perform any I/O or async operations in `__init__`."
+          ],
+          "test_spec_refs": [
+            "TS-03-6",
+            "TS-03-7"
+          ],
+          "requirement_refs": [
+            "03-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Implement run_cycle dashboard fetch and merged_upstream detection",
+          "details": [
+            "Implement `async def run_cycle(self) -> MonitorCycleResult`.",
+            "Step 1: call `await self.hub_client.get_patch_status(self.workspace_slug)`. On any exception, log the error and return `MonitorCycleResult()` (fail-open).",
+            "Step 2: iterate dashboard patches; for each with `status == 'merged_upstream'`, log an info message, emit `CARRY_PATCH_MERGED_DETECTED`, and increment `result.patches_merged`.",
+            "Step 3: if `self.config.carry_patch.auto_resolve is False`, log conflict count and return `result`."
+          ],
+          "test_spec_refs": [
+            "TS-03-9",
+            "TS-03-10",
+            "TS-03-11"
+          ],
+          "requirement_refs": [
+            "03-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.4",
+          "title": "Implement run_cycle conflict detection, retry guard, and branch checkout",
+          "details": [
+            "Step 4: iterate `PatchDetail` objects with `status == 'conflict'` in position order.",
+            "For each conflict patch, emit `CARRY_PATCH_CONFLICT_DETECTED` and increment `result.conflicts_detected`.",
+            "Check `self._retry_counts.get((self.workspace_slug, patch.id), 0) >= self.config.carry_patch.max_resolve_retries`; if so, log a warning and `continue`.",
+            "Call `await fetch_remote(patch.branch_name)` then `checkout_branch(patch.branch_name)` to prepare the local working tree.",
+            "Assemble the conflict resolution context dict (see REQ-4) and pass it to `engine._run_coder_session()`."
+          ],
+          "test_spec_refs": [
+            "TS-03-12",
+            "TS-03-13",
+            "TS-03-15",
+            "TS-03-16"
+          ],
+          "requirement_refs": [
+            "03-REQ-3",
+            "03-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.5",
+          "title": "Implement run_cycle resolution outcome handling and rebuild trigger",
+          "details": [
+            "On successful coder resolution: commit changes, call `push_to_remote(patch.branch_name)`, call `await hub_client.submit_rebuild(slug)`, poll via `poll_rebuild()`.",
+            "Set `result.rebuild_triggered = True` and increment `result.conflicts_resolved`.",
+            "Emit `CARRY_PATCH_CONFLICT_RESOLVED` and `CARRY_PATCH_REBUILD_REQUESTED` at the appropriate points.",
+            "On failed resolution: increment `self._retry_counts[(slug, patch.id)]`, increment `result.conflicts_failed`, emit `CARRY_PATCH_CONFLICT_FAILED`.",
+            "Return the fully populated `MonitorCycleResult` after processing all patches."
+          ],
+          "test_spec_refs": [
+            "TS-03-13",
+            "TS-03-14",
+            "TS-03-24"
+          ],
+          "requirement_refs": [
+            "03-REQ-3",
+            "03-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "Spec tests for monitor pass: `pytest packages/agentfox/tests/test_carry_patch_monitor.py -q`",
+          "Module is importable: `python -c 'from agentfox.nightshift.carry_patch_monitor import CarryPatchMonitor, MonitorCycleResult'`",
+          "No linter warnings: `ruff check packages/agentfox/agentfox/nightshift/carry_patch_monitor.py`",
+          "Requirements 03-REQ-2.1 through 03-REQ-4.2 acceptance criteria met",
+          "No `raise NotImplementedError` or bare `pass` stubs remain in carry_patch_monitor.py"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement conflict resolution context assembly",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Implement upstream_context git diff assembly",
+          "details": [
+            "In `carry_patch_monitor.py`, implement a helper `async def _get_upstream_context(self, patch: PatchDetail) -> str` that runs `git diff <integration_branch> <upstream_head>` using the existing `run_git()` helper.",
+            "The integration branch and upstream HEAD refs should be sourced from `config.carry_patch` or workspace metadata.",
+            "Return the diff output as a string; return empty string on error and log a warning.",
+            "This value is assigned to `upstream_context` in the context dict passed to `_run_coder_session()`."
+          ],
+          "test_spec_refs": [
+            "TS-03-15",
+            "TS-03-16"
+          ],
+          "requirement_refs": [
+            "03-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Implement rerere_resolutions assembly via hub_client.list_rerere",
+          "details": [
+            "In `carry_patch_monitor.py`, implement `async def _get_rerere_resolutions(self) -> list[str]` that calls `await self.hub_client.list_rerere(self.workspace_slug)`.",
+            "Return the list of file paths; return `[]` on error and log a warning.",
+            "Do NOT modify rerere state \u2014 this is read-only context gathering.",
+            "Assign the result to `rerere_resolutions` in the context dict."
+          ],
+          "test_spec_refs": [
+            "TS-03-15",
+            "TS-03-16"
+          ],
+          "requirement_refs": [
+            "03-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Assemble and validate full conflict resolution context dict",
+          "details": [
+            "In `run_cycle()`, for each conflict patch, build the context dict: `{'patch_description': patch.description or None, 'conflict_files': patch.conflict_files, 'upstream_context': await self._get_upstream_context(patch), 'rerere_resolutions': await self._get_rerere_resolutions()}`.",
+            "Pass the context dict as a keyword argument to `engine._run_coder_session(archetype='coder', mode='carry-patch', context=context_dict)`.",
+            "Ensure `patch_description` is `None` (not absent) when the field is missing from `PatchDetail`.",
+            "Log the assembled context keys (not values) at DEBUG level before invoking the coder."
+          ],
+          "test_spec_refs": [
+            "TS-03-15",
+            "TS-03-16"
+          ],
+          "requirement_refs": [
+            "03-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "Context assembly tests pass: `pytest packages/agentfox/tests/test_carry_patch_monitor.py -k 'context' -q`",
+          "No linter warnings in carry_patch_monitor.py: `ruff check packages/agentfox/agentfox/nightshift/carry_patch_monitor.py`",
+          "Requirements 03-REQ-4.1 and 03-REQ-4.2 acceptance criteria met",
+          "`list_rerere` is called with the correct slug and its result is passed as `rerere_resolutions` \u2014 verified by test assertions"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement carry-patch archetype mode and profile template",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Add carry-patch ModeConfig to coder archetype in archetypes.py",
+          "details": [
+            "In `packages/agentfox/agentfox/archetypes.py`, locate the `coder` archetype's mode registry dict.",
+            "Add entry: `'carry-patch': ModeConfig(model_tier='STANDARD', max_turns=200, thinking_mode='adaptive', effort='high')`.",
+            "Ensure the import of `ModeConfig` is present (it should already exist for other modes).",
+            "Do not modify any existing mode entries."
+          ],
+          "test_spec_refs": [
+            "TS-03-17"
+          ],
+          "requirement_refs": [
+            "03-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Create coder_carry-patch.md profile template",
+          "details": [
+            "Create `packages/agentfox/agentfox/_templates/profiles/coder_carry-patch.md`.",
+            "Include a section instructing the agent to preserve the patch's original intent (explain intent from the provided `patch_description`).",
+            "Include a section restricting changes to conflict files only \u2014 no unrelated refactoring.",
+            "Include commit message guidance: use conventional commits format `fix: resolve conflict in <file>` with a body explaining the resolution.",
+            "Include a section instructing the agent to run available tests to verify the resolution.",
+            "Reference `conflict_files`, `upstream_context`, and `rerere_resolutions` context variables in the template."
+          ],
+          "test_spec_refs": [
+            "TS-03-18"
+          ],
+          "requirement_refs": [
+            "03-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "Archetype and profile tests pass: `pytest packages/agentfox/tests/test_carry_patch_profile.py -q`",
+          "Profile file exists and is non-empty: `test -s packages/agentfox/agentfox/_templates/profiles/coder_carry-patch.md`",
+          "No linter warnings: `ruff check packages/agentfox/agentfox/archetypes.py`",
+          "Requirements 03-REQ-5.1 and 03-REQ-6.1 acceptance criteria met",
+          "ModeConfig fields match exactly: model_tier='STANDARD', max_turns=200, thinking_mode='adaptive', effort='high'"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement stream registration, daemon labels, and engine method",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Implement CarryPatchStream and register in build_streams()",
+          "details": [
+            "In `packages/agentfox/agentfox/nightshift/streams.py`, define or adapt `CarryPatchStream` to wrap `CarryPatchMonitor.run_cycle()`.",
+            "In `build_streams()`, add a conditional block: if `config.carry_patch.enabled and hub_client is not None`, instantiate `CarryPatchMonitor` and append a stream with `name='carry-patch'`, `check_interval=config.carry_patch.check_interval`, `enabled=True`.",
+            "Ensure `hub_client` is passed as a parameter to `build_streams()` (update the function signature if needed).",
+            "Import `CarryPatchMonitor` from `agentfox.nightshift.carry_patch_monitor`."
+          ],
+          "test_spec_refs": [
+            "TS-03-19",
+            "TS-03-20"
+          ],
+          "requirement_refs": [
+            "03-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Add carry-patch display name and active label to daemon.py",
+          "details": [
+            "In `packages/agentfox/agentfox/nightshift/daemon.py`, add `'carry-patch': 'Carry Patch Monitor'` to `_STREAM_DISPLAY_NAMES`.",
+            "Add `'carry-patch': 'Resolving conflicts'` (or equivalent active label) to `_STREAM_ACTIVE_LABELS`.",
+            "Ensure both dicts are updated consistently \u2014 no key present in one but absent from the other."
+          ],
+          "test_spec_refs": [
+            "TS-03-21"
+          ],
+          "requirement_refs": [
+            "03-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Add _run_carry_patch_monitor method to NightShiftEngine",
+          "details": [
+            "In `packages/agentfox/agentfox/nightshift/engine.py`, add `async def _run_carry_patch_monitor(self, slug: str) -> MonitorCycleResult`.",
+            "The method should instantiate or retrieve the `CarryPatchMonitor` for the given slug and call `await monitor.run_cycle()`.",
+            "Return the `MonitorCycleResult` directly to the caller.",
+            "Import `MonitorCycleResult` from `agentfox.nightshift.carry_patch_monitor`."
+          ],
+          "test_spec_refs": [
+            "TS-03-22"
+          ],
+          "requirement_refs": [
+            "03-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "Stream and daemon tests pass: `pytest packages/agentfox/tests/test_carry_patch_stream.py -q`",
+          "No linter warnings: `ruff check packages/agentfox/agentfox/nightshift/streams.py packages/agentfox/agentfox/nightshift/daemon.py packages/agentfox/agentfox/nightshift/engine.py`",
+          "Requirements 03-REQ-7.1 through 03-REQ-7.4 acceptance criteria met",
+          "`build_streams()` returns no `CarryPatchStream` when `hub_client=None` \u2014 verified by test assertion",
+          "No `raise NotImplementedError` or bare `pass` stubs in streams.py, daemon.py, or engine.py"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "checkpoint",
+      "title": "Integration checkpoint: all spec tests green",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Run full spec test suite and confirm all tests pass",
+          "details": [
+            "Execute the full spec test suite: `pytest packages/agentfox/tests/test_carry_patch_monitor.py packages/agentfox/tests/test_carry_patch_registration.py packages/agentfox/tests/test_carry_patch_stream.py packages/agentfox/tests/test_carry_patch_profile.py -v`.",
+            "All 24 TS-03-* test cases must pass with no skips or xfails.",
+            "Confirm no regressions in existing agentfox and afaudit test suites: `pytest packages/agentfox/tests/ packages/afaudit/tests/ -q`."
+          ],
+          "test_spec_refs": [
+            "TS-03-1",
+            "TS-03-2",
+            "TS-03-3",
+            "TS-03-4",
+            "TS-03-5",
+            "TS-03-6",
+            "TS-03-7",
+            "TS-03-8",
+            "TS-03-9",
+            "TS-03-10",
+            "TS-03-11",
+            "TS-03-12",
+            "TS-03-13",
+            "TS-03-14",
+            "TS-03-15"
+          ],
+          "requirement_refs": [
+            "03-REQ-1",
+            "03-REQ-2",
+            "03-REQ-3",
+            "03-REQ-4",
+            "03-REQ-5",
+            "03-REQ-6",
+            "03-REQ-7",
+            "03-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Run linter across all modified and created files",
+          "details": [
+            "Run `ruff check packages/agentfox/agentfox/nightshift/fix_pipeline.py packages/agentfox/agentfox/nightshift/carry_patch_monitor.py packages/agentfox/agentfox/nightshift/streams.py packages/agentfox/agentfox/nightshift/engine.py packages/agentfox/agentfox/nightshift/daemon.py packages/agentfox/agentfox/archetypes.py packages/afaudit/afaudit/events.py`.",
+            "Zero warnings or errors must be reported.",
+            "Fix any import ordering, unused import, or line-length issues before proceeding to wiring verification."
+          ],
+          "test_spec_refs": [
+            "TS-03-16",
+            "TS-03-17",
+            "TS-03-18",
+            "TS-03-19",
+            "TS-03-20",
+            "TS-03-21",
+            "TS-03-22",
+            "TS-03-23",
+            "TS-03-24"
+          ],
+          "requirement_refs": [
+            "03-REQ-1",
+            "03-REQ-2",
+            "03-REQ-3",
+            "03-REQ-4",
+            "03-REQ-5",
+            "03-REQ-6",
+            "03-REQ-7",
+            "03-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "All 24 TS-03-* tests pass: `pytest packages/agentfox/tests/test_carry_patch_monitor.py packages/agentfox/tests/test_carry_patch_registration.py packages/agentfox/tests/test_carry_patch_stream.py packages/agentfox/tests/test_carry_patch_profile.py -q`",
+          "Zero ruff warnings across all modified files",
+          "Existing test suites show no regressions: `pytest packages/agentfox/tests/ packages/afaudit/tests/ -q --tb=short`"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "wiring_verification",
+      "title": "Wiring verification: end-to-end integration and stub audit",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Trace execution path: fix pipeline carry-patch branch is reachable from production code",
+          "details": [
+            "Verify that `fix_pipeline.py`'s carry-patch integration branch is guarded by `config.carry_patch.enabled and hub_client is not None` and is reachable from the existing `FixPipeline` entry point.",
+            "Confirm `push_to_remote()` \u2192 `add_patch()` \u2192 `submit_rebuild()` \u2192 `poll_rebuild()` call chain is intact with no stubs.",
+            "Search for `raise NotImplementedError`, bare `pass`, or `return None` in non-trivial positions in `fix_pipeline.py`.",
+            "Confirm `emit_audit_event()` is called at each of the 4 carry-patch audit points in the fix pipeline."
+          ],
+          "test_spec_refs": [
+            "TS-03-1",
+            "TS-03-2",
+            "TS-03-3",
+            "TS-03-4",
+            "TS-03-5"
+          ],
+          "requirement_refs": [
+            "03-REQ-1",
+            "03-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Trace execution path: CarryPatchMonitor.run_cycle is called from CarryPatchStream",
+          "details": [
+            "Verify that `CarryPatchStream` in `streams.py` calls `CarryPatchMonitor.run_cycle()` on each tick.",
+            "Confirm `build_streams()` instantiates `CarryPatchMonitor` with `hub_client`, `workspace_slug`, `config`, and `engine` arguments.",
+            "Verify `NightShiftEngine._run_carry_patch_monitor()` delegates to `CarryPatchMonitor.run_cycle()` and returns its result.",
+            "Confirm `MonitorCycleResult` is propagated back to the caller \u2014 no silent discard."
+          ],
+          "test_spec_refs": [
+            "TS-03-19",
+            "TS-03-20",
+            "TS-03-21",
+            "TS-03-22"
+          ],
+          "requirement_refs": [
+            "03-REQ-2",
+            "03-REQ-3",
+            "03-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.3",
+          "title": "Verify carry-patch archetype mode and profile are wired into coder session invocation",
+          "details": [
+            "Confirm that `engine._run_coder_session(archetype='coder', mode='carry-patch', ...)` resolves to the `ModeConfig` added in `archetypes.py`.",
+            "Verify that `coder_carry-patch.md` is loaded by the profile template loader when `mode='carry-patch'` is requested.",
+            "Check that the profile file path follows the naming convention `coder_<mode>.md` used by other profiles.",
+            "Confirm no `raise NotImplementedError` or `pass` stubs exist in the archetype mode resolution path."
+          ],
+          "test_spec_refs": [
+            "TS-03-17",
+            "TS-03-18"
+          ],
+          "requirement_refs": [
+            "03-REQ-5",
+            "03-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.4",
+          "title": "Stub and dead-code audit across all new and modified files",
+          "details": [
+            "Search all new and modified Python files for stub markers: `raise NotImplementedError`, bare `pass` in non-abstract methods, `return None` in functions with non-Optional return types.",
+            "Run: `grep -rn 'raise NotImplementedError\\|# TODO\\|# FIXME' packages/agentfox/agentfox/nightshift/carry_patch_monitor.py packages/agentfox/agentfox/nightshift/streams.py packages/agentfox/agentfox/nightshift/engine.py packages/agentfox/agentfox/nightshift/daemon.py packages/agentfox/agentfox/archetypes.py packages/afaudit/afaudit/events.py`",
+            "Zero matches expected in production code paths.",
+            "Verify `_STREAM_DISPLAY_NAMES` and `_STREAM_ACTIVE_LABELS` both contain `'carry-patch'` key in `daemon.py`."
+          ],
+          "test_spec_refs": [
+            "TS-03-21",
+            "TS-03-23"
+          ],
+          "requirement_refs": [
+            "03-REQ-7",
+            "03-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.5",
+          "title": "Cross-spec entry point verification: HubClient and CarryPatchConfig are wired from upstream specs",
+          "details": [
+            "Verify that `HubClient` instance passed to `CarryPatchMonitor` and `build_streams()` originates from the `afhub` package (Spec 01) \u2014 not a local stub.",
+            "Verify that `config.carry_patch` is a `CarryPatchConfig` instance from Spec 02 with fields `enabled`, `auto_resolve`, `check_interval`, `max_resolve_retries` all accessible.",
+            "Confirm `poll_rebuild` is imported from `afhub` (Spec 01) and not re-implemented locally.",
+            "Confirm `HubConflictError` and `HubNoActivePatchesError` are imported from `afhub.exceptions` or equivalent Spec 01 module."
+          ],
+          "test_spec_refs": [
+            "TS-03-3",
+            "TS-03-4",
+            "TS-03-9",
+            "TS-03-SMOKE-1"
+          ],
+          "requirement_refs": [
+            "03-REQ-1",
+            "03-REQ-2",
+            "03-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "All spec tests pass end-to-end: `pytest packages/agentfox/tests/test_carry_patch_monitor.py packages/agentfox/tests/test_carry_patch_registration.py packages/agentfox/tests/test_carry_patch_stream.py packages/agentfox/tests/test_carry_patch_profile.py -v`",
+          "Zero stub markers found: `grep -rn 'raise NotImplementedError' packages/agentfox/agentfox/nightshift/carry_patch_monitor.py packages/agentfox/agentfox/nightshift/streams.py packages/agentfox/agentfox/nightshift/engine.py` returns no output",
+          "Full regression suite passes: `pytest packages/agentfox/tests/ packages/afaudit/tests/ -q --tb=short`",
+          "Zero ruff warnings across all files: `ruff check packages/agentfox/agentfox/ packages/afaudit/afaudit/`",
+          "Profile file exists and contains required keywords: `grep -l 'patch intent\\|conventional commits\\|fix: resolve conflict' packages/agentfox/agentfox/_templates/profiles/coder_carry-patch.md`",
+          "Both daemon dicts contain carry-patch key: `python -c 'from agentfox.nightshift.daemon import _STREAM_DISPLAY_NAMES, _STREAM_ACTIVE_LABELS; assert \"carry-patch\" in _STREAM_DISPLAY_NAMES and \"carry-patch\" in _STREAM_ACTIVE_LABELS'`",
+          "Smoke test TS-03-SMOKE-1 passes end-to-end carry-patch pipeline and monitor flow"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "03-REQ-1",
+      "test_spec_id": "TS-03-1",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-1",
+      "test_spec_id": "TS-03-2",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-1",
+      "test_spec_id": "TS-03-3",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-1",
+      "test_spec_id": "TS-03-4",
+      "task_id": "3.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-1",
+      "test_spec_id": "TS-03-5",
+      "task_id": "3.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-2",
+      "test_spec_id": "TS-03-6",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-2",
+      "test_spec_id": "TS-03-7",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-2",
+      "test_spec_id": "TS-03-8",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-3",
+      "test_spec_id": "TS-03-9",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-3",
+      "test_spec_id": "TS-03-10",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-3",
+      "test_spec_id": "TS-03-11",
+      "task_id": "4.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-3",
+      "test_spec_id": "TS-03-12",
+      "task_id": "4.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-3",
+      "test_spec_id": "TS-03-13",
+      "task_id": "4.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-3",
+      "test_spec_id": "TS-03-14",
+      "task_id": "4.5",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-4",
+      "test_spec_id": "TS-03-15",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-4",
+      "test_spec_id": "TS-03-16",
+      "task_id": "5.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-5",
+      "test_spec_id": "TS-03-17",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-6",
+      "test_spec_id": "TS-03-18",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-7",
+      "test_spec_id": "TS-03-19",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-7",
+      "test_spec_id": "TS-03-20",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-7",
+      "test_spec_id": "TS-03-21",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-7",
+      "test_spec_id": "TS-03-22",
+      "task_id": "7.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8",
+      "test_spec_id": "TS-03-23",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "03-REQ-8",
+      "test_spec_id": "TS-03-24",
+      "task_id": "4.5",
+      "test_path": null
+    }
+  ]
+}

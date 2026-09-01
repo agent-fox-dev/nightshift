@@ -1,0 +1,918 @@
+{
+  "$schema": null,
+  "spec_id": "03",
+  "spec_name": "carry_patch_pipeline_monitor",
+  "schema_version": 1,
+  "introduction": "This spec defines the carry-patch pipeline monitor for nightshift: it extends the fix pipeline to register completed fix branches as hub patches and trigger hub rebuilds, and introduces a `CarryPatchMonitor` work stream that polls for conflicting patches and resolves them using the coder archetype in carry-patch mode. Note: requirements referencing afhub and afaudit APIs are based on PRD assumptions and should be cross-checked against the installed library versions before implementation.",
+  "glossary": {
+    "AgentFoxConfig": "The top-level Pydantic configuration object for the agentfox application, containing `CarryPatchConfig` under `carry_patch`.",
+    "AuditEventType": "An enum or constants class in `afaudit/events.py` that enumerates all audit event type strings emitted by the system.",
+    "CarryPatchConfig": "A Pydantic config model (from Spec 02) nested under `AgentFoxConfig` that holds carry-patch settings such as `enabled`, `auto_resolve`, `check_interval`, and `max_resolve_retries`.",
+    "CarryPatchMonitor": "A nightshift work stream class that polls the hub for patches in conflict status and resolves them using the coder archetype.",
+    "CarryPatchStream": "A work stream wrapper around `CarryPatchMonitor.run_cycle()` registered in `build_streams()` when carry-patch is enabled.",
+    "HubClient": "The async HTTP client from the `afhub` package used to communicate with the af-hub carry-patch REST API.",
+    "HubConflictError": "An exception raised by `hub_client.submit_rebuild()` when a concurrent rebuild is already in progress.",
+    "HubNoActivePatchesError": "An exception raised by `hub_client.submit_rebuild()` when there are no active patches to rebuild.",
+    "ModeConfig": "A configuration dataclass in `agentfox/archetypes.py` that specifies model tier, max turns, thinking mode, and effort for an archetype mode.",
+    "MonitorCycleResult": "A dataclass returned by `CarryPatchMonitor.run_cycle()` summarising counts of conflicts detected, resolved, failed, patches merged, and whether a rebuild was triggered.",
+    "NightShiftEngine": "The core nightshift engine class defined in `agentfox/nightshift/engine.py` that orchestrates work streams and coder sessions.",
+    "PatchDetail": "A model within `PatchStatusDashboard` describing a single patch, including its status, branch name, conflict files, and description.",
+    "PatchStatusDashboard": "A model returned by `hub_client.get_patch_status(slug)` containing the list of `PatchDetail` objects for a workspace.",
+    "RebuildJob": "A model returned by `hub_client.submit_rebuild()` or `hub_client.list_rebuilds()` representing a queued or active hub rebuild.",
+    "_STREAM_ACTIVE_LABELS": "A dict in `agentfox/nightshift/daemon.py` mapping stream name strings to active-state label strings.",
+    "_STREAM_DISPLAY_NAMES": "A dict in `agentfox/nightshift/daemon.py` mapping stream name strings to human-readable display names.",
+    "_run_carry_patch_monitor": "A method on `NightShiftEngine` that delegates to `CarryPatchMonitor.run_cycle()` for a given workspace slug.",
+    "add_patch": "A method on `HubClient` that registers a branch as a patch on the hub for a given workspace slug.",
+    "auto_resolve": "A boolean field in `CarryPatchConfig` that controls whether the monitor automatically attempts to resolve detected conflicts.",
+    "build_streams": "A factory function in `agentfox/nightshift/streams.py` that constructs and returns the list of active work streams for the daemon.",
+    "carry-patch mode": "The `carry-patch` key within the `coder` archetype's mode registry, instructing the AI agent to preserve patch intent while adapting to upstream changes.",
+    "carry_patch": "A nightshift operating mode in which fix branches are pushed to the hub git server and registered as patches rather than being squash-merged locally.",
+    "check_interval": "A duration field in `CarryPatchConfig` specifying how frequently the `CarryPatchStream` polls the hub for patch status.",
+    "coder_carry-patch.md": "The profile template file at `agentfox/_templates/profiles/coder_carry-patch.md` that provides system-prompt instructions for the coder archetype in carry-patch mode.",
+    "conflict": "A patch status indicating the patch cannot be applied cleanly to the current upstream and requires resolution.",
+    "conflict_files": "A list of file paths in `PatchDetail` that are in conflict for a given patch.",
+    "dead_letter": "A terminal rebuild status indicating the rebuild was permanently failed and moved to a dead-letter queue.",
+    "effort": "A string field in `ModeConfig` controlling the AI agent's effort level (e.g., high).",
+    "emit_audit_event": "An existing helper function used throughout nightshift to emit structured audit events.",
+    "fetch_remote": "An existing helper that fetches a branch from a remote git server into the local repository.",
+    "get_patch_status": "A method on `HubClient` that returns a `PatchStatusDashboard` for a given workspace slug.",
+    "integration branch": "The hub's main integration branch against which patches are applied during a rebuild.",
+    "list_rebuilds": "A method on `HubClient` that returns the list of active or recent `RebuildJob` objects for a given workspace slug.",
+    "list_rerere": "A method on `HubClient` that returns a list of file paths with recorded rerere resolutions for a given workspace slug.",
+    "max_resolve_retries": "The maximum number of times the monitor will attempt to resolve a given conflicting patch per session, sourced from `CarryPatchConfig`.",
+    "merged_upstream": "A patch status indicating the patch has been successfully merged into the upstream integration branch.",
+    "model_tier": "A string field in `ModeConfig` specifying which AI model tier to use (e.g., STANDARD, PREMIUM).",
+    "poll_rebuild": "An async helper from the `afhub` package that polls a `RebuildJob` until it reaches a terminal status (completed, failed, or dead_letter).",
+    "push_to_remote": "An existing helper in the fix pipeline that pushes a local branch to a remote git server.",
+    "rerere_resolutions": "A list of file paths returned by `hub_client.list_rerere(slug)` representing previously recorded conflict resolutions, passed as context to the coder session.",
+    "run_git": "An existing helper that executes a git subprocess command and returns its output.",
+    "session retry counter": "An in-memory per-slug, per-patch-id counter tracking how many resolution attempts have been made for a patch within the current daemon session.",
+    "slug": "The workspace slug identifier used to address a specific hub workspace in all hub API calls.",
+    "submit_rebuild": "A method on `HubClient` that submits a rebuild request for a given workspace slug and returns a `RebuildJob`.",
+    "thinking_mode": "A string field in `ModeConfig` controlling the AI agent's reasoning strategy (e.g., adaptive)."
+  },
+  "requirements": [
+    {
+      "id": "03-REQ-1",
+      "title": "Fix pipeline patch registration and rebuild polling",
+      "user_story": {
+        "role": "nightshift daemon",
+        "goal": "register a completed fix branch as a hub patch and poll the resulting rebuild to completion instead of performing a local squash-merge",
+        "benefit": "so that carry-patch workspaces integrate fixes through the hub rather than local git operations"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-1.1",
+          "ears_pattern": "complex_event",
+          "system": "fix pipeline",
+          "action": "call `push_to_remote()` to push the fix branch to the hub git server, then call `hub_client.add_patch(slug, branch_name, description=..., skip_branch_check=True, if_not_exists=True)` to register the patch, then call `hub_client.submit_rebuild(slug)` and poll the returned `RebuildJob` via `poll_rebuild()` until a terminal status is reached",
+          "return_contract": "returns normally on success; raises or propagates exceptions on unrecoverable failure",
+          "trigger": "the coder-reviewer loop completes successfully",
+          "condition": "`config.carry_patch.enabled` is True and a `HubClient` instance is provided"
+        },
+        {
+          "id": "03-REQ-1.2",
+          "ears_pattern": "event_driven",
+          "system": "fix pipeline",
+          "action": "proceed with normal issue closure as if a local harvest had succeeded",
+          "return_contract": "returns normally; issue is marked closed",
+          "trigger": "`hub_client.submit_rebuild(slug)` returns a `RebuildJob` with status completed"
+        },
+        {
+          "id": "03-REQ-1.3",
+          "ears_pattern": "unwanted",
+          "system": "fix pipeline",
+          "action": "log the failure details and mark the issue for retry using the same retry mechanism as a failed local harvest",
+          "return_contract": "returns without raising; issue retry state is set",
+          "error_condition": "`poll_rebuild()` resolves to a `RebuildJob` with status failed or dead_letter, indicating the hub rebuild reached a terminal failure status"
+        },
+        {
+          "id": "03-REQ-1.4",
+          "ears_pattern": "unwanted",
+          "system": "fix pipeline",
+          "action": "call `hub_client.list_rebuilds(slug)` to retrieve the active `RebuildJob` and poll that job via `poll_rebuild()` instead",
+          "return_contract": "returns normally after polling the active rebuild to terminal status",
+          "error_condition": "`hub_client.submit_rebuild(slug)` raises `HubConflictError` because a concurrent rebuild is already in progress"
+        },
+        {
+          "id": "03-REQ-1.5",
+          "ears_pattern": "unwanted",
+          "system": "fix pipeline",
+          "action": "log a warning and skip the rebuild step without marking the issue for retry",
+          "return_contract": "returns normally; no rebuild is polled",
+          "error_condition": "`hub_client.submit_rebuild(slug)` raises `HubNoActivePatchesError` because no active patches exist for the workspace"
+        },
+        {
+          "id": "03-REQ-1.6",
+          "ears_pattern": "event_driven",
+          "system": "fix pipeline",
+          "action": "emit `AuditEventType.CARRY_PATCH_PATCH_REGISTERED`, `AuditEventType.CARRY_PATCH_REBUILD_REQUESTED`, and `AuditEventType.CARRY_PATCH_REBUILD_COMPLETED` audit events via `emit_audit_event()` at the appropriate steps",
+          "return_contract": "audit events are emitted; no return value",
+          "trigger": "patch registration and rebuild polling complete successfully"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "fix pipeline",
+          "action": "propagate the exception to the caller without calling `hub_client.add_patch()` or `hub_client.submit_rebuild()`; mark the issue for retry",
+          "return_contract": "raises the original exception; issue retry state is set",
+          "error_condition": "`push_to_remote()` raises an exception because the fix branch cannot be pushed to the hub git server"
+        },
+        {
+          "id": "03-REQ-1.E2",
+          "ears_pattern": "unwanted",
+          "system": "fix pipeline",
+          "action": "treat the timeout as a rebuild failure: log the timeout, emit `AuditEventType.CARRY_PATCH_REBUILD_FAILED`, and mark the issue for retry",
+          "return_contract": "returns without raising; issue retry state is set",
+          "error_condition": "`poll_rebuild()` exceeds its configured timeout because the hub rebuild does not reach a terminal status within the timeout period"
+        },
+        {
+          "id": "03-REQ-1.E3",
+          "ears_pattern": "unwanted",
+          "system": "fix pipeline",
+          "action": "log a warning and skip the rebuild polling step without marking the issue for retry",
+          "return_contract": "returns normally; no rebuild is polled",
+          "error_condition": "`hub_client.list_rebuilds(slug)` returns an empty list after a `HubConflictError`, meaning no active rebuild can be found to poll"
+        },
+        {
+          "id": "03-REQ-1.E4",
+          "ears_pattern": "unwanted",
+          "system": "fix pipeline",
+          "action": "log the error, emit `AuditEventType.CARRY_PATCH_REBUILD_FAILED`, and mark the issue for retry without calling `hub_client.submit_rebuild()`",
+          "return_contract": "returns without raising; issue retry state is set",
+          "error_condition": "`hub_client.add_patch()` raises an unexpected exception, causing patch registration to fail due to a hub API error"
+        },
+        {
+          "id": "03-REQ-1.E5",
+          "ears_pattern": "state_driven",
+          "system": "fix pipeline",
+          "action": "execute the existing local harvest and squash-merge path unchanged; do not call any hub API methods",
+          "return_contract": "returns normally via the existing local harvest path",
+          "state": "`config.carry_patch.enabled` is False or no `HubClient` is provided"
+        }
+      ]
+    },
+    {
+      "id": "03-REQ-2",
+      "title": "CarryPatchMonitor class definition",
+      "user_story": {
+        "role": "nightshift daemon",
+        "goal": "instantiate a CarryPatchMonitor with hub client, workspace slug, config, and engine dependencies",
+        "benefit": "so that the monitor can be wired into the stream registration system and invoked on a schedule"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-2.1",
+          "ears_pattern": "ubiquitous",
+          "system": "CarryPatchMonitor",
+          "action": "expose a constructor `__init__(self, hub_client: HubClient, workspace_slug: str, config: AgentFoxConfig, engine: NightShiftEngine) -> None` and an async method `run_cycle(self) -> MonitorCycleResult` in `agentfox/nightshift/carry_patch_monitor.py`",
+          "return_contract": "constructor returns None; `run_cycle()` returns a `MonitorCycleResult` instance"
+        },
+        {
+          "id": "03-REQ-2.2",
+          "ears_pattern": "ubiquitous",
+          "system": "MonitorCycleResult",
+          "action": "define `MonitorCycleResult` as a dataclass with fields: `conflicts_detected: int`, `conflicts_resolved: int`, `conflicts_failed: int`, `patches_merged: int`, `rebuild_triggered: bool`",
+          "return_contract": "dataclass is importable from `agentfox.nightshift.carry_patch_monitor`"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "raise a `ValueError` with a descriptive message indicating that `hub_client` is required",
+          "return_contract": "raises `ValueError`",
+          "error_condition": "constructor is called with a None `hub_client`, meaning a required dependency is missing"
+        },
+        {
+          "id": "03-REQ-2.E2",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "raise a `ValueError` with a descriptive message indicating that `workspace_slug` must be non-empty",
+          "return_contract": "raises `ValueError`",
+          "error_condition": "constructor is called with an empty string `workspace_slug`, meaning the workspace slug is blank"
+        }
+      ]
+    },
+    {
+      "id": "03-REQ-3",
+      "title": "Monitor cycle logic",
+      "user_story": {
+        "role": "nightshift daemon",
+        "goal": "run a single monitoring cycle that detects and resolves conflicting patches",
+        "benefit": "so that carry-patch workspaces stay unblocked without manual intervention"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchMonitor",
+          "action": "call `hub_client.get_patch_status(slug)` to fetch the `PatchStatusDashboard`, log any patches with `merged_upstream` status for informational tracking, and proceed to conflict detection",
+          "return_contract": "returns a `MonitorCycleResult` with all counts reflecting the cycle outcome",
+          "trigger": "`run_cycle()` is invoked"
+        },
+        {
+          "id": "03-REQ-3.2",
+          "ears_pattern": "complex_event",
+          "system": "CarryPatchMonitor",
+          "action": "log the number of patches in conflict status and return a `MonitorCycleResult` with `conflicts_detected` set to the count and all other counts at zero",
+          "return_contract": "returns `MonitorCycleResult(conflicts_detected=N, conflicts_resolved=0, conflicts_failed=0, patches_merged=M, rebuild_triggered=False)`",
+          "trigger": "`run_cycle()` is invoked",
+          "condition": "`config.carry_patch.auto_resolve` is False"
+        },
+        {
+          "id": "03-REQ-3.3",
+          "ears_pattern": "complex_event",
+          "system": "CarryPatchMonitor",
+          "action": "check out the patch branch via `fetch_remote()` and `checkout_branch()`, invoke the coder via `engine._run_coder_session()` with `archetype=\"coder\"`, `mode=\"carry-patch\"`, and conflict context, then on success commit, push the branch, call `hub_client.submit_rebuild(slug)`, and poll via `poll_rebuild()`",
+          "return_contract": "on success: `conflicts_resolved` incremented, `rebuild_triggered=True`; on failure: `conflicts_failed` incremented",
+          "trigger": "`run_cycle()` encounters a `PatchDetail` with `status == \"conflict\"`",
+          "condition": "`auto_resolve` is True and the patch has not exceeded `max_resolve_retries` in the `session retry counter`"
+        },
+        {
+          "id": "03-REQ-3.4",
+          "ears_pattern": "complex_event",
+          "system": "CarryPatchMonitor",
+          "action": "skip the patch, log a warning identifying the patch by its ID and branch name, and increment `conflicts_failed`",
+          "return_contract": "returns with `conflicts_failed` incremented for the skipped patch; no coder session is started",
+          "trigger": "`run_cycle()` encounters a `PatchDetail` with `status == \"conflict\"`",
+          "condition": "the patch's `session retry counter` has reached `max_resolve_retries`"
+        },
+        {
+          "id": "03-REQ-3.5",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchMonitor",
+          "action": "emit `AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED` via `emit_audit_event()`",
+          "return_contract": "audit event emitted; no return value",
+          "trigger": "a conflict resolution attempt succeeds"
+        },
+        {
+          "id": "03-REQ-3.6",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchMonitor",
+          "action": "increment the `session retry counter` for the patch, emit `AuditEventType.CARRY_PATCH_CONFLICT_FAILED` via `emit_audit_event()`",
+          "return_contract": "audit event emitted; retry counter incremented",
+          "trigger": "a conflict resolution attempt fails"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "log the error and return an empty `MonitorCycleResult` with all counts at zero and `rebuild_triggered=False` (fail-open)",
+          "return_contract": "returns `MonitorCycleResult(conflicts_detected=0, conflicts_resolved=0, conflicts_failed=0, patches_merged=0, rebuild_triggered=False)`",
+          "error_condition": "`hub_client.get_patch_status(slug)` raises any exception, causing the hub API call to fail during the cycle"
+        },
+        {
+          "id": "03-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "return an empty `MonitorCycleResult` with all counts at zero",
+          "return_contract": "returns `MonitorCycleResult(conflicts_detected=0, conflicts_resolved=0, conflicts_failed=0, patches_merged=0, rebuild_triggered=False)`",
+          "error_condition": "`hub_client.get_patch_status(slug)` returns a `PatchStatusDashboard` with an empty patch list, meaning no patches exist for the workspace"
+        },
+        {
+          "id": "03-REQ-3.E3",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "log the error, increment the `session retry counter` for the patch, increment `conflicts_failed`, emit `AuditEventType.CARRY_PATCH_CONFLICT_FAILED`, and continue to the next conflicting patch",
+          "return_contract": "returns with `conflicts_failed` incremented; no coder session is started for the failed patch",
+          "error_condition": "`fetch_remote()` or `checkout_branch()` raises an exception during conflict resolution because branch checkout fails before the coder session starts"
+        },
+        {
+          "id": "03-REQ-3.E4",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "cancel the session coroutine, log a timeout warning, increment the `session retry counter` for the patch, increment `conflicts_failed`, and continue to the next conflicting patch",
+          "return_contract": "returns with `conflicts_failed` incremented; no branch push or rebuild is triggered for the timed-out patch",
+          "error_condition": "`engine._run_coder_session()` hangs or exceeds the session timeout, meaning the coder session does not complete within the configured timeout"
+        },
+        {
+          "id": "03-REQ-3.E5",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "call `hub_client.list_rebuilds(slug)` to retrieve the active `RebuildJob` and poll that job; set `rebuild_triggered=True`",
+          "return_contract": "returns with `conflicts_resolved` incremented and `rebuild_triggered=True`",
+          "error_condition": "`hub_client.submit_rebuild(slug)` raises `HubConflictError` after a successful resolution because a concurrent rebuild is already in progress when the monitor tries to trigger one"
+        },
+        {
+          "id": "03-REQ-3.E6",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "treat missing fields as empty collections (e.g., `conflict_files` defaults to an empty list), log a warning, and continue processing the patch",
+          "return_contract": "returns normally; patch is processed with degraded context",
+          "error_condition": "`hub_client.get_patch_status(slug)` returns a `PatchStatusDashboard` where a `PatchDetail` is missing expected fields such as `conflict_files`, meaning the API response has null or missing fields the monitor depends on"
+        }
+      ]
+    },
+    {
+      "id": "03-REQ-4",
+      "title": "Conflict resolution context assembly",
+      "user_story": {
+        "role": "nightshift daemon",
+        "goal": "assemble a rich context dict for the coder session when resolving a conflicting patch",
+        "benefit": "so that the AI agent has enough information to preserve patch intent while adapting to upstream changes"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchMonitor",
+          "action": "build a context dict containing: `patch_description` from `PatchDetail` (empty string if absent), `conflict_files` from `PatchDetail.conflict_files` (empty list if absent), `upstream_context` from a local `git diff` between the integration branch and upstream HEAD, and `rerere_resolutions` from `hub_client.list_rerere(slug)` (empty list if the call fails)",
+          "return_contract": "context dict is passed to `engine._run_coder_session()`; no return value from context assembly",
+          "trigger": "a coder session is about to be invoked for a conflicting patch"
+        },
+        {
+          "id": "03-REQ-4.2",
+          "ears_pattern": "ubiquitous",
+          "system": "CarryPatchMonitor",
+          "action": "never modify rerere state when calling `hub_client.list_rerere(slug)`; use the result only as read-only context for the coder session",
+          "return_contract": "no write or mutation call is made to the rerere API; only read operations are performed"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "log a warning and pass an empty list for `rerere_resolutions`; do not abort the coder session",
+          "return_contract": "coder session proceeds with `rerere_resolutions=[]`",
+          "error_condition": "`hub_client.list_rerere(slug)` raises an exception, meaning rerere context cannot be fetched"
+        },
+        {
+          "id": "03-REQ-4.E2",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "log a warning and pass an empty string for `upstream_context`; do not abort the coder session",
+          "return_contract": "coder session proceeds with `upstream_context=\"\"`",
+          "error_condition": "the local git diff command fails or returns a non-zero exit code, meaning upstream context diff cannot be computed"
+        },
+        {
+          "id": "03-REQ-4.E3",
+          "ears_pattern": "unwanted",
+          "system": "CarryPatchMonitor",
+          "action": "substitute an empty string for `patch_description` and log a debug message",
+          "return_contract": "coder session proceeds with `patch_description=\"\"`",
+          "error_condition": "`PatchDetail.patch_description` is None or absent, meaning the patch description is missing from the dashboard response"
+        }
+      ]
+    },
+    {
+      "id": "03-REQ-5",
+      "title": "Carry-patch archetype mode registration",
+      "user_story": {
+        "role": "nightshift engine",
+        "goal": "invoke the coder archetype with a carry-patch mode that uses appropriate model settings",
+        "benefit": "so that conflict resolution sessions are allocated the right model tier and effort level"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-5.1",
+          "ears_pattern": "ubiquitous",
+          "system": "coder archetype registry",
+          "action": "register a `\"carry-patch\"` key in the `coder` archetype's mode dict in `agentfox/archetypes.py` with a `ModeConfig` of `model_tier=\"STANDARD\"`, `max_turns=200`, `thinking_mode=\"adaptive\"`, `effort=\"high\"`",
+          "return_contract": "the mode is accessible via the archetype registry at runtime"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "coder archetype registry",
+          "action": "raise a `KeyError` or equivalent registry lookup error; do not fall back silently to a default mode",
+          "return_contract": "raises `KeyError` with the unrecognised mode name",
+          "error_condition": "a caller requests the `coder` archetype with an unrecognised mode string that does not exist in the registry"
+        }
+      ]
+    },
+    {
+      "id": "03-REQ-6",
+      "title": "Carry-patch coder profile template",
+      "user_story": {
+        "role": "AI coder agent",
+        "goal": "receive a profile that instructs it to preserve patch intent and adapt only conflict files",
+        "benefit": "so that conflict resolutions are minimal, correct, and well-documented"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-6.1",
+          "ears_pattern": "ubiquitous",
+          "system": "profile template system",
+          "action": "create `agentfox/_templates/profiles/coder_carry-patch.md` containing instructions to: preserve the patch's original intent as described in `patch_description`; adapt only `conflict_files` to upstream changes without unrelated refactoring; use conventional commits of the form `fix: resolve conflict in <file>`; run available tests to verify the resolution; and explain the resolution in the commit message body",
+          "return_contract": "file exists and is loadable by the profile template system at runtime"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "profile template system",
+          "action": "raise a `FileNotFoundError` or equivalent template-loading error; do not silently use a blank profile",
+          "return_contract": "raises `FileNotFoundError` with the expected template path",
+          "error_condition": "`coder_carry-patch.md` is missing from the templates directory, meaning the profile template file does not exist"
+        }
+      ]
+    },
+    {
+      "id": "03-REQ-7",
+      "title": "Carry-patch stream registration and daemon integration",
+      "user_story": {
+        "role": "nightshift daemon",
+        "goal": "automatically register the carry-patch monitoring stream when carry-patch is configured",
+        "benefit": "so that the daemon polls for and resolves conflicting patches on a schedule without manual wiring"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-7.1",
+          "ears_pattern": "complex_event",
+          "system": "build_streams()",
+          "action": "instantiate a `CarryPatchStream` wrapping `CarryPatchMonitor.run_cycle()` with `name=\"carry-patch\"`, `check_interval=config.carry_patch.check_interval`, and `enabled=True`, and include it in the returned stream list",
+          "return_contract": "returns a stream list containing the `CarryPatchStream` instance",
+          "trigger": "`build_streams()` is called",
+          "condition": "`config.carry_patch.enabled` is True and a `HubClient` instance is available"
+        },
+        {
+          "id": "03-REQ-7.2",
+          "ears_pattern": "complex_event",
+          "system": "build_streams()",
+          "action": "omit the `CarryPatchStream` from the returned stream list",
+          "return_contract": "returns a stream list without any `CarryPatchStream` instance",
+          "trigger": "`build_streams()` is called",
+          "condition": "`config.carry_patch.enabled` is False or no `HubClient` is available"
+        },
+        {
+          "id": "03-REQ-7.3",
+          "ears_pattern": "ubiquitous",
+          "system": "daemon display registry",
+          "action": "add `\"carry-patch\"` as a key in both `_STREAM_DISPLAY_NAMES` and `_STREAM_ACTIVE_LABELS` dicts in `agentfox/nightshift/daemon.py` with appropriate human-readable values",
+          "return_contract": "the daemon renders the carry-patch stream name and active label correctly in its display output"
+        },
+        {
+          "id": "03-REQ-7.4",
+          "ears_pattern": "ubiquitous",
+          "system": "NightShiftEngine",
+          "action": "add `_run_carry_patch_monitor(self, slug: str) -> MonitorCycleResult` to `NightShiftEngine` in `agentfox/nightshift/engine.py` that instantiates or delegates to `CarryPatchMonitor` and returns its `run_cycle()` result",
+          "return_contract": "returns a `MonitorCycleResult` instance"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "build_streams()",
+          "action": "raise a `ValueError` indicating that `check_interval` must be a positive duration; do not register the stream with an invalid interval",
+          "return_contract": "raises `ValueError`",
+          "error_condition": "`config.carry_patch.check_interval` is zero or negative, meaning an invalid polling interval has been configured"
+        },
+        {
+          "id": "03-REQ-7.E2",
+          "ears_pattern": "unwanted",
+          "system": "NightShiftEngine",
+          "action": "propagate the exception to the caller rather than calling sys.exit or terminating the process; the daemon's stream runner is responsible for handling stream-level errors",
+          "return_contract": "raises the original exception",
+          "error_condition": "`_run_carry_patch_monitor()` is called but `CarryPatchMonitor` raises an unhandled exception, meaning the monitor cycle fails unexpectedly"
+        }
+      ]
+    },
+    {
+      "id": "03-REQ-8",
+      "title": "Carry-patch audit event types",
+      "user_story": {
+        "role": "operations team",
+        "goal": "observe structured audit events for all carry-patch operations",
+        "benefit": "so that carry-patch activity can be monitored, alerted on, and audited"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "03-REQ-8.1",
+          "ears_pattern": "ubiquitous",
+          "system": "AuditEventType",
+          "action": "add the following constants to `AuditEventType` in `afaudit/events.py`: `CARRY_PATCH_CONFLICT_DETECTED = \"carry_patch.conflict_detected\"`, `CARRY_PATCH_CONFLICT_RESOLVED = \"carry_patch.conflict_resolved\"`, `CARRY_PATCH_CONFLICT_FAILED = \"carry_patch.conflict_failed\"`, `CARRY_PATCH_PATCH_REGISTERED = \"carry_patch.patch_registered\"`, `CARRY_PATCH_REBUILD_REQUESTED = \"carry_patch.rebuild_requested\"`, `CARRY_PATCH_REBUILD_COMPLETED = \"carry_patch.rebuild_completed\"`, `CARRY_PATCH_REBUILD_FAILED = \"carry_patch.rebuild_failed\"`, `CARRY_PATCH_MERGED_DETECTED = \"carry_patch.merged_detected\"`",
+          "return_contract": "all eight constants are importable from `afaudit.events` at runtime"
+        },
+        {
+          "id": "03-REQ-8.2",
+          "ears_pattern": "event_driven",
+          "system": "fix pipeline and CarryPatchMonitor",
+          "action": "call `emit_audit_event()` with the corresponding `AuditEventType` constant at each of: patch registered, rebuild requested, rebuild completed, rebuild failed, conflict detected, conflict resolved, conflict failed, and merged patch detected",
+          "return_contract": "audit event is emitted; no return value",
+          "trigger": "a carry-patch operation reaches a significant state transition"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "03-REQ-8.E1",
+          "ears_pattern": "unwanted",
+          "system": "fix pipeline and CarryPatchMonitor",
+          "action": "log the failure at WARNING level and continue normal execution; audit failures must not abort the carry-patch operation",
+          "return_contract": "returns normally; the carry-patch operation continues",
+          "error_condition": "`emit_audit_event()` raises an exception, meaning audit event emission has failed"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "03-PROP-1",
+      "title": "Carry-patch mode skips local harvest",
+      "for_any": "fix pipeline execution where `config.carry_patch.enabled` is True and a `HubClient` is provided",
+      "invariant": "the local harvest and squash-merge code path is never executed; `hub_client.add_patch()` is always called before `hub_client.submit_rebuild()`",
+      "validates": [
+        "03-REQ-1.1",
+        "03-REQ-1.E5"
+      ]
+    },
+    {
+      "id": "03-PROP-2",
+      "title": "MonitorCycleResult counts are consistent",
+      "for_any": "`run_cycle()` invocation with any `PatchStatusDashboard` response",
+      "invariant": "`conflicts_resolved + conflicts_failed <= conflicts_detected` and all count fields are non-negative integers",
+      "validates": [
+        "03-REQ-3.1",
+        "03-REQ-3.3",
+        "03-REQ-3.4"
+      ]
+    },
+    {
+      "id": "03-PROP-3",
+      "title": "Retry counter bounds resolution attempts",
+      "for_any": "any patch ID that has been attempted `max_resolve_retries` times in the current session",
+      "invariant": "no further coder sessions are started for that patch ID within the same session; `conflicts_failed` is incremented instead",
+      "validates": [
+        "03-REQ-3.4"
+      ]
+    },
+    {
+      "id": "03-PROP-4",
+      "title": "Fail-open on hub API errors",
+      "for_any": "`run_cycle()` invocation where `hub_client.get_patch_status()` raises any exception",
+      "invariant": "`run_cycle()` returns a `MonitorCycleResult` with all counts at zero and does not propagate the exception to the caller",
+      "validates": [
+        "03-REQ-3.E1"
+      ]
+    },
+    {
+      "id": "03-PROP-5",
+      "title": "Audit events emitted at every state transition",
+      "for_any": "any carry-patch operation that reaches a state transition (patch registered, rebuild requested, conflict detected, etc.)",
+      "invariant": "exactly one `emit_audit_event()` call is made with the corresponding `AuditEventType` constant; audit emission failures do not abort the operation",
+      "validates": [
+        "03-REQ-1.6",
+        "03-REQ-3.5",
+        "03-REQ-3.6",
+        "03-REQ-8.2",
+        "03-REQ-8.E1"
+      ]
+    },
+    {
+      "id": "03-PROP-6",
+      "title": "CarryPatchStream only registered when fully configured",
+      "for_any": "any call to `build_streams()` where `config.carry_patch.enabled` is False or `HubClient` is None",
+      "invariant": "the returned stream list contains no `CarryPatchStream` instance",
+      "validates": [
+        "03-REQ-7.2"
+      ]
+    },
+    {
+      "id": "03-PROP-7",
+      "title": "Rerere state is never modified by the monitor",
+      "for_any": "any `run_cycle()` invocation that calls `hub_client.list_rerere(slug)`",
+      "invariant": "no write or mutation call is made to the rerere API; only read operations are performed",
+      "validates": [
+        "03-REQ-4.2"
+      ]
+    },
+    {
+      "id": "03-PROP-8",
+      "title": "HubConflictError always results in polling an existing rebuild",
+      "for_any": "any `submit_rebuild()` call that raises `HubConflictError`",
+      "invariant": "`hub_client.list_rebuilds(slug)` is called and the first active `RebuildJob` is polled via `poll_rebuild()`; the operation does not terminate without polling",
+      "validates": [
+        "03-REQ-1.4",
+        "03-REQ-3.E5"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "03-PATH-1",
+      "title": "Fix pipeline carry-patch registration and rebuild",
+      "steps": [
+        {
+          "actor": "nightshift daemon",
+          "action": "completes the coder-reviewer loop for an issue in a carry-patch workspace"
+        },
+        {
+          "actor": "fix pipeline",
+          "action": "detects `config.carry_patch.enabled=True` and a `HubClient` is available; skips local harvest"
+        },
+        {
+          "actor": "fix pipeline",
+          "action": "calls `push_to_remote()` to push the fix branch to the hub git server"
+        },
+        {
+          "actor": "fix pipeline",
+          "action": "calls `hub_client.add_patch(slug, branch_name, ...)` to register the patch; emits `CARRY_PATCH_PATCH_REGISTERED`"
+        },
+        {
+          "actor": "HubClient",
+          "action": "registers the patch and returns success"
+        },
+        {
+          "actor": "fix pipeline",
+          "action": "calls `hub_client.submit_rebuild(slug)`; emits `CARRY_PATCH_REBUILD_REQUESTED`"
+        },
+        {
+          "actor": "HubClient",
+          "action": "returns a `RebuildJob` with a job ID"
+        },
+        {
+          "actor": "fix pipeline",
+          "action": "calls `poll_rebuild(hub_client, slug, job.id, timeout=..., interval=...)` and awaits terminal status"
+        },
+        {
+          "actor": "poll_rebuild",
+          "action": "polls until `RebuildJob.status == \"completed\"`"
+        },
+        {
+          "actor": "fix pipeline",
+          "action": "emits `CARRY_PATCH_REBUILD_COMPLETED` and proceeds with normal issue closure"
+        }
+      ]
+    },
+    {
+      "id": "03-PATH-2",
+      "title": "Monitor cycle detects and resolves a conflicting patch",
+      "steps": [
+        {
+          "actor": "nightshift daemon",
+          "action": "triggers `CarryPatchStream` on schedule via `check_interval`"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "calls `hub_client.get_patch_status(slug)` to fetch the `PatchStatusDashboard`"
+        },
+        {
+          "actor": "HubClient",
+          "action": "returns a `PatchStatusDashboard` containing a `PatchDetail` with `status==\"conflict\"`"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "emits `CARRY_PATCH_CONFLICT_DETECTED`; checks `session retry counter` — patch is under `max_resolve_retries`"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "calls `fetch_remote()` and `checkout_branch()` to check out the patch branch"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "assembles conflict context dict with `patch_description`, `conflict_files`, `upstream_context`, and `rerere_resolutions`"
+        },
+        {
+          "actor": "NightShiftEngine",
+          "action": "runs `_run_coder_session()` with `archetype=\"coder\"`, `mode=\"carry-patch\"`, and the context dict"
+        },
+        {
+          "actor": "AI coder agent",
+          "action": "resolves conflicts per `coder_carry-patch.md` profile, commits with conventional commit message"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "calls `push_to_remote()` to push the resolved branch, then `hub_client.submit_rebuild(slug)`"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "polls rebuild via `poll_rebuild()`; emits `CARRY_PATCH_CONFLICT_RESOLVED` and `CARRY_PATCH_REBUILD_COMPLETED`"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "returns `MonitorCycleResult(conflicts_detected=1, conflicts_resolved=1, conflicts_failed=0, patches_merged=0, rebuild_triggered=True)`"
+        }
+      ]
+    },
+    {
+      "id": "03-PATH-3",
+      "title": "End-to-end carry-patch flow from daemon startup to resolved conflict",
+      "steps": [
+        {
+          "actor": "user",
+          "action": "starts the nightshift daemon with carry-patch configured (AF_HUB_URL, AF_HUB_TOKEN, AF_WORKSPACE set)"
+        },
+        {
+          "actor": "carry_patch_bootstrap (Spec 02)",
+          "action": "validates config, initialises `HubClient`, and passes it to `build_streams()`"
+        },
+        {
+          "actor": "build_streams()",
+          "action": "detects `config.carry_patch.enabled=True` and `HubClient` available; instantiates `CarryPatchStream` with `name=\"carry-patch\"` and `check_interval`"
+        },
+        {
+          "actor": "nightshift daemon",
+          "action": "registers `CarryPatchStream` alongside fix-pipeline and pr-feedback streams and starts the event loop"
+        },
+        {
+          "actor": "nightshift daemon",
+          "action": "on schedule, invokes `CarryPatchStream` which calls `CarryPatchMonitor.run_cycle()`"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "calls `hub_client.get_patch_status(slug)` via `HubClient` (Spec 01)"
+        },
+        {
+          "actor": "HubClient (Spec 01)",
+          "action": "returns `PatchStatusDashboard` with one patch in conflict status"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "assembles context and invokes `NightShiftEngine._run_coder_session()` in carry-patch mode"
+        },
+        {
+          "actor": "NightShiftEngine",
+          "action": "runs the AI coder agent using the `coder_carry-patch.md` profile; agent resolves conflicts and commits"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "pushes resolved branch and calls `hub_client.submit_rebuild(slug)`; polls to completed"
+        },
+        {
+          "actor": "CarryPatchMonitor",
+          "action": "emits `CARRY_PATCH_CONFLICT_RESOLVED` and `CARRY_PATCH_REBUILD_COMPLETED` via `emit_audit_event()`"
+        },
+        {
+          "actor": "nightshift daemon",
+          "action": "logs `MonitorCycleResult` summary and waits for the next `check_interval` tick"
+        }
+      ]
+    },
+    {
+      "id": "03-PATH-4",
+      "title": "Concurrent rebuild handling during fix pipeline registration",
+      "steps": [
+        {
+          "actor": "fix pipeline",
+          "action": "calls `hub_client.submit_rebuild(slug)` after registering the patch"
+        },
+        {
+          "actor": "HubClient",
+          "action": "raises `HubConflictError` because another rebuild is already in progress"
+        },
+        {
+          "actor": "fix pipeline",
+          "action": "catches `HubConflictError` and calls `hub_client.list_rebuilds(slug)`"
+        },
+        {
+          "actor": "HubClient",
+          "action": "returns a list containing the active `RebuildJob`"
+        },
+        {
+          "actor": "fix pipeline",
+          "action": "calls `poll_rebuild()` on the active `RebuildJob` and awaits terminal status"
+        },
+        {
+          "actor": "fix pipeline",
+          "action": "on completed status, proceeds with normal issue closure"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "03-ERR-1",
+      "condition": "`push_to_remote()` raises an exception during fix pipeline patch registration",
+      "behavior": "propagate the exception; do not call `hub_client.add_patch()` or `hub_client.submit_rebuild()`; mark the issue for retry",
+      "requirement_id": "03-REQ-1.E1"
+    },
+    {
+      "id": "03-ERR-2",
+      "condition": "`poll_rebuild()` exceeds its configured timeout",
+      "behavior": "treat as rebuild failure; log timeout; emit `CARRY_PATCH_REBUILD_FAILED`; mark issue for retry",
+      "requirement_id": "03-REQ-1.E2"
+    },
+    {
+      "id": "03-ERR-3",
+      "condition": "`hub_client.submit_rebuild(slug)` raises `HubConflictError`",
+      "behavior": "call `hub_client.list_rebuilds(slug)` and poll the active `RebuildJob`; if list is empty, log warning and skip rebuild",
+      "requirement_id": "03-REQ-1.4"
+    },
+    {
+      "id": "03-ERR-4",
+      "condition": "`hub_client.submit_rebuild(slug)` raises `HubNoActivePatchesError`",
+      "behavior": "log a warning and skip the rebuild step; do not mark the issue for retry",
+      "requirement_id": "03-REQ-1.5"
+    },
+    {
+      "id": "03-ERR-5",
+      "condition": "`hub_client.get_patch_status(slug)` raises any exception during `run_cycle()`",
+      "behavior": "log the error and return an empty `MonitorCycleResult` with all counts at zero (fail-open)",
+      "requirement_id": "03-REQ-3.E1"
+    },
+    {
+      "id": "03-ERR-6",
+      "condition": "`fetch_remote()` or `checkout_branch()` raises an exception during conflict resolution",
+      "behavior": "log the error; increment `session retry counter` and `conflicts_failed`; emit `CARRY_PATCH_CONFLICT_FAILED`; continue to next patch",
+      "requirement_id": "03-REQ-3.E3"
+    },
+    {
+      "id": "03-ERR-7",
+      "condition": "`engine._run_coder_session()` hangs or exceeds session timeout",
+      "behavior": "cancel the session coroutine; log timeout warning; increment `session retry counter` and `conflicts_failed`; continue to next patch",
+      "requirement_id": "03-REQ-3.E4"
+    },
+    {
+      "id": "03-ERR-8",
+      "condition": "`hub_client.list_rerere(slug)` raises an exception",
+      "behavior": "log a warning; pass empty list for `rerere_resolutions`; proceed with coder session",
+      "requirement_id": "03-REQ-4.E1"
+    },
+    {
+      "id": "03-ERR-9",
+      "condition": "local git diff command fails or returns non-zero exit code",
+      "behavior": "log a warning; pass empty string for `upstream_context`; proceed with coder session",
+      "requirement_id": "03-REQ-4.E2"
+    },
+    {
+      "id": "03-ERR-10",
+      "condition": "`emit_audit_event()` raises an exception",
+      "behavior": "log the failure at WARNING level and continue normal execution; do not abort the carry-patch operation",
+      "requirement_id": "03-REQ-8.E1"
+    },
+    {
+      "id": "03-ERR-11",
+      "condition": "`hub_client.add_patch()` raises an unexpected exception",
+      "behavior": "log the error; emit `CARRY_PATCH_REBUILD_FAILED`; mark issue for retry; do not call `hub_client.submit_rebuild()`",
+      "requirement_id": "03-REQ-1.E4"
+    },
+    {
+      "id": "03-ERR-12",
+      "condition": "`PatchStatusDashboard` contains a `PatchDetail` with null or missing `conflict_files`",
+      "behavior": "default `conflict_files` to an empty list; log a warning; continue processing the patch",
+      "requirement_id": "03-REQ-3.E6"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "afhub",
+      "version": "see Spec 01",
+      "symbols": [
+        {
+          "name": "HubClient",
+          "import_path": "afhub",
+          "signature": "class HubClient",
+          "notes": "Async HTTP client for the af-hub carry-patch REST API. Methods used: add_patch(), submit_rebuild(), list_rebuilds(), get_patch_status(), list_rerere()."
+        },
+        {
+          "name": "poll_rebuild",
+          "import_path": "afhub",
+          "signature": "async def poll_rebuild(hub_client: HubClient, slug: str, job_id: str, timeout: float, interval: float) -> RebuildJob",
+          "notes": "Polls a RebuildJob until it reaches a terminal status (completed, failed, dead_letter). Raises on timeout."
+        },
+        {
+          "name": "HubConflictError",
+          "import_path": "afhub",
+          "signature": "class HubConflictError(HubError)",
+          "notes": "Raised by submit_rebuild() when a concurrent rebuild is already in progress."
+        },
+        {
+          "name": "HubNoActivePatchesError",
+          "import_path": "afhub",
+          "signature": "class HubNoActivePatchesError(HubError)",
+          "notes": "Raised by submit_rebuild() when there are no active patches for the workspace."
+        },
+        {
+          "name": "PatchStatusDashboard",
+          "import_path": "afhub",
+          "signature": "class PatchStatusDashboard",
+          "notes": "Model returned by hub_client.get_patch_status(slug). Contains a list of PatchDetail objects."
+        },
+        {
+          "name": "RebuildJob",
+          "import_path": "afhub",
+          "signature": "class RebuildJob",
+          "notes": "Model representing a queued or active hub rebuild. Has fields: id (str), status (str)."
+        }
+      ]
+    },
+    {
+      "package": "afaudit",
+      "version": "see existing package",
+      "symbols": [
+        {
+          "name": "AuditEventType",
+          "import_path": "afaudit.events",
+          "signature": "class AuditEventType",
+          "notes": "Enum or constants class for audit event type strings. This spec adds 8 new carry-patch constants."
+        },
+        {
+          "name": "emit_audit_event",
+          "import_path": "afaudit",
+          "signature": "def emit_audit_event(event_type: AuditEventType, **kwargs) -> None",
+          "notes": "Existing helper used throughout nightshift to emit structured audit events. Exact signature should be verified against the installed package."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,938 @@
+{
+  "$schema": null,
+  "spec_id": "02",
+  "spec_name": "carry_patch_bootstrap",
+  "schema_version": 1,
+  "introduction": "This spec defines the bootstrapping layer for carry-patch mode in the `nightshift` daemon: Pydantic config models (`HubConfig`, `CarryPatchConfig`), CLI flags with 3-tier resolution, startup CWD validation against the hub workspace, default config generation, and workspace variable initialization that disables hub-side auto-rebuild.",
+  "glossary": {
+    "AF_HUB_TOKEN": "Environment variable read by `resolve_hub_pat()` to supply the hub PAT.",
+    "AF_HUB_URL": "Environment variable used as the second tier in hub URL resolution.",
+    "AF_WORKSPACE": "Environment variable used as the second tier in workspace slug resolution.",
+    "AUTO_REBUILD_AFTER_PUSH": "Hub workspace variable set to `\"false\"` by nightshift on startup so the hub does not trigger rebuilds automatically after push.",
+    "AUTO_REBUILD_AFTER_SYNC": "Hub workspace variable set to `\"false\"` by nightshift on startup so the hub does not trigger rebuilds automatically after sync.",
+    "AgentFoxConfig": "Top-level Pydantic config model for the agentfox system, defined in `packages/agentfox/agentfox/core/config.py`.",
+    "CarryPatchConfig": "Pydantic model added to AgentFoxConfig holding all carry-patch tunable parameters such as `workspace`, `check_interval`, `auto_resolve`, `rebuild_timeout`, `rebuild_poll_interval`, and `max_resolve_retries`.",
+    "Clamped": "Internal annotated-type utility in `agentfox.core.config` that silently clamps out-of-range integer values to the declared bounds instead of raising a ValidationError.",
+    "DaemonRunner": "Existing synchronous daemon loop class in `nightshift.app` whose `run()` method is invoked after startup validation completes.",
+    "HubAuthError": "Exception from `afhub` raised on HTTP 401 or 403 responses from the hub API.",
+    "HubClient": "Async HTTP client from the `afhub` package (Spec 01_afhub_client) used to communicate with the hub REST API.",
+    "HubConfig": "Pydantic model added to AgentFoxConfig holding the hub API base URL (`endpoint_url`).",
+    "HubConnectionError": "Exception from `afhub` raised when a network-level connection to the hub fails.",
+    "HubError": "Base exception class for all hub API errors in the `afhub` package.",
+    "HubForbiddenError": "Exception from `afhub` raised on HTTP 403 scope-missing responses from the hub API.",
+    "HubNotFoundError": "Exception from `afhub` raised on HTTP 404 responses from the hub API.",
+    "PAT": "Personal Access Token used to authenticate requests to the hub API.",
+    "Workspace": "Pydantic model returned by `HubClient.get_workspace()` containing fields `workspace_mode`, `clone_status`, `git_url`, and `integration_branch`.",
+    "WorkspaceConfig": "Existing Pydantic model in `agentfox.core.config` with a `merge_strategy` field typed as `Literal['direct', 'branch', 'pr']`.",
+    "auto_resolve": "Field on `CarryPatchConfig` controlling whether nightshift automatically attempts to resolve detected conflicts.",
+    "carry-patch mode": "Operational mode of nightshift where it monitors a hub workspace for conflicts and drives a fix pipeline; activated when both `--workspace` and `--token` resolve to non-empty values.",
+    "check_interval": "Field on `CarryPatchConfig` controlling how often (in seconds) nightshift polls for conflicts; minimum 60, default 300.",
+    "clone_status": "Field on the `Workspace` model indicating the hub-side clone state; must equal `\"ready\"` before nightshift proceeds.",
+    "config_gen.py": "Module at `packages/agentfox/agentfox/core/config_gen.py` that holds the global default AgentFoxConfig comment-annotated TOML template.",
+    "endpoint_url": "Field on `HubConfig` storing the hub API base URL.",
+    "get_workspace": "Method on `HubClient` that fetches a `Workspace` model by slug from the hub API.",
+    "git_url": "Field on the `Workspace` model containing the expected remote origin URL for the local git checkout.",
+    "integration_branch": "Field on the `Workspace` model (nullable string) written into the generated `.nightshift/config.toml` under `[workspace]`.",
+    "max_resolve_retries": "Field on `CarryPatchConfig` capping the number of automatic conflict-resolve retries; range 0-10, default 2.",
+    "merge_strategy": "Field on `WorkspaceConfig` written explicitly in the generated `.nightshift/config.toml`; defaults to `'direct'`.",
+    "nightshift": "The CLI daemon entry point located in `packages/nightshift/nightshift/app.py` that orchestrates conflict monitoring and fix pipelines.",
+    "rebuild_poll_interval": "Field on `CarryPatchConfig` specifying the polling interval in seconds when waiting for a rebuild; minimum 2, default 5.",
+    "rebuild_timeout": "Field on `CarryPatchConfig` specifying the maximum seconds to wait for a hub rebuild to complete.",
+    "resolve_hub_pat": "Function imported from `afhub.auth` that reads the hub PAT from the `AF_HUB_TOKEN` environment variable.",
+    "resolve_hub_url": "Function imported from `afhub.auth` that resolves the hub API base URL using a 3-tier chain: CLI flag > `AF_HUB_URL` env var > config file value.",
+    "set_variable": "Method on `HubClient` that upserts a workspace variable via PATCH-then-POST; used to set `AUTO_REBUILD_AFTER_SYNC` and `AUTO_REBUILD_AFTER_PUSH`.",
+    "workspace slug": "Short identifier string for a hub workspace, supplied via `--workspace` CLI flag, `AF_WORKSPACE` env var, or `carry_patch.workspace` config field.",
+    "workspace_mode": "Field on the `Workspace` model indicating the operational mode; must equal `\"carry_patch\"` for this spec."
+  },
+  "requirements": [
+    {
+      "id": "02-REQ-1",
+      "title": "HubConfig and CarryPatchConfig Pydantic models",
+      "user_story": {
+        "role": "developer extending agentfox",
+        "goal": "add HubConfig and CarryPatchConfig Pydantic models to AgentFoxConfig with safe defaults",
+        "benefit": "so that existing config files without these sections continue to load cleanly and carry-patch is disabled by default"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-1.1",
+          "ears_pattern": "event_driven",
+          "system": "agentfox config loader",
+          "action": "populate `hub` with a `HubConfig` instance whose `endpoint_url` defaults to an empty string",
+          "return_contract": "HubConfig(endpoint_url='') is accessible as config.hub",
+          "trigger": "AgentFoxConfig is instantiated without a `[hub]` section in the TOML file"
+        },
+        {
+          "id": "02-REQ-1.2",
+          "ears_pattern": "event_driven",
+          "system": "agentfox config loader",
+          "action": "populate `carry_patch` with a `CarryPatchConfig` instance using all documented defaults: enabled=False, workspace='', check_interval=300, auto_resolve=True, rebuild_timeout=600, rebuild_poll_interval=5, max_resolve_retries=2",
+          "return_contract": "CarryPatchConfig with all default values is accessible as config.carry_patch",
+          "trigger": "AgentFoxConfig is instantiated without a `[carry_patch]` section in the TOML file"
+        },
+        {
+          "id": "02-REQ-1.3",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchConfig validator",
+          "action": "silently clamp the value to 60 using the `Clamped` annotated-type utility",
+          "return_contract": "config.carry_patch.check_interval == 60",
+          "trigger": "a TOML config supplies a `check_interval` value below 60"
+        },
+        {
+          "id": "02-REQ-1.4",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchConfig validator",
+          "action": "silently clamp the value to 2 using the `Clamped` annotated-type utility",
+          "return_contract": "config.carry_patch.rebuild_poll_interval == 2",
+          "trigger": "a TOML config supplies a `rebuild_poll_interval` value below 2"
+        },
+        {
+          "id": "02-REQ-1.5",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchConfig validator",
+          "action": "silently clamp the value to 10 using the `Clamped` annotated-type utility",
+          "return_contract": "config.carry_patch.max_resolve_retries == 10",
+          "trigger": "a TOML config supplies a `max_resolve_retries` value above 10"
+        },
+        {
+          "id": "02-REQ-1.6",
+          "ears_pattern": "event_driven",
+          "system": "agentfox config loader",
+          "action": "ignore the unknown keys without raising a ValidationError, consistent with `extra='ignore'` on both models",
+          "return_contract": "AgentFoxConfig loads successfully; unknown keys are silently dropped",
+          "trigger": "a TOML config contains unknown keys in the `[hub]` or `[carry_patch]` sections"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-1.E1",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchConfig validator",
+          "action": "accept the value as-is (0 is the declared minimum) without clamping",
+          "return_contract": "config.carry_patch.max_resolve_retries == 0",
+          "trigger": "a TOML config supplies `max_resolve_retries` equal to 0"
+        },
+        {
+          "id": "02-REQ-1.E2",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchConfig validator",
+          "action": "accept the value as-is without clamping",
+          "return_contract": "config.carry_patch.check_interval == 60",
+          "trigger": "a TOML config supplies `check_interval` exactly equal to 60"
+        },
+        {
+          "id": "02-REQ-1.E3",
+          "ears_pattern": "event_driven",
+          "system": "agentfox config loader",
+          "action": "load the file successfully and populate both sections with defaults",
+          "return_contract": "AgentFoxConfig loads without error; config.carry_patch.enabled == False",
+          "trigger": "an existing config file that predates this spec (no `[hub]` or `[carry_patch]` sections) is loaded"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-2",
+      "title": "CLI flags with 3-tier resolution",
+      "user_story": {
+        "role": "operator running nightshift",
+        "goal": "supply hub URL, workspace slug, and PAT via CLI flags, environment variables, or config file",
+        "benefit": "so that nightshift can be configured flexibly across different deployment environments without hardcoding secrets"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "resolve hub URL via `resolve_hub_url(hub_url_flag=hub_url_flag, config_url=config.hub.endpoint_url)`, resolve workspace slug as `workspace_flag or os.environ.get('AF_WORKSPACE', '') or config.carry_patch.workspace`, resolve PAT from `--token` flag first then `resolve_hub_pat()`, and activate carry-patch mode",
+          "return_contract": "carry-patch mode is active; resolved values are used for all subsequent API calls",
+          "trigger": "the operator invokes `nightshift` with `--hub-url`, `--workspace`, and `--token` flags all set to non-empty values"
+        },
+        {
+          "id": "02-REQ-2.2",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "resolve hub URL from `AF_HUB_URL` via the internal logic of `resolve_hub_url`",
+          "return_contract": "resolved hub URL equals the value of `AF_HUB_URL`",
+          "trigger": "the operator invokes `nightshift` with `AF_HUB_URL` set in the environment and no `--hub-url` flag"
+        },
+        {
+          "id": "02-REQ-2.3",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "resolve hub URL from `config.hub.endpoint_url` via the internal logic of `resolve_hub_url`",
+          "return_contract": "resolved hub URL equals `config.hub.endpoint_url`",
+          "trigger": "the operator invokes `nightshift` with no `--hub-url` flag and `AF_HUB_URL` unset, but `config.hub.endpoint_url` is non-empty"
+        },
+        {
+          "id": "02-REQ-2.4",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "resolve workspace slug from `AF_WORKSPACE` using the inline resolution expression",
+          "return_contract": "resolved workspace slug equals the value of `AF_WORKSPACE`",
+          "trigger": "the operator invokes `nightshift` with `AF_WORKSPACE` set in the environment and no `--workspace` flag"
+        },
+        {
+          "id": "02-REQ-2.5",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "resolve workspace slug from `config.carry_patch.workspace` using the inline resolution expression",
+          "return_contract": "resolved workspace slug equals `config.carry_patch.workspace`",
+          "trigger": "the operator invokes `nightshift` with no `--workspace` flag and `AF_WORKSPACE` unset, but `config.carry_patch.workspace` is non-empty"
+        },
+        {
+          "id": "02-REQ-2.6",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "skip carry-patch mode entirely and run nightshift normally (fix-pipeline only)",
+          "return_contract": "nightshift starts without carry-patch mode; no hub API calls are made during startup",
+          "trigger": "the operator invokes `nightshift` with neither `--workspace` nor `--token` resolved to non-empty values"
+        },
+        {
+          "id": "02-REQ-2.7",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "silently ignore the resolved hub URL and skip carry-patch mode; run nightshift normally",
+          "return_contract": "nightshift starts without carry-patch mode; the resolved hub URL is not used",
+          "trigger": "the operator invokes `nightshift` with only `--hub-url` resolved to a non-empty value but no `--workspace` or `--token`"
+        },
+        {
+          "id": "02-REQ-2.8",
+          "ears_pattern": "unwanted",
+          "system": "nightshift CLI",
+          "action": "emit an error message via `click.echo(..., err=True)` explaining the PAT is required and exit",
+          "return_contract": "process exits with code 1; error message is written to stderr",
+          "error_condition": "PAT is absent from the --token flag and AF_HUB_TOKEN environment variable while workspace slug is non-empty"
+        },
+        {
+          "id": "02-REQ-2.9",
+          "ears_pattern": "unwanted",
+          "system": "nightshift CLI",
+          "action": "emit an error message via `click.echo(..., err=True)` explaining the hub URL is required and exit",
+          "return_contract": "process exits with code 1; error message is written to stderr",
+          "error_condition": "hub URL is empty after checking CLI flag, AF_HUB_URL, and config.hub.endpoint_url while carry-patch mode is otherwise active"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-2.E1",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "use the CLI `--token` value as the PAT without calling `resolve_hub_pat()`",
+          "return_contract": "resolved PAT equals the `--token` flag value",
+          "trigger": "the operator supplies `--token` on the CLI"
+        },
+        {
+          "id": "02-REQ-2.E2",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "prefer the CLI flag value over the environment variable, as enforced by `resolve_hub_url`",
+          "return_contract": "resolved hub URL equals the `--hub-url` flag value",
+          "trigger": "the operator supplies `--hub-url` on the CLI and `AF_HUB_URL` is also set in the environment"
+        },
+        {
+          "id": "02-REQ-2.E3",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "treat hub URL as unresolved; if carry-patch mode is otherwise active, exit with an error per 02-REQ-2.9",
+          "return_contract": "process exits with code 1 when carry-patch mode is active",
+          "trigger": "all three resolution tiers for hub URL are empty strings"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-3",
+      "title": "CWD validation sequence",
+      "user_story": {
+        "role": "operator running nightshift in carry-patch mode",
+        "goal": "have nightshift verify the current working directory matches the expected hub workspace before starting the daemon",
+        "benefit": "so that conflicts are never monitored against the wrong local checkout"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "construct a single `HubClient` instance as `HubClient(endpoint_url=resolved_hub_url, pat=resolved_pat)` and call `hub_client.get_workspace(slug)` to retrieve the `Workspace` model",
+          "return_contract": "Workspace model is returned; the same HubClient instance is reused for all subsequent API calls in this startup sequence",
+          "trigger": "carry-patch mode is active and the async startup helper calls `get_workspace(slug)`"
+        },
+        {
+          "id": "02-REQ-3.2",
+          "ears_pattern": "unwanted",
+          "system": "nightshift startup validator",
+          "action": "emit a diagnostic error message via `click.echo(..., err=True)` indicating an invalid PAT or insufficient permissions and exit",
+          "return_contract": "process exits with code 1; error message is written to stderr",
+          "error_condition": "`get_workspace` raises `HubAuthError` during the workspace lookup call"
+        },
+        {
+          "id": "02-REQ-3.3",
+          "ears_pattern": "unwanted",
+          "system": "nightshift startup validator",
+          "action": "emit a diagnostic error message via `click.echo(..., err=True)` indicating the workspace slug was not found and exit",
+          "return_contract": "process exits with code 1; error message is written to stderr",
+          "error_condition": "`get_workspace` raises `HubNotFoundError` during the workspace lookup call"
+        },
+        {
+          "id": "02-REQ-3.4",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "emit an error message via `click.echo(..., err=True)` indicating the workspace is not in carry-patch mode and exit",
+          "return_contract": "process exits with code 1; error message is written to stderr",
+          "trigger": "`get_workspace` returns a `Workspace` model with `workspace_mode` not equal to `\"carry_patch\"`"
+        },
+        {
+          "id": "02-REQ-3.5",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "emit an error message via `click.echo(..., err=True)` indicating the workspace clone is not ready (showing the actual `clone_status` value) and exit",
+          "return_contract": "process exits with code 1; error message is written to stderr",
+          "trigger": "`get_workspace` returns a `Workspace` model with `clone_status` not equal to `\"ready\"`"
+        },
+        {
+          "id": "02-REQ-3.6",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "invoke `subprocess.run(['git', 'remote', 'get-url', 'origin'], stdout=PIPE, stderr=PIPE, timeout=10)` in the CWD using the blocking form",
+          "return_contract": "subprocess completes and stdout contains the local origin URL",
+          "trigger": "workspace mode and `clone_status` checks pass and the validator reads the local origin URL"
+        },
+        {
+          "id": "02-REQ-3.7",
+          "ears_pattern": "unwanted",
+          "system": "nightshift startup validator",
+          "action": "emit the exact message 'git is not installed or not in PATH; nightshift requires git' via `click.echo(..., err=True)` and exit",
+          "return_contract": "process exits with code 1; exact error message is written to stderr",
+          "error_condition": "the subprocess.run call for git remote get-url origin raises FileNotFoundError because the git binary is not installed or not in PATH"
+        },
+        {
+          "id": "02-REQ-3.8",
+          "ears_pattern": "unwanted",
+          "system": "nightshift startup validator",
+          "action": "emit an error message via `click.echo(..., err=True)` indicating the git command timed out and exit",
+          "return_contract": "process exits with code 1; error message is written to stderr",
+          "error_condition": "the subprocess.run call for git remote get-url origin raises subprocess.TimeoutExpired because the git process did not complete within 10 seconds"
+        },
+        {
+          "id": "02-REQ-3.9",
+          "ears_pattern": "unwanted",
+          "system": "nightshift startup validator",
+          "action": "emit an error message via `click.echo(..., err=True)` that includes the captured stderr output and exit",
+          "return_contract": "process exits with code 1; error message including git stderr is written to stderr",
+          "error_condition": "the subprocess.run call for git remote get-url origin returns a non-zero exit code because the CWD is not a git repository or no origin remote is configured"
+        },
+        {
+          "id": "02-REQ-3.10",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "emit an error message via `click.echo(..., err=True)` showing both the local origin URL and `workspace.git_url`, instructing the operator to `cd` into the correct directory, and exit",
+          "return_contract": "process exits with code 1; error message showing both URLs is written to stderr",
+          "trigger": "the local origin URL (stripped of trailing whitespace) does not match `workspace.git_url`"
+        },
+        {
+          "id": "02-REQ-3.11",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "emit `logging.info(...)` indicating CWD validation succeeded and continue to workspace variable setup",
+          "return_contract": "info log entry is written; execution continues to REQ-5",
+          "trigger": "all six validation steps pass (workspace mode, clone status, git installed, non-zero return code absent, origin URL matches)"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-3.E1",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "strip trailing whitespace before comparing to `workspace.git_url`",
+          "return_contract": "comparison uses the stripped URL; no false mismatch is reported",
+          "trigger": "the local origin URL has trailing whitespace or a trailing newline"
+        },
+        {
+          "id": "02-REQ-3.E2",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "exit with an error indicating the workspace clone is not ready, showing `clone_status` as `\"pending\"`",
+          "return_contract": "process exits with code 1",
+          "trigger": "`get_workspace` returns a `Workspace` model with `clone_status` equal to `\"pending\"`"
+        },
+        {
+          "id": "02-REQ-3.E3",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "exit with an error indicating the workspace clone is not ready, showing `clone_status` as `\"failed\"`",
+          "return_contract": "process exits with code 1",
+          "trigger": "`get_workspace` returns a `Workspace` model with `clone_status` equal to `\"failed\"`"
+        },
+        {
+          "id": "02-REQ-3.E4",
+          "ears_pattern": "unwanted",
+          "system": "nightshift startup validator",
+          "action": "emit a diagnostic error message via `click.echo(..., err=True)` indicating a connection failure and exit",
+          "return_contract": "process exits with code 1; error message is written to stderr",
+          "error_condition": "network-level failure prevents reaching the hub API, causing `get_workspace` to raise `HubConnectionError`"
+        },
+        {
+          "id": "02-REQ-3.E5",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup validator",
+          "action": "treat the empty `git_url` as a mismatch against any non-empty local origin URL and exit with the URL mismatch error",
+          "return_contract": "process exits with code 1; error message showing both URLs is written to stderr",
+          "trigger": "`get_workspace` returns a `Workspace` model where `git_url` is an empty string"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-4",
+      "title": "Default config generation on first start",
+      "user_story": {
+        "role": "operator running nightshift for the first time in a workspace",
+        "goal": "have nightshift automatically generate a `.nightshift/config.toml` with all tunable parameters documented",
+        "benefit": "so that the operator can review and adjust settings without needing to know the config schema"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "nightshift config generator",
+          "action": "create the `.nightshift/` directory if absent, write the config to a temporary file `config.toml.tmp`, then atomically rename it to `config.toml`; the file contains `[hub]`, `[carry_patch]`, and `[workspace]` sections with all tunable fields written explicitly",
+          "return_contract": "`.nightshift/config.toml` exists with UTF-8 encoded TOML content matching the documented template; `.nightshift/config.toml.tmp` does not exist after successful write",
+          "trigger": "CWD validation passes and `.nightshift/config.toml` does not exist in the CWD"
+        },
+        {
+          "id": "02-REQ-4.2",
+          "ears_pattern": "event_driven",
+          "system": "nightshift config generator",
+          "action": "skip config generation entirely without reading or modifying the existing file",
+          "return_contract": "existing `.nightshift/config.toml` is unchanged",
+          "trigger": "CWD validation passes and `.nightshift/config.toml` already exists in the CWD"
+        },
+        {
+          "id": "02-REQ-4.3",
+          "ears_pattern": "event_driven",
+          "system": "nightshift config generator",
+          "action": "write `integration_branch = \"\"` in the `[workspace]` section",
+          "return_contract": "generated TOML contains `integration_branch = \"\"`",
+          "trigger": "the config file is being generated and `workspace.integration_branch` is `None`"
+        },
+        {
+          "id": "02-REQ-4.4",
+          "ears_pattern": "unwanted",
+          "system": "nightshift config generator",
+          "action": "emit `logging.warning(...)` describing the failure and continue startup without exiting",
+          "return_contract": "nightshift continues to run; a warning log entry is written; no partial config file is left in an inconsistent state",
+          "error_condition": "any OS-level exception is raised during directory creation, temp file write, or atomic rename when writing the config file"
+        },
+        {
+          "id": "02-REQ-4.5",
+          "ears_pattern": "ubiquitous",
+          "system": "nightshift config generator",
+          "action": "never write the PAT to the generated `.nightshift/config.toml` file under any circumstances",
+          "return_contract": "generated config file contains no PAT or token value"
+        },
+        {
+          "id": "02-REQ-4.6",
+          "ears_pattern": "ubiquitous",
+          "system": "nightshift config generator",
+          "action": "not reload the newly-written config into the live `AgentFoxConfig`; all resolved values remain as-is in memory for the current session",
+          "return_contract": "the in-memory `AgentFoxConfig` instance is unchanged after config file generation"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-4.E1",
+          "ears_pattern": "event_driven",
+          "system": "nightshift config generator",
+          "action": "proceed normally with the atomic write without attempting to create the directory again",
+          "return_contract": "`.nightshift/config.toml` is created successfully",
+          "trigger": "`.nightshift/` directory already exists but `config.toml` is absent"
+        },
+        {
+          "id": "02-REQ-4.E2",
+          "ears_pattern": "unwanted",
+          "system": "nightshift config generator",
+          "action": "emit `logging.warning(...)` and continue; the temp file `config.toml.tmp` may remain on disk but nightshift does not attempt cleanup",
+          "return_contract": "nightshift continues to run; warning log is written",
+          "error_condition": "the OS rename operation raises an exception when atomically renaming config.toml.tmp to config.toml after the temp file was written"
+        },
+        {
+          "id": "02-REQ-4.E3",
+          "ears_pattern": "event_driven",
+          "system": "nightshift config generator",
+          "action": "write the actual branch name as the value of `integration_branch` in the `[workspace]` section",
+          "return_contract": "generated TOML contains `integration_branch = \"<branch_name>\"`",
+          "trigger": "the generated config is written and `workspace.integration_branch` is a non-empty string"
+        },
+        {
+          "id": "02-REQ-4.E4",
+          "ears_pattern": "event_driven",
+          "system": "nightshift config generator",
+          "action": "include `[hub]` and `[carry_patch]` sections with comment annotations in the global default AgentFoxConfig TOML template in `config_gen.py`",
+          "return_contract": "the global template contains `[hub]` and `[carry_patch]` sections",
+          "trigger": "config_gen.py global TOML template is rendered"
+        }
+      ]
+    },
+    {
+      "id": "02-REQ-5",
+      "title": "Workspace variable initialization",
+      "user_story": {
+        "role": "operator running nightshift in carry-patch mode",
+        "goal": "have nightshift automatically disable hub-side auto-rebuild on startup",
+        "benefit": "so that nightshift controls rebuild timing and avoids race conditions with hub-triggered rebuilds"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "02-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup helper",
+          "action": "call `await hub_client.set_variable(slug, 'AUTO_REBUILD_AFTER_SYNC', 'false')` and then `await hub_client.set_variable(slug, 'AUTO_REBUILD_AFTER_PUSH', 'false')` using the same `HubClient` instance constructed in REQ-3",
+          "return_contract": "`AUTO_REBUILD_AFTER_SYNC` and `AUTO_REBUILD_AFTER_PUSH` are set to `'false'` on the hub workspace",
+          "trigger": "CWD validation passes and the async startup helper proceeds to variable initialization"
+        },
+        {
+          "id": "02-REQ-5.2",
+          "ears_pattern": "unwanted",
+          "system": "nightshift startup helper",
+          "action": "emit `logging.warning(...)` describing the failure and continue startup without exiting",
+          "return_contract": "nightshift continues to run; a warning log entry is written; the daemon loop starts normally",
+          "error_condition": "any exception including HubForbiddenError, HubConnectionError, or any other HubError subclass is raised by either set_variable call"
+        },
+        {
+          "id": "02-REQ-5.3",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup helper",
+          "action": "return control to the synchronous `main()` function which then invokes `DaemonRunner.run()` to start the daemon loop",
+          "return_contract": "the daemon loop starts after the async startup helper returns",
+          "trigger": "the async startup helper completes successfully"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "02-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "nightshift startup helper",
+          "action": "emit `logging.warning(...)` and still attempt the second `set_variable` call for `AUTO_REBUILD_AFTER_PUSH`",
+          "return_contract": "both calls are attempted independently; nightshift continues regardless of either failure",
+          "error_condition": "the first set_variable call for AUTO_REBUILD_AFTER_SYNC raises an exception"
+        },
+        {
+          "id": "02-REQ-5.E2",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup helper",
+          "action": "the idempotent PATCH-then-POST upsert in `set_variable` completes without error",
+          "return_contract": "no error is raised; the call is a no-op from the operator's perspective",
+          "trigger": "`set_variable` is called when the variables are already set to `'false'` on the hub"
+        },
+        {
+          "id": "02-REQ-5.E3",
+          "ears_pattern": "event_driven",
+          "system": "nightshift startup helper",
+          "action": "execute the full CWD validation and variable initialization sequence within a single event loop created by `asyncio.run()`",
+          "return_contract": "the event loop is created and destroyed by `asyncio.run()`; no RuntimeError from a pre-existing running loop occurs in production",
+          "trigger": "the async startup helper is invoked via `asyncio.run()` from synchronous `main()`"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "02-PROP-1",
+      "title": "CarryPatchConfig clamping is monotone",
+      "for_any": "integer value v supplied for `check_interval`, `rebuild_poll_interval`, or `max_resolve_retries`",
+      "invariant": "the stored value equals max(min_bound, min(v, max_bound)) where bounds are those declared by `Clamped`",
+      "validates": [
+        "02-REQ-1.3",
+        "02-REQ-1.4",
+        "02-REQ-1.5",
+        "02-REQ-1.E1",
+        "02-REQ-1.E2"
+      ]
+    },
+    {
+      "id": "02-PROP-2",
+      "title": "Carry-patch mode requires both workspace slug and PAT",
+      "for_any": "any combination of CLI flags, environment variables, and config file values",
+      "invariant": "carry-patch mode is active if and only if both the resolved workspace slug and the resolved PAT are non-empty strings",
+      "validates": [
+        "02-REQ-2.1",
+        "02-REQ-2.6",
+        "02-REQ-2.7",
+        "02-REQ-2.8"
+      ]
+    },
+    {
+      "id": "02-PROP-3",
+      "title": "Hub URL resolution is strictly ordered",
+      "for_any": "any combination of `--hub-url` flag, `AF_HUB_URL` env var, and `config.hub.endpoint_url`",
+      "invariant": "the resolved hub URL is the first non-empty value in the order: CLI flag > `AF_HUB_URL` > `config.hub.endpoint_url`",
+      "validates": [
+        "02-REQ-2.1",
+        "02-REQ-2.2",
+        "02-REQ-2.3",
+        "02-REQ-2.E2"
+      ]
+    },
+    {
+      "id": "02-PROP-4",
+      "title": "CWD validation is all-or-nothing",
+      "for_any": "any startup invocation with carry-patch mode active",
+      "invariant": "the daemon loop starts if and only if all six CWD validation steps pass; any single step failure causes process exit with code 1",
+      "validates": [
+        "02-REQ-3.2",
+        "02-REQ-3.3",
+        "02-REQ-3.4",
+        "02-REQ-3.5",
+        "02-REQ-3.7",
+        "02-REQ-3.8",
+        "02-REQ-3.9",
+        "02-REQ-3.10",
+        "02-REQ-3.11"
+      ]
+    },
+    {
+      "id": "02-PROP-5",
+      "title": "Config file is never overwritten",
+      "for_any": "any startup invocation where `.nightshift/config.toml` already exists",
+      "invariant": "the content of `.nightshift/config.toml` is identical before and after nightshift startup",
+      "validates": [
+        "02-REQ-4.2"
+      ]
+    },
+    {
+      "id": "02-PROP-6",
+      "title": "PAT is never persisted to disk",
+      "for_any": "any startup invocation that generates `.nightshift/config.toml`",
+      "invariant": "the generated config file contains no PAT or token value",
+      "validates": [
+        "02-REQ-4.5"
+      ]
+    },
+    {
+      "id": "02-PROP-7",
+      "title": "Variable initialization failures are non-fatal",
+      "for_any": "any exception raised by `set_variable` during startup",
+      "invariant": "nightshift emits a warning log and proceeds to start the daemon loop; it never exits due to a `set_variable` failure",
+      "validates": [
+        "02-REQ-5.2",
+        "02-REQ-5.E1"
+      ]
+    },
+    {
+      "id": "02-PROP-8",
+      "title": "Single HubClient instance is reused across startup",
+      "for_any": "any startup invocation with carry-patch mode active",
+      "invariant": "exactly one `HubClient` instance is constructed during the async startup helper; it is reused for `get_workspace` and both `set_variable` calls",
+      "validates": [
+        "02-REQ-3.1",
+        "02-REQ-5.1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "02-PATH-1",
+      "title": "Happy path: first-time carry-patch startup with config generation",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "invokes `nightshift --hub-url https://hub.example.com --workspace my-slug --token myPAT`"
+        },
+        {
+          "actor": "nightshift CLI (app.py)",
+          "action": "resolves hub URL via `resolve_hub_url`, workspace slug via inline expression, PAT from `--token` flag; detects carry-patch mode is active"
+        },
+        {
+          "actor": "nightshift CLI (app.py)",
+          "action": "invokes `asyncio.run(startup_helper(...))` with resolved values"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "constructs `HubClient(endpoint_url=resolved_hub_url, pat=resolved_pat)`"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "calls `hub_client.get_workspace('my-slug')` and receives a `Workspace` model with `workspace_mode='carry_patch'`, `clone_status='ready'`, and a matching `git_url`"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "invokes `subprocess.run(['git', 'remote', 'get-url', 'origin'], ...)` and receives the local origin URL"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "strips trailing whitespace from the local origin URL and confirms it matches `workspace.git_url`"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "emits `logging.info(...)` confirming CWD validation succeeded"
+        },
+        {
+          "actor": "nightshift config generator",
+          "action": "detects `.nightshift/config.toml` does not exist; creates `.nightshift/` directory, writes `config.toml.tmp`, atomically renames to `config.toml`"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "calls `await hub_client.set_variable('my-slug', 'AUTO_REBUILD_AFTER_SYNC', 'false')` and `await hub_client.set_variable('my-slug', 'AUTO_REBUILD_AFTER_PUSH', 'false')`"
+        },
+        {
+          "actor": "nightshift CLI (app.py)",
+          "action": "invokes `DaemonRunner.run()` to start the synchronous daemon loop"
+        }
+      ]
+    },
+    {
+      "id": "02-PATH-2",
+      "title": "CWD mismatch: operator is in the wrong directory",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "invokes `nightshift --workspace my-slug --token myPAT` from a directory whose git origin does not match the hub workspace `git_url`"
+        },
+        {
+          "actor": "nightshift CLI (app.py)",
+          "action": "resolves carry-patch mode as active; invokes `asyncio.run(startup_helper(...))`"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "calls `hub_client.get_workspace('my-slug')` and receives a `Workspace` model with `clone_status='ready'`"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "invokes `subprocess.run(['git', 'remote', 'get-url', 'origin'], ...)` and receives a URL that does not match `workspace.git_url`"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "emits an error message via `click.echo(..., err=True)` showing both URLs and instructing the operator to `cd` into the correct directory; calls `sys.exit(1)`"
+        },
+        {
+          "actor": "OS",
+          "action": "process exits with code 1"
+        }
+      ]
+    },
+    {
+      "id": "02-PATH-3",
+      "title": "No carry-patch flags: nightshift runs in normal mode",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "invokes `nightshift` with no `--workspace` or `--token` flags and no corresponding environment variables or config values"
+        },
+        {
+          "actor": "nightshift CLI (app.py)",
+          "action": "resolves workspace slug and PAT as empty; determines carry-patch mode is not active"
+        },
+        {
+          "actor": "nightshift CLI (app.py)",
+          "action": "skips the async startup helper entirely; invokes `DaemonRunner.run()` directly"
+        },
+        {
+          "actor": "DaemonRunner",
+          "action": "starts the fix-pipeline daemon loop without any hub API calls"
+        }
+      ]
+    },
+    {
+      "id": "02-PATH-4",
+      "title": "Missing PAT with workspace slug: error exit",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "invokes `nightshift --workspace my-slug` with no `--token` flag and `AF_HUB_TOKEN` unset"
+        },
+        {
+          "actor": "nightshift CLI (app.py)",
+          "action": "resolves workspace slug as `'my-slug'`; attempts to resolve PAT from `--token` flag (absent) then `resolve_hub_pat()` (returns empty)"
+        },
+        {
+          "actor": "nightshift CLI (app.py)",
+          "action": "detects workspace slug is non-empty but PAT is empty; emits error via `click.echo(..., err=True)` explaining PAT is required; calls `sys.exit(1)`"
+        },
+        {
+          "actor": "OS",
+          "action": "process exits with code 1"
+        }
+      ]
+    },
+    {
+      "id": "02-PATH-5",
+      "title": "set_variable failure is non-fatal: daemon starts anyway",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "invokes `nightshift --workspace my-slug --token myPAT` in a valid workspace directory"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "completes CWD validation successfully and proceeds to variable initialization"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "calls `await hub_client.set_variable('my-slug', 'AUTO_REBUILD_AFTER_SYNC', 'false')`; call raises `HubForbiddenError`"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "catches the exception, emits `logging.warning(...)`, and continues to the second `set_variable` call"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "calls `await hub_client.set_variable('my-slug', 'AUTO_REBUILD_AFTER_PUSH', 'false')`; call also raises `HubConnectionError`"
+        },
+        {
+          "actor": "async startup helper",
+          "action": "catches the exception, emits `logging.warning(...)`, and returns normally"
+        },
+        {
+          "actor": "nightshift CLI (app.py)",
+          "action": "invokes `DaemonRunner.run()` to start the daemon loop"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "02-ERR-1",
+      "condition": "`get_workspace` raises `HubAuthError` during CWD validation",
+      "behavior": "emit diagnostic error via `click.echo(..., err=True)` indicating invalid PAT or insufficient permissions; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-3.2"
+    },
+    {
+      "id": "02-ERR-2",
+      "condition": "`get_workspace` raises `HubNotFoundError` during CWD validation",
+      "behavior": "emit diagnostic error via `click.echo(..., err=True)` indicating workspace slug not found; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-3.3"
+    },
+    {
+      "id": "02-ERR-3",
+      "condition": "`workspace.workspace_mode` is not `\"carry_patch\"`",
+      "behavior": "emit error via `click.echo(..., err=True)` indicating workspace is not in carry-patch mode; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-3.4"
+    },
+    {
+      "id": "02-ERR-4",
+      "condition": "`workspace.clone_status` is not `\"ready\"` (e.g. `\"pending\"`, `\"cloning\"`, or `\"failed\"`)",
+      "behavior": "emit error via `click.echo(..., err=True)` showing the actual `clone_status` value and indicating the workspace clone is not ready; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-3.5"
+    },
+    {
+      "id": "02-ERR-5",
+      "condition": "`subprocess.run` raises `FileNotFoundError` when invoking `git remote get-url origin`",
+      "behavior": "emit the exact message 'git is not installed or not in PATH; nightshift requires git' via `click.echo(..., err=True)`; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-3.7"
+    },
+    {
+      "id": "02-ERR-6",
+      "condition": "`subprocess.run` raises `subprocess.TimeoutExpired` when invoking `git remote get-url origin`",
+      "behavior": "emit an error message via `click.echo(..., err=True)` indicating the git command timed out; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-3.8"
+    },
+    {
+      "id": "02-ERR-7",
+      "condition": "`subprocess.run` returns a non-zero exit code from `git remote get-url origin`",
+      "behavior": "emit an error message via `click.echo(..., err=True)` including the captured stderr output; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-3.9"
+    },
+    {
+      "id": "02-ERR-8",
+      "condition": "local origin URL does not match `workspace.git_url` after stripping trailing whitespace",
+      "behavior": "emit an error message via `click.echo(..., err=True)` showing both URLs and instructing the operator to `cd` into the correct directory; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-3.10"
+    },
+    {
+      "id": "02-ERR-9",
+      "condition": "PAT resolves to empty when `--workspace` is non-empty",
+      "behavior": "emit an error message via `click.echo(..., err=True)` explaining the PAT is required; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-2.8"
+    },
+    {
+      "id": "02-ERR-10",
+      "condition": "hub URL resolves to empty when carry-patch mode is otherwise active",
+      "behavior": "emit an error message via `click.echo(..., err=True)` explaining the hub URL is required; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-2.9"
+    },
+    {
+      "id": "02-ERR-11",
+      "condition": "writing `.nightshift/config.toml` fails for any OS-level reason",
+      "behavior": "emit `logging.warning(...)` describing the failure and continue startup without exiting",
+      "requirement_id": "02-REQ-4.4"
+    },
+    {
+      "id": "02-ERR-12",
+      "condition": "`set_variable` raises any exception during workspace variable initialization",
+      "behavior": "emit `logging.warning(...)` describing the failure and continue startup; attempt the second `set_variable` call independently",
+      "requirement_id": "02-REQ-5.2"
+    },
+    {
+      "id": "02-ERR-13",
+      "condition": "`get_workspace` raises `HubConnectionError` during CWD validation",
+      "behavior": "emit diagnostic error via `click.echo(..., err=True)` indicating a connection failure; call `sys.exit(1)`",
+      "requirement_id": "02-REQ-3.E4"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "afhub",
+      "version": "per 01_afhub_client spec",
+      "symbols": [
+        {
+          "name": "HubClient",
+          "import_path": "afhub",
+          "signature": "HubClient(endpoint_url: str, pat: str)",
+          "notes": "Async HTTP client for the hub REST API. A single instance is constructed once in the async startup helper and reused for all API calls."
+        },
+        {
+          "name": "HubClient.get_workspace",
+          "import_path": "afhub",
+          "signature": "async def get_workspace(self, slug: str) -> Workspace",
+          "notes": "Returns a Workspace model. Raises HubAuthError (401/403) or HubNotFoundError (404) on failure."
+        },
+        {
+          "name": "HubClient.set_variable",
+          "import_path": "afhub",
+          "signature": "async def set_variable(self, slug: str, key: str, value: str) -> None",
+          "notes": "Upserts a workspace variable using PATCH-then-POST. Any exception is treated as non-fatal in this spec."
+        },
+        {
+          "name": "resolve_hub_url",
+          "import_path": "afhub.auth",
+          "signature": "def resolve_hub_url(hub_url_flag: str, config_url: str) -> str",
+          "notes": "Encapsulates 3-tier resolution: CLI flag > AF_HUB_URL env var > config_url. Returns the first non-empty value."
+        },
+        {
+          "name": "resolve_hub_pat",
+          "import_path": "afhub.auth",
+          "signature": "def resolve_hub_pat() -> str",
+          "notes": "Reads AF_HUB_TOKEN from the environment. The caller handles the CLI --token flag tier before invoking this."
+        },
+        {
+          "name": "HubAuthError",
+          "import_path": "afhub",
+          "signature": "class HubAuthError(HubError): ...",
+          "notes": "Raised on HTTP 401 or 403 responses."
+        },
+        {
+          "name": "HubNotFoundError",
+          "import_path": "afhub",
+          "signature": "class HubNotFoundError(HubError): ...",
+          "notes": "Raised on HTTP 404 responses."
+        },
+        {
+          "name": "HubForbiddenError",
+          "import_path": "afhub",
+          "signature": "class HubForbiddenError(HubError): ...",
+          "notes": "Raised on HTTP 403 scope-missing responses."
+        },
+        {
+          "name": "HubConnectionError",
+          "import_path": "afhub",
+          "signature": "class HubConnectionError(HubError): ...",
+          "notes": "Raised on network-level connection failures."
+        },
+        {
+          "name": "HubError",
+          "import_path": "afhub",
+          "signature": "class HubError(Exception): ...",
+          "notes": "Base exception class for all hub API errors."
+        }
+      ]
+    }
+  ]
+}

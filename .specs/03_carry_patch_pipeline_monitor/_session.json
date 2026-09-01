@@ -1,0 +1,70 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "ready",
+      "summary": "The PRD for `carry_patch_pipeline_monitor` is thorough and well-structured. It clearly articulates intent, goals, requirements, file changes, test coverage, dependencies, and out-of-scope boundaries. The tech stack is specified. Dependencies on both active specs (`afhub_client` and `carry_patch_bootstrap`) are explicitly declared and correctly referenced throughout the requirements. No fundamental gaps block artifact generation. A few minor ambiguities exist around timeout/interval defaults, `max_resolve_retries` configuration, and a specific API surface detail (`checkout_branch` provenance), but none are blockers.",
+      "gaps": [
+        "REQ-1 references `poll_rebuild(hub_client, slug, job.id, timeout=..., interval=...)` but does not specify default values for `timeout` and `interval`. These may need to come from `CarryPatchConfig` (Spec 02), but no explicit field names are called out.",
+        "REQ-3 references `max_resolve_retries` as a session-tracked per-patch counter, but it is unclear whether this value is a hardcoded constant or a field on `CarryPatchConfig`. If configurable, Spec 02 should expose it.",
+        "REQ-3 references `checkout_branch()` as a utility used during conflict resolution, but this function is not listed in the Tech Stack section or in the Files Modified table. Its package origin and signature are unspecified.",
+        "The test file `test_carry_patch_profile.py` is listed but the coverage description ('Profile template loading, archetype mode presence') does not clarify whether the profile template content itself is asserted or only its existence \u2014 this could affect the value of the test.",
+        "No explicit mention of test tooling (e.g., pytest, pytest-asyncio) in the Tech Stack section, which is expected given the asyncio-heavy nature of the implementation."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "What are the default (or configurable) values for `timeout` and `interval` passed to `poll_rebuild()` in REQ-1? Are these fields on `CarryPatchConfig` defined in Spec 02 (`carry_patch_bootstrap`), or should they be hardcoded constants in this spec?",
+          "context": "REQ-1 shows `poll_rebuild(hub_client, slug, job.id, timeout=..., interval=...)` with placeholder values. Without concrete defaults or a reference to a config field, implementers will make inconsistent choices.",
+          "options": [
+            "They are fields on CarryPatchConfig (e.g., `rebuild_timeout_seconds`, `rebuild_poll_interval_seconds`) \u2014 reference Spec 02",
+            "They are module-level constants defined in carry_patch_monitor.py (e.g., DEFAULT_REBUILD_TIMEOUT = 600)",
+            "They are arguments passed in at call sites with caller-chosen defaults"
+          ],
+          "required": false
+        },
+        {
+          "id": "q2",
+          "text": "Is `max_resolve_retries` a hardcoded constant or a field on `CarryPatchConfig`? If configurable, what is its default value, and should Spec 02 (`carry_patch_bootstrap`) be updated to expose it?",
+          "context": "REQ-3 tracks retry attempts per patch per session using `max_resolve_retries`, but its source is unspecified. This affects both config schema design and the in-memory counter implementation.",
+          "options": [
+            "Hardcoded constant (e.g., MAX_RESOLVE_RETRIES = 3) in carry_patch_monitor.py",
+            "Field on CarryPatchConfig \u2014 Spec 02 should be updated to include it",
+            "Passed as a constructor argument to CarryPatchMonitor"
+          ],
+          "required": false
+        },
+        {
+          "id": "q3",
+          "text": "Where does `checkout_branch()` (used in REQ-3 step 4b) come from? Please specify its package, module path, and signature so it can be referenced correctly in the implementation.",
+          "context": "REQ-3 instructs implementers to call `checkout_branch()` after `fetch_remote()`, but unlike `fetch_remote()` and `push_to_remote()`, `checkout_branch` is not listed in the Tech Stack or Files Modified sections. Its absence could cause implementers to create a new utility unnecessarily or call the wrong function.",
+          "options": [
+            "It is an existing utility in agentfox (please provide module path)",
+            "It needs to be created as part of this spec (add to Files Modified)",
+            "It is a thin wrapper around `run_git(['checkout', branch_name])` and should be inlined"
+          ],
+          "required": false
+        },
+        {
+          "id": "q4",
+          "text": "What test tooling should be used for the new test files? Should `pytest` + `pytest-asyncio` be listed in the Tech Stack, and are there any mock/fixture libraries (e.g., `unittest.mock`, `respx`, `pytest-mock`) expected for mocking `HubClient` and `engine`?",
+          "context": "The Tech Stack section does not mention test tooling. Given the asyncio-heavy implementation and the need to mock HubClient and engine internals, specifying tooling upfront prevents implementers from making incompatible choices.",
+          "options": [
+            "pytest + pytest-asyncio + unittest.mock (standard project setup)",
+            "pytest + pytest-asyncio + pytest-mock",
+            "Follow existing test conventions in the agentfox package \u2014 no change needed"
+          ],
+          "required": false
+        }
+      ]
+    }
+  ],
+  "qa_exchanges": [],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

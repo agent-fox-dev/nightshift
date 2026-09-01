@@ -1,0 +1,1515 @@
+{
+  "$schema": null,
+  "spec_id": "01",
+  "spec_name": "afhub_client",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "pytest packages/afhub/tests/ -q -v",
+    "all_tests": "pytest packages/afhub/tests/ -q",
+    "linter": "ruff check packages/afhub/"
+  },
+  "dependencies": [],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write tests: workspace operations & client lifecycle (REQ-1)",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write tests for HubClient lifecycle (init, aclose, context manager)",
+          "details": [
+            "In packages/afhub/tests/test_client.py, write async tests for HubClient.__init__ creating a shared httpx.AsyncClient",
+            "Test that aclose() closes the underlying httpx.AsyncClient",
+            "Test async context manager usage: `async with HubClient(...) as client` calls aclose() on exit",
+            "Mock httpx.AsyncClient using unittest.mock.MagicMock/AsyncMock"
+          ],
+          "test_spec_refs": [
+            "TS-01-1",
+            "TS-01-2"
+          ],
+          "requirement_refs": [
+            "01-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write tests for get_workspace and sync_workspace",
+          "details": [
+            "Write async test for get_workspace(slug) calling GET /api/v1/workspaces/:slug and returning a Workspace model",
+            "Write async test for sync_workspace(slug) calling POST /api/v1/workspaces/:slug/sync and returning SyncResult",
+            "Write async test for sync_workspace with reset_to_upstream=True verifying the flag is sent in the request body",
+            "Mock httpx.AsyncClient.request/get/post with AsyncMock returning fixture JSON"
+          ],
+          "test_spec_refs": [
+            "TS-01-3",
+            "TS-01-4"
+          ],
+          "requirement_refs": [
+            "01-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write tests for get_patch_status and reclone_workspace",
+          "details": [
+            "Write async test for get_patch_status(slug) calling GET /api/v1/workspaces/:slug/patch-status and returning PatchStatusDashboard",
+            "Write async test for reclone_workspace(slug) calling POST /api/v1/workspaces/:slug/reclone and returning Workspace",
+            "Verify Authorization: Bearer <pat> header is present on all requests",
+            "Verify all paths are prefixed with /api/v1/"
+          ],
+          "test_spec_refs": [
+            "TS-01-5",
+            "TS-01-6",
+            "TS-01-7"
+          ],
+          "requirement_refs": [
+            "01-REQ-1",
+            "01-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All test stubs in test_client.py for REQ-1 are written and collected by pytest (may xfail/skip until implementation): `pytest packages/afhub/tests/test_client.py -q --collect-only`",
+          "No linter warnings in test files: `ruff check packages/afhub/tests/test_client.py`",
+          "Requirements 01-REQ-1 acceptance criteria are covered by TS-01-1 through TS-01-7"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests: patch operations (REQ-2)",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write tests for list_patches, add_patch, and add_patches_batch",
+          "details": [
+            "Write async test for list_patches(slug) calling GET /api/v1/workspaces/:slug/patches and returning list[Patch]",
+            "Write async test for add_patch(slug, branch_name, ...) sending single-object JSON body to POST /patches and returning Patch (201)",
+            "Write async test for add_patches_batch(slug, patches) sending JSON array body to POST /patches and returning list[Patch] (201)",
+            "Verify add_patch and add_patches_batch are distinct methods (not unified by runtime dispatch)"
+          ],
+          "test_spec_refs": [
+            "TS-01-8",
+            "TS-01-9",
+            "TS-01-10"
+          ],
+          "requirement_refs": [
+            "01-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write tests for update_patch, remove_patch, restore_patch, and reorder_patches",
+          "details": [
+            "Write async test for update_patch(slug, patch_id, **kwargs) calling PATCH /patches/:id and returning Patch",
+            "Write async test for remove_patch(slug, patch_id) calling DELETE /patches/:id and returning None on 204",
+            "Write async test for restore_patch(slug, patch_id) calling POST /patches/:id/restore and returning Patch",
+            "Write async test for reorder_patches(slug, patch_ids) calling POST /patches/reorder and returning list[Patch]"
+          ],
+          "test_spec_refs": [
+            "TS-01-11",
+            "TS-01-12",
+            "TS-01-13",
+            "TS-01-14"
+          ],
+          "requirement_refs": [
+            "01-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All patch operation test stubs collected by pytest: `pytest packages/afhub/tests/test_client.py -q --collect-only -k patch`",
+          "No linter warnings: `ruff check packages/afhub/tests/test_client.py`",
+          "Requirements 01-REQ-2 acceptance criteria covered by TS-01-8 through TS-01-14"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write tests: rebuild operations (REQ-3)",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write tests for submit_rebuild, get_rebuild, and list_rebuilds",
+          "details": [
+            "Write async test for submit_rebuild(slug, strategy=..., fail_mode=...) calling POST /rebuild and returning RebuildJob from 202 response",
+            "Write async test for get_rebuild(slug, rebuild_id) calling GET /rebuilds/:id and returning RebuildJob",
+            "Write async test for list_rebuilds(slug) calling GET /rebuilds, unwrapping {\"jobs\": [...]} envelope, and returning list[RebuildJob]"
+          ],
+          "test_spec_refs": [
+            "TS-01-15",
+            "TS-01-16",
+            "TS-01-17"
+          ],
+          "requirement_refs": [
+            "01-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write tests for cancel_rebuild, requeue_rebuild, rollback_rebuild, and get_rebuild_preview",
+          "details": [
+            "Write async test for cancel_rebuild(slug, rebuild_id) calling DELETE /rebuilds/:id and returning RebuildJob",
+            "Write async test for requeue_rebuild(slug, rebuild_id) calling POST /rebuilds/:id/requeue and returning RebuildJob",
+            "Write async test for rollback_rebuild(slug, rebuild_id) calling POST /rebuilds/:id/rollback, extracting previous_integration_head_sha, and returning str",
+            "Write async test for get_rebuild_preview(slug) calling GET /rebuild-preview and returning RebuildPreview"
+          ],
+          "test_spec_refs": [
+            "TS-01-18",
+            "TS-01-19",
+            "TS-01-20",
+            "TS-01-21"
+          ],
+          "requirement_refs": [
+            "01-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All rebuild operation test stubs collected by pytest: `pytest packages/afhub/tests/test_client.py -q --collect-only -k rebuild`",
+          "No linter warnings: `ruff check packages/afhub/tests/test_client.py`",
+          "Requirements 01-REQ-3 acceptance criteria covered by TS-01-15 through TS-01-21"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write tests: rerere, variables, and secrets (REQ-4)",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write tests for list_rerere and forget_rerere",
+          "details": [
+            "Write async test for list_rerere(slug) calling GET /rerere, unwrapping {\"resolutions\": [...]} envelope, and returning list[RerereEntry]",
+            "Write async test for forget_rerere(slug, pathspec) calling DELETE /rerere/*pathspec and returning None on 204"
+          ],
+          "test_spec_refs": [
+            "TS-01-22",
+            "TS-01-23"
+          ],
+          "requirement_refs": [
+            "01-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write tests for create_variable, update_variable, set_variable, and delete_variable",
+          "details": [
+            "Write async test for create_variable(slug, key, value) calling POST /vars (201) and returning None",
+            "Write async test for update_variable(slug, key, value) calling PATCH /vars/:key (200) and returning None",
+            "Write async test for set_variable(slug, key, value): PATCH succeeds \u2192 returns None; PATCH returns 404 \u2192 falls back to POST /vars \u2192 returns None",
+            "Write async test for delete_variable(slug, key) calling DELETE /vars/:key (204) and returning None"
+          ],
+          "test_spec_refs": [
+            "TS-01-24",
+            "TS-01-25",
+            "TS-01-26",
+            "TS-01-27"
+          ],
+          "requirement_refs": [
+            "01-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write tests for get_resolved_variables and create_secret",
+          "details": [
+            "Write async test for get_resolved_variables(slug) calling GET /vars/resolved and returning dict[str, str]",
+            "Write async test for create_secret(slug, key, value) calling POST /secrets (201) and returning None",
+            "Verify no list_variables method exists on HubClient (intentionally omitted)"
+          ],
+          "test_spec_refs": [
+            "TS-01-28",
+            "TS-01-29",
+            "TS-01-30"
+          ],
+          "requirement_refs": [
+            "01-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "All rerere/variable/secret test stubs collected by pytest: `pytest packages/afhub/tests/test_client.py -q --collect-only -k 'rerere or variable or secret'`",
+          "No linter warnings: `ruff check packages/afhub/tests/test_client.py`",
+          "Requirements 01-REQ-4 acceptance criteria covered by TS-01-22 through TS-01-30"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "tests",
+      "title": "Write tests: Pydantic data models (REQ-5)",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Write tests for Workspace, Patch, and RebuildJob models",
+          "details": [
+            "In packages/afhub/tests/test_models.py, write tests for Workspace model: required fields parse correctly, optional fields default to None, extra fields are silently ignored (extra='ignore')",
+            "Write tests for Patch model: required fields, optional fields default to None, extra fields ignored",
+            "Write tests for RebuildJob model: required fields (id, status, created_at), all other fields optional with None default, extra fields ignored"
+          ],
+          "test_spec_refs": [
+            "TS-01-31",
+            "TS-01-32",
+            "TS-01-33"
+          ],
+          "requirement_refs": [
+            "01-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Write tests for PatchResult, SyncResult, RerereEntry, PatchStatusDashboard, and RebuildPreview models",
+          "details": [
+            "Write tests for PatchResult, SyncResult, and RerereEntry models: field parsing and extra='ignore' behavior",
+            "Write tests for PatchStatusDashboard with nested PatchDetail and PatchSummary (total_rerere_resolutions defaults to 0)",
+            "Write tests for RebuildPreview with nested RebuildPreviewPatchResult (status values: would_succeed, would_conflict)",
+            "Verify no Variable model is defined in models.py"
+          ],
+          "test_spec_refs": [
+            "TS-01-34",
+            "TS-01-35",
+            "TS-01-36"
+          ],
+          "requirement_refs": [
+            "01-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "All model tests collected by pytest: `pytest packages/afhub/tests/test_models.py -q --collect-only`",
+          "No linter warnings: `ruff check packages/afhub/tests/test_models.py`",
+          "Requirements 01-REQ-5 acceptance criteria covered by TS-01-31 through TS-01-36"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "tests",
+      "title": "Write tests: error hierarchy (REQ-6)",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Write tests for HubError base class and HTTP-status-mapped subclasses",
+          "details": [
+            "In packages/afhub/tests/test_errors.py, write tests for HubError carrying status_code, message, error_type",
+            "Write tests verifying 401 \u2192 HubAuthError, 403 \u2192 HubForbiddenError, 404 \u2192 HubNotFoundError, 409 \u2192 HubConflictError (with error_type stored)",
+            "Write tests verifying HubConflictError.error_type is accessible to callers"
+          ],
+          "test_spec_refs": [
+            "TS-01-37",
+            "TS-01-38",
+            "TS-01-39",
+            "TS-01-40"
+          ],
+          "requirement_refs": [
+            "01-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Write tests for 400 error_type dispatch and HubConnectionError",
+          "details": [
+            "Write tests verifying 400 + error_type='workspace_mode_mismatch' \u2192 HubModeError",
+            "Write tests verifying 400 + error_type='no_active_patches' \u2192 HubNoActivePatchesError",
+            "Write tests verifying 400 + unknown error_type \u2192 HubError (base class)",
+            "Write tests verifying HubConnectionError is raised after network-level failures",
+            "Write tests verifying all error classes are subclasses of HubError"
+          ],
+          "test_spec_refs": [
+            "TS-01-41",
+            "TS-01-42",
+            "TS-01-43",
+            "TS-01-44",
+            "TS-01-45"
+          ],
+          "requirement_refs": [
+            "01-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "All error hierarchy tests collected by pytest: `pytest packages/afhub/tests/test_errors.py -q --collect-only`",
+          "No linter warnings: `ruff check packages/afhub/tests/test_errors.py`",
+          "Requirements 01-REQ-6 acceptance criteria covered by TS-01-37 through TS-01-45"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "tests",
+      "title": "Write tests: auth helpers, polling helpers, and retry (REQ-7, REQ-8, REQ-9)",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Write tests for resolve_hub_pat and resolve_hub_url",
+          "details": [
+            "In packages/afhub/tests/test_auth.py, write tests for resolve_hub_pat: token_flag takes priority, then AF_HUB_TOKEN env var, then returns None",
+            "Write tests for resolve_hub_url: hub_url_flag takes priority, then AF_HUB_URL env var, then non-empty config_url, then returns None",
+            "Verify resolve_hub_url does not read any config file directly (config_url is pre-resolved by caller)"
+          ],
+          "test_spec_refs": [
+            "TS-01-46",
+            "TS-01-47",
+            "TS-01-48"
+          ],
+          "requirement_refs": [
+            "01-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Write tests for poll_rebuild and poll_clone_ready",
+          "details": [
+            "In packages/afhub/tests/test_polling.py, write async tests for poll_rebuild: returns RebuildJob on terminal status (completed/failed/dead_letter/cancelled), raises TimeoutError on timeout, surfaces HubConnectionError immediately",
+            "Write async tests for poll_clone_ready: returns Workspace on clone_status='ready', raises HubError(error_type='clone_failed') on clone_status='failed', raises TimeoutError on timeout, surfaces HubConnectionError immediately",
+            "Patch asyncio.sleep with AsyncMock to avoid real delays: `unittest.mock.patch('asyncio.sleep', new_callable=AsyncMock)`"
+          ],
+          "test_spec_refs": [
+            "TS-01-49",
+            "TS-01-50",
+            "TS-01-51"
+          ],
+          "requirement_refs": [
+            "01-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Write tests for transient retry with exponential backoff",
+          "details": [
+            "In packages/afhub/tests/test_client.py, write async tests verifying ConnectTimeout, ReadTimeout, ConnectError trigger retries up to 3 times",
+            "Write test verifying exponential backoff delays: base 1s, factor 2, cap 30s",
+            "Write test verifying HubConnectionError is raised after all 3 retries are exhausted",
+            "Write test verifying non-transient httpx exceptions are NOT retried"
+          ],
+          "test_spec_refs": [
+            "TS-01-52",
+            "TS-01-53"
+          ],
+          "requirement_refs": [
+            "01-REQ-9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Write tests for API versioning and package layout (REQ-10)",
+          "details": [
+            "Write tests verifying all HubClient requests use /api/v1/ prefix",
+            "Write tests verifying Pydantic extra='ignore' tolerates unknown fields in responses",
+            "Write test verifying pyproject.toml declares httpx>=0.27 and pydantic>=2.0 dependencies",
+            "Write test verifying all public symbols are importable from afhub.__init__"
+          ],
+          "test_spec_refs": [
+            "TS-01-54",
+            "TS-01-55",
+            "TS-01-56",
+            "TS-01-57"
+          ],
+          "requirement_refs": [
+            "01-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "All auth, polling, and retry tests collected by pytest: `pytest packages/afhub/tests/test_auth.py packages/afhub/tests/test_polling.py -q --collect-only`",
+          "No linter warnings: `ruff check packages/afhub/tests/`",
+          "Requirements 01-REQ-7, 01-REQ-8, 01-REQ-9, 01-REQ-10 acceptance criteria covered by TS-01-46 through TS-01-57"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Scaffold package layout and pyproject.toml",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Create packages/afhub/ directory structure and pyproject.toml",
+          "details": [
+            "Create packages/afhub/pyproject.toml with package name 'afhub', version '0.1.0', python>=3.12",
+            "Declare runtime dependencies: httpx>=0.27, pydantic>=2.0",
+            "Declare dev/test dependencies: pytest, pytest-asyncio",
+            "Add [tool.pytest.ini_options] with asyncio_mode = 'auto'",
+            "Create empty stub files: afhub/__init__.py, afhub/client.py, afhub/models.py, afhub/errors.py, afhub/auth.py, afhub/polling.py, afhub/_http.py",
+            "Create tests/__init__.py and empty test files mirroring packages/afissues/tests/ layout"
+          ],
+          "test_spec_refs": [
+            "TS-01-54",
+            "TS-01-57"
+          ],
+          "requirement_refs": [
+            "01-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Package is importable: `python -c 'import afhub'` succeeds from packages/afhub/",
+          "pyproject.toml parses correctly and declares correct dependencies",
+          "pytest collects tests without import errors: `pytest packages/afhub/tests/ --collect-only -q`",
+          "No linter warnings: `ruff check packages/afhub/`"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement error hierarchy (errors.py)",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Implement HubError base class and HTTP-status subclasses",
+          "details": [
+            "In afhub/errors.py, implement HubError(Exception) with __init__(self, *, status_code: int, message: str, error_type: str = '')",
+            "Implement HubAuthError(HubError) for 401, HubForbiddenError(HubError) for 403, HubNotFoundError(HubError) for 404",
+            "Implement HubConflictError(HubError) for 409 \u2014 store error_type for caller inspection",
+            "Implement HubConnectionError(HubError) for network-level failures"
+          ],
+          "test_spec_refs": [
+            "TS-01-37",
+            "TS-01-38",
+            "TS-01-39",
+            "TS-01-40",
+            "TS-01-44"
+          ],
+          "requirement_refs": [
+            "01-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Implement 400 error_type-dispatched subclasses",
+          "details": [
+            "Implement HubModeError(HubError) for error_type='workspace_mode_mismatch'",
+            "Implement HubNoActivePatchesError(HubError) for error_type='no_active_patches'",
+            "Implement _raise_for_status(response) helper that parses the error envelope and raises the correct exception class based on status code and error_type",
+            "For 400 + unknown error_type, raise HubError (base class)"
+          ],
+          "test_spec_refs": [
+            "TS-01-41",
+            "TS-01-42",
+            "TS-01-43",
+            "TS-01-45"
+          ],
+          "requirement_refs": [
+            "01-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "Error hierarchy tests pass: `pytest packages/afhub/tests/test_errors.py -q`",
+          "All error classes are subclasses of HubError",
+          "No linter warnings: `ruff check packages/afhub/afhub/errors.py`",
+          "Requirements 01-REQ-6 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "standard",
+      "title": "Implement Pydantic data models (models.py)",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Implement Workspace, Patch, and RebuildJob models",
+          "details": [
+            "In afhub/models.py, implement Workspace with model_config=ConfigDict(extra='ignore'), required fields (slug, git_url, workspace_mode, status, clone_status, sync_status), optional fields defaulting to None",
+            "Implement Patch with required fields (id, workspace_slug, branch_name, position, status, added_at, updated_at) and optional fields (conflict_files, upstream_pr_url, description, deleted_at)",
+            "Implement RebuildJob with required fields (id, status, created_at) and optional fields (strategy, error, patch_results, integration_head_sha, previous_integration_head_sha, completed_at)"
+          ],
+          "test_spec_refs": [
+            "TS-01-31",
+            "TS-01-32",
+            "TS-01-33"
+          ],
+          "requirement_refs": [
+            "01-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Implement PatchResult, SyncResult, RerereEntry, PatchStatusDashboard, and RebuildPreview models",
+          "details": [
+            "Implement PatchResult, SyncResult, and RerereEntry with extra='ignore'",
+            "Implement PatchStatusDashboard with nested PatchDetail and PatchSummary (total_rerere_resolutions defaults to 0)",
+            "Implement RebuildPreview with nested RebuildPreviewPatchResult",
+            "Ensure no Variable model is defined \u2014 variable responses are opaque"
+          ],
+          "test_spec_refs": [
+            "TS-01-34",
+            "TS-01-35",
+            "TS-01-36"
+          ],
+          "requirement_refs": [
+            "01-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "Model tests pass: `pytest packages/afhub/tests/test_models.py -q`",
+          "All models use ConfigDict(extra='ignore') \u2014 verify with grep or AST inspection",
+          "No linter warnings: `ruff check packages/afhub/afhub/models.py`",
+          "Requirements 01-REQ-5 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "standard",
+      "title": "Implement auth helpers (auth.py)",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Implement resolve_hub_pat and resolve_hub_url",
+          "details": [
+            "In afhub/auth.py, implement resolve_hub_pat(*, token_flag: str | None = None, env_var: str = 'AF_HUB_TOKEN') -> str | None",
+            "Priority: token_flag \u2192 os.environ.get(env_var) \u2192 None",
+            "Implement resolve_hub_url(*, hub_url_flag: str | None = None, config_url: str = '', env_var: str = 'AF_HUB_URL') -> str | None",
+            "Priority: hub_url_flag \u2192 os.environ.get(env_var) \u2192 non-empty config_url \u2192 None",
+            "Do NOT read any config file inside resolve_hub_url \u2014 config_url is pre-resolved by caller"
+          ],
+          "test_spec_refs": [
+            "TS-01-46",
+            "TS-01-47",
+            "TS-01-48"
+          ],
+          "requirement_refs": [
+            "01-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "Auth helper tests pass: `pytest packages/afhub/tests/test_auth.py -q`",
+          "No linter warnings: `ruff check packages/afhub/afhub/auth.py`",
+          "Requirements 01-REQ-7 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "kind": "standard",
+      "title": "Implement retry logic and shared HTTP session (_http.py)",
+      "subtasks": [
+        {
+          "id": "12.1",
+          "title": "Implement shared httpx session and exponential backoff retry",
+          "details": [
+            "In afhub/_http.py, implement an async request helper that wraps httpx.AsyncClient calls with retry logic",
+            "Catch httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError (specific named subclasses, not base TimeoutException)",
+            "Retry up to 3 times with exponential backoff: base 1s, factor 2, cap 30s (delays: 1s, 2s, 4s)",
+            "After exhausting retries, raise HubConnectionError",
+            "Non-transient exceptions propagate immediately without retry"
+          ],
+          "test_spec_refs": [
+            "TS-01-52",
+            "TS-01-53"
+          ],
+          "requirement_refs": [
+            "01-REQ-9"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "12.V",
+        "checks": [
+          "Retry tests pass: `pytest packages/afhub/tests/test_client.py -q -k retry`",
+          "No linter warnings: `ruff check packages/afhub/afhub/_http.py`",
+          "Requirements 01-REQ-9 acceptance criteria met: 3 retries, correct backoff delays, HubConnectionError raised after exhaustion"
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "kind": "standard",
+      "title": "Implement HubClient \u2014 workspace and patch operations (client.py)",
+      "subtasks": [
+        {
+          "id": "13.1",
+          "title": "Implement HubClient.__init__, aclose, and async context manager",
+          "details": [
+            "In afhub/client.py, implement HubClient.__init__(self, endpoint_url: str, pat: str) creating a single shared httpx.AsyncClient",
+            "Set Authorization: Bearer <pat> as a default header on the AsyncClient",
+            "Implement async aclose(self) that calls await self._client.aclose()",
+            "Implement __aenter__ and __aexit__ for async context manager support",
+            "All request paths must use /api/v1/ prefix"
+          ],
+          "test_spec_refs": [
+            "TS-01-1",
+            "TS-01-2",
+            "TS-01-54"
+          ],
+          "requirement_refs": [
+            "01-REQ-1",
+            "01-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "13.2",
+          "title": "Implement workspace operation methods",
+          "details": [
+            "Implement get_workspace(slug: str) -> Workspace: GET /api/v1/workspaces/:slug",
+            "Implement sync_workspace(slug: str, *, reset_to_upstream: bool = False) -> SyncResult: POST /api/v1/workspaces/:slug/sync",
+            "Implement get_patch_status(slug: str) -> PatchStatusDashboard: GET /api/v1/workspaces/:slug/patch-status",
+            "Implement reclone_workspace(slug: str) -> Workspace: POST /api/v1/workspaces/:slug/reclone",
+            "Use _raise_for_status from errors.py for all error handling"
+          ],
+          "test_spec_refs": [
+            "TS-01-3",
+            "TS-01-4",
+            "TS-01-5",
+            "TS-01-6",
+            "TS-01-7"
+          ],
+          "requirement_refs": [
+            "01-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "13.3",
+          "title": "Implement patch operation methods",
+          "details": [
+            "Implement list_patches(slug: str) -> list[Patch]: GET /api/v1/workspaces/:slug/patches",
+            "Implement add_patch(slug, branch_name, *, position=None, upstream_pr_url=None, description=None, skip_branch_check=False, if_not_exists=False) -> Patch: POST with single-object body, 201",
+            "Implement add_patches_batch(slug: str, patches: list[dict]) -> list[Patch]: POST with JSON array body, 201",
+            "Implement update_patch(slug, patch_id, **kwargs) -> Patch: PATCH /patches/:id",
+            "Implement remove_patch(slug, patch_id) -> None: DELETE /patches/:id, 204",
+            "Implement restore_patch(slug, patch_id) -> Patch: POST /patches/:id/restore",
+            "Implement reorder_patches(slug, patch_ids) -> list[Patch]: POST /patches/reorder"
+          ],
+          "test_spec_refs": [
+            "TS-01-8",
+            "TS-01-9",
+            "TS-01-10",
+            "TS-01-11",
+            "TS-01-12",
+            "TS-01-13",
+            "TS-01-14"
+          ],
+          "requirement_refs": [
+            "01-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "13.V",
+        "checks": [
+          "Workspace and patch operation tests pass: `pytest packages/afhub/tests/test_client.py -q -k 'workspace or patch'`",
+          "No linter warnings: `ruff check packages/afhub/afhub/client.py`",
+          "Requirements 01-REQ-1 and 01-REQ-2 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "kind": "standard",
+      "title": "Implement HubClient \u2014 rebuild, rerere, variables, and secrets (client.py)",
+      "subtasks": [
+        {
+          "id": "14.1",
+          "title": "Implement rebuild operation methods",
+          "details": [
+            "Implement submit_rebuild(slug, *, strategy=None, fail_mode=None) -> RebuildJob: POST /api/v1/workspaces/:slug/rebuild, 202",
+            "Implement get_rebuild(slug, rebuild_id) -> RebuildJob: GET /rebuilds/:id",
+            "Implement list_rebuilds(slug) -> list[RebuildJob]: GET /rebuilds, unwrap {\"jobs\": [...]}",
+            "Implement cancel_rebuild(slug, rebuild_id) -> RebuildJob: DELETE /rebuilds/:id",
+            "Implement requeue_rebuild(slug, rebuild_id) -> RebuildJob: POST /rebuilds/:id/requeue",
+            "Implement rollback_rebuild(slug, rebuild_id) -> str: POST /rebuilds/:id/rollback, extract previous_integration_head_sha",
+            "Implement get_rebuild_preview(slug) -> RebuildPreview: GET /rebuild-preview"
+          ],
+          "test_spec_refs": [
+            "TS-01-15",
+            "TS-01-16",
+            "TS-01-17",
+            "TS-01-18",
+            "TS-01-19",
+            "TS-01-20",
+            "TS-01-21"
+          ],
+          "requirement_refs": [
+            "01-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "14.2",
+          "title": "Implement rerere, variable, and secret operation methods",
+          "details": [
+            "Implement list_rerere(slug) -> list[RerereEntry]: GET /rerere, unwrap {\"resolutions\": [...]}",
+            "Implement forget_rerere(slug, pathspec) -> None: DELETE /rerere/*pathspec, 204",
+            "Implement create_variable(slug, key, value) -> None: POST /vars, 201",
+            "Implement update_variable(slug, key, value) -> None: PATCH /vars/:key",
+            "Implement set_variable(slug, key, value) -> None: try PATCH, fallback to POST on HubNotFoundError",
+            "Implement delete_variable(slug, key) -> None: DELETE /vars/:key, 204",
+            "Implement get_resolved_variables(slug) -> dict[str, str]: GET /vars/resolved",
+            "Implement create_secret(slug, key, value) -> None: POST /secrets, 201"
+          ],
+          "test_spec_refs": [
+            "TS-01-22",
+            "TS-01-23",
+            "TS-01-24",
+            "TS-01-25",
+            "TS-01-26",
+            "TS-01-27",
+            "TS-01-28",
+            "TS-01-29",
+            "TS-01-30"
+          ],
+          "requirement_refs": [
+            "01-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "14.V",
+        "checks": [
+          "Rebuild, rerere, variable, and secret tests pass: `pytest packages/afhub/tests/test_client.py -q -k 'rebuild or rerere or variable or secret'`",
+          "No linter warnings: `ruff check packages/afhub/afhub/client.py`",
+          "Requirements 01-REQ-3 and 01-REQ-4 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 15,
+      "kind": "standard",
+      "title": "Implement polling helpers (polling.py)",
+      "subtasks": [
+        {
+          "id": "15.1",
+          "title": "Implement poll_rebuild",
+          "details": [
+            "In afhub/polling.py, implement poll_rebuild(client, slug, rebuild_id, *, timeout=600.0, interval=5.0) -> RebuildJob",
+            "Poll get_rebuild() until status is one of: completed, failed, dead_letter, cancelled",
+            "Call asyncio.sleep(interval) between polls",
+            "Raise TimeoutError if timeout seconds elapse before terminal status",
+            "If HubConnectionError propagates from get_rebuild(), abort immediately and surface to caller"
+          ],
+          "test_spec_refs": [
+            "TS-01-49",
+            "TS-01-50"
+          ],
+          "requirement_refs": [
+            "01-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "15.2",
+          "title": "Implement poll_clone_ready",
+          "details": [
+            "Implement poll_clone_ready(client, slug, *, timeout=300.0, interval=5.0) -> Workspace",
+            "Poll get_workspace() until clone_status is 'ready' or 'failed'",
+            "If clone_status is 'failed', raise HubError(status_code=0, error_type='clone_failed', message=workspace.clone_error or 'Workspace clone failed')",
+            "Call asyncio.sleep(interval) between polls",
+            "Raise TimeoutError if timeout elapses before terminal clone status",
+            "If HubConnectionError propagates from get_workspace(), abort immediately and surface to caller"
+          ],
+          "test_spec_refs": [
+            "TS-01-51"
+          ],
+          "requirement_refs": [
+            "01-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "15.V",
+        "checks": [
+          "Polling tests pass: `pytest packages/afhub/tests/test_polling.py -q`",
+          "asyncio.sleep is patched in tests \u2014 no real delays occur",
+          "No linter warnings: `ruff check packages/afhub/afhub/polling.py`",
+          "Requirements 01-REQ-8 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "kind": "standard",
+      "title": "Wire public exports in __init__.py",
+      "subtasks": [
+        {
+          "id": "16.1",
+          "title": "Populate afhub/__init__.py with all public exports",
+          "details": [
+            "Export HubClient from afhub.client",
+            "Export all Pydantic models: Workspace, Patch, RebuildJob, PatchResult, SyncResult, RerereEntry, PatchStatusDashboard, PatchDetail, PatchSummary, RebuildPreview, RebuildPreviewPatchResult",
+            "Export all error classes: HubError, HubAuthError, HubForbiddenError, HubNotFoundError, HubConflictError, HubConnectionError, HubModeError, HubNoActivePatchesError",
+            "Export auth helpers: resolve_hub_pat, resolve_hub_url",
+            "Export polling helpers: poll_rebuild, poll_clone_ready",
+            "Define __all__ listing all exported symbols"
+          ],
+          "test_spec_refs": [
+            "TS-01-57"
+          ],
+          "requirement_refs": [
+            "01-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "16.V",
+        "checks": [
+          "All public symbols importable: `python -c 'from afhub import HubClient, Workspace, Patch, RebuildJob, HubError, resolve_hub_pat, poll_rebuild'`",
+          "No linter warnings: `ruff check packages/afhub/afhub/__init__.py`",
+          "Requirements 01-REQ-10 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 17,
+      "kind": "checkpoint",
+      "title": "Full test suite green checkpoint",
+      "subtasks": [
+        {
+          "id": "17.1",
+          "title": "Run full test suite and verify all tests pass",
+          "details": [
+            "Run `pytest packages/afhub/tests/ -q` and confirm zero failures",
+            "Verify test coverage spans all modules: client.py, models.py, errors.py, auth.py, polling.py, _http.py",
+            "Confirm asyncio_mode=auto is active and all async tests run without warnings"
+          ],
+          "test_spec_refs": [
+            "TS-01-1",
+            "TS-01-2",
+            "TS-01-3",
+            "TS-01-4",
+            "TS-01-5",
+            "TS-01-6",
+            "TS-01-7",
+            "TS-01-8",
+            "TS-01-9",
+            "TS-01-10"
+          ],
+          "requirement_refs": [
+            "01-REQ-1",
+            "01-REQ-2",
+            "01-REQ-3",
+            "01-REQ-4",
+            "01-REQ-5",
+            "01-REQ-6",
+            "01-REQ-7",
+            "01-REQ-8",
+            "01-REQ-9",
+            "01-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "17.2",
+          "title": "Run linter across entire package",
+          "details": [
+            "Run `ruff check packages/afhub/` and confirm zero warnings",
+            "Verify no unused imports, no undefined names, no style violations"
+          ],
+          "test_spec_refs": [
+            "TS-01-54"
+          ],
+          "requirement_refs": [
+            "01-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "17.V",
+        "checks": [
+          "Full test suite passes: `pytest packages/afhub/tests/ -q` exits 0",
+          "No linter warnings: `ruff check packages/afhub/` exits 0",
+          "All 57 test cases (TS-01-1 through TS-01-57) are collected and pass"
+        ]
+      }
+    },
+    {
+      "id": 18,
+      "kind": "wiring_verification",
+      "title": "Wiring verification: end-to-end integration and dead-code audit",
+      "subtasks": [
+        {
+          "id": "18.1",
+          "title": "Trace execution paths from HubClient methods through _http.py retry logic",
+          "details": [
+            "Verify each HubClient method calls the shared httpx session in _http.py (not a raw httpx.AsyncClient directly)",
+            "Confirm retry logic in _http.py is invoked on ConnectTimeout, ReadTimeout, ConnectError",
+            "Confirm _raise_for_status from errors.py is called after every HTTP response",
+            "Verify no stub remains: search for `raise NotImplementedError`, `pass` in non-abstract methods, bare `return None` in methods that should return a model"
+          ],
+          "test_spec_refs": [
+            "TS-01-52",
+            "TS-01-53"
+          ],
+          "requirement_refs": [
+            "01-REQ-1",
+            "01-REQ-9"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "18.2",
+          "title": "Verify return value propagation for all HubClient methods",
+          "details": [
+            "Confirm get_workspace returns a Workspace instance (not raw dict)",
+            "Confirm list_rebuilds unwraps {\"jobs\": [...]} and returns list[RebuildJob]",
+            "Confirm rollback_rebuild extracts previous_integration_head_sha and returns str",
+            "Confirm list_rerere unwraps {\"resolutions\": [...]} and returns list[RerereEntry]",
+            "Confirm all void methods (remove_patch, forget_rerere, create_variable, update_variable, delete_variable, create_secret) return None"
+          ],
+          "test_spec_refs": [
+            "TS-01-12",
+            "TS-01-17",
+            "TS-01-20",
+            "TS-01-22",
+            "TS-01-24",
+            "TS-01-27",
+            "TS-01-29",
+            "TS-01-30"
+          ],
+          "requirement_refs": [
+            "01-REQ-2",
+            "01-REQ-3",
+            "01-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "18.3",
+          "title": "Stub and dead-code audit",
+          "details": [
+            "Search for `raise NotImplementedError` in all afhub/*.py files \u2014 must find zero occurrences",
+            "Search for bare `pass` in non-abstract method bodies \u2014 must find zero occurrences",
+            "Search for TODO/FIXME comments indicating unfinished implementation",
+            "Verify set_variable fallback path (PATCH \u2192 404 \u2192 POST) is wired and not dead code",
+            "Verify poll_rebuild and poll_clone_ready are importable from afhub and callable"
+          ],
+          "test_spec_refs": [
+            "TS-01-26",
+            "TS-01-49",
+            "TS-01-51"
+          ],
+          "requirement_refs": [
+            "01-REQ-4",
+            "01-REQ-8"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "18.4",
+          "title": "Verify public API surface and __init__.py exports",
+          "details": [
+            "Confirm all symbols listed in __all__ are importable: `python -c 'import afhub; print(afhub.__all__)'`",
+            "Confirm no private symbols (prefixed with _) are accidentally exported",
+            "Verify HubClient can be used as async context manager end-to-end with a mocked httpx.AsyncClient",
+            "Confirm resolve_hub_pat and resolve_hub_url are callable from afhub namespace"
+          ],
+          "test_spec_refs": [
+            "TS-01-55",
+            "TS-01-56",
+            "TS-01-57"
+          ],
+          "requirement_refs": [
+            "01-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "18.5",
+          "title": "Run smoke tests and full regression suite",
+          "details": [
+            "Run full test suite: `pytest packages/afhub/tests/ -q` \u2014 must exit 0",
+            "Run linter: `ruff check packages/afhub/` \u2014 must exit 0",
+            "Verify asyncio_mode=auto is configured and no PytestUnraisableExceptionWarning appears",
+            "Confirm all 57 test cases (TS-01-1 through TS-01-57) pass"
+          ],
+          "test_spec_refs": [
+            "TS-01-1",
+            "TS-01-2",
+            "TS-01-3",
+            "TS-01-4",
+            "TS-01-5",
+            "TS-01-6",
+            "TS-01-7",
+            "TS-01-8",
+            "TS-01-9",
+            "TS-01-10",
+            "TS-01-11",
+            "TS-01-12",
+            "TS-01-13",
+            "TS-01-14",
+            "TS-01-15",
+            "TS-01-SMOKE-1"
+          ],
+          "requirement_refs": [
+            "01-REQ-1",
+            "01-REQ-2",
+            "01-REQ-3",
+            "01-REQ-4",
+            "01-REQ-5",
+            "01-REQ-6",
+            "01-REQ-7",
+            "01-REQ-8",
+            "01-REQ-9",
+            "01-REQ-10"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "18.V",
+        "checks": [
+          "Full test suite passes: `pytest packages/afhub/tests/ -q` exits 0 with all 57 tests collected and passing",
+          "No linter warnings: `ruff check packages/afhub/` exits 0",
+          "Zero occurrences of `raise NotImplementedError` or bare `pass` in afhub/*.py implementation files",
+          "All public exports importable from afhub namespace: `python -c 'from afhub import HubClient, Workspace, Patch, RebuildJob, PatchResult, SyncResult, RerereEntry, PatchStatusDashboard, PatchDetail, PatchSummary, RebuildPreview, RebuildPreviewPatchResult, HubError, HubAuthError, HubForbiddenError, HubNotFoundError, HubConflictError, HubConnectionError, HubModeError, HubNoActivePatchesError, resolve_hub_pat, resolve_hub_url, poll_rebuild, poll_clone_ready'`",
+          "set_variable fallback path verified by TS-01-26 passing",
+          "poll_rebuild and poll_clone_ready verified by TS-01-49, TS-01-50, TS-01-51 passing",
+          "Smoke test TS-01-SMOKE-1 passes: end-to-end HubClient + poll_rebuild flow with mocked responses"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "01-REQ-1",
+      "test_spec_id": "TS-01-1",
+      "task_id": "13.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1",
+      "test_spec_id": "TS-01-2",
+      "task_id": "13.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1",
+      "test_spec_id": "TS-01-3",
+      "task_id": "13.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1",
+      "test_spec_id": "TS-01-4",
+      "task_id": "13.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1",
+      "test_spec_id": "TS-01-5",
+      "task_id": "13.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1",
+      "test_spec_id": "TS-01-6",
+      "task_id": "13.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1",
+      "test_spec_id": "TS-01-7",
+      "task_id": "13.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2",
+      "test_spec_id": "TS-01-8",
+      "task_id": "13.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2",
+      "test_spec_id": "TS-01-9",
+      "task_id": "13.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2",
+      "test_spec_id": "TS-01-10",
+      "task_id": "13.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2",
+      "test_spec_id": "TS-01-11",
+      "task_id": "13.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2",
+      "test_spec_id": "TS-01-12",
+      "task_id": "13.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2",
+      "test_spec_id": "TS-01-13",
+      "task_id": "13.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-2",
+      "test_spec_id": "TS-01-14",
+      "task_id": "13.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3",
+      "test_spec_id": "TS-01-15",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3",
+      "test_spec_id": "TS-01-16",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3",
+      "test_spec_id": "TS-01-17",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3",
+      "test_spec_id": "TS-01-18",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3",
+      "test_spec_id": "TS-01-19",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3",
+      "test_spec_id": "TS-01-20",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-3",
+      "test_spec_id": "TS-01-21",
+      "task_id": "14.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4",
+      "test_spec_id": "TS-01-22",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4",
+      "test_spec_id": "TS-01-23",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4",
+      "test_spec_id": "TS-01-24",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4",
+      "test_spec_id": "TS-01-25",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4",
+      "test_spec_id": "TS-01-26",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4",
+      "test_spec_id": "TS-01-27",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4",
+      "test_spec_id": "TS-01-28",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4",
+      "test_spec_id": "TS-01-29",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-4",
+      "test_spec_id": "TS-01-30",
+      "task_id": "14.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5",
+      "test_spec_id": "TS-01-31",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5",
+      "test_spec_id": "TS-01-32",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5",
+      "test_spec_id": "TS-01-33",
+      "task_id": "10.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5",
+      "test_spec_id": "TS-01-34",
+      "task_id": "10.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5",
+      "test_spec_id": "TS-01-35",
+      "task_id": "10.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-5",
+      "test_spec_id": "TS-01-36",
+      "task_id": "10.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6",
+      "test_spec_id": "TS-01-37",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6",
+      "test_spec_id": "TS-01-38",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6",
+      "test_spec_id": "TS-01-39",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6",
+      "test_spec_id": "TS-01-40",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6",
+      "test_spec_id": "TS-01-41",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6",
+      "test_spec_id": "TS-01-42",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6",
+      "test_spec_id": "TS-01-43",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6",
+      "test_spec_id": "TS-01-44",
+      "task_id": "9.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-6",
+      "test_spec_id": "TS-01-45",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-7",
+      "test_spec_id": "TS-01-46",
+      "task_id": "11.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-7",
+      "test_spec_id": "TS-01-47",
+      "task_id": "11.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-7",
+      "test_spec_id": "TS-01-48",
+      "task_id": "11.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-8",
+      "test_spec_id": "TS-01-49",
+      "task_id": "15.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-8",
+      "test_spec_id": "TS-01-50",
+      "task_id": "15.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-8",
+      "test_spec_id": "TS-01-51",
+      "task_id": "15.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-9",
+      "test_spec_id": "TS-01-52",
+      "task_id": "12.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-9",
+      "test_spec_id": "TS-01-53",
+      "task_id": "12.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-10",
+      "test_spec_id": "TS-01-54",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-10",
+      "test_spec_id": "TS-01-55",
+      "task_id": "16.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-10",
+      "test_spec_id": "TS-01-56",
+      "task_id": "16.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-10",
+      "test_spec_id": "TS-01-57",
+      "task_id": "16.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "01-REQ-1",
+      "test_spec_id": "TS-01-SMOKE-1",
+      "task_id": "18.1",
+      "test_path": "packages/afhub/tests/test_client.py::test_smoke"
+    }
+  ]
+}

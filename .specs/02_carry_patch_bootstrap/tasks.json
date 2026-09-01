@@ -1,0 +1,1069 @@
+{
+  "$schema": null,
+  "spec_id": "02",
+  "spec_name": "carry_patch_bootstrap",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v",
+    "all_tests": "pytest packages/ -q",
+    "linter": "ruff check packages/agentfox/agentfox/core/config.py packages/nightshift/nightshift/app.py"
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "afhub_client",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "Imports HubClient, resolve_hub_url, resolve_hub_pat, HubAuthError, HubNotFoundError, HubConnectionError, HubForbiddenError",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write tests for HubConfig and CarryPatchConfig Pydantic models (REQ-1)",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write tests for HubConfig defaults and field validation",
+          "details": [
+            "In `packages/agentfox/tests/test_carry_patch_config.py`, write tests for `HubConfig`",
+            "Test that `HubConfig()` instantiates with `endpoint_url=''` by default (TS-02-1)",
+            "Test that `HubConfig(endpoint_url='https://hub.example.com')` stores the value correctly (TS-02-2)",
+            "Test that extra fields are silently ignored via `extra='ignore'` (TS-02-5)"
+          ],
+          "test_spec_refs": [
+            "TS-02-1",
+            "TS-02-2",
+            "TS-02-5"
+          ],
+          "requirement_refs": [
+            "02-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write tests for CarryPatchConfig defaults and Clamped clamping behavior",
+          "details": [
+            "Test that `CarryPatchConfig()` instantiates with all expected defaults: `enabled=False`, `workspace=''`, `check_interval=300`, `auto_resolve=True`, `rebuild_timeout=600`, `rebuild_poll_interval=5`, `max_resolve_retries=2` (TS-02-3)",
+            "Test that `check_interval` below 60 is clamped to 60 (TS-02-4)",
+            "Test that `rebuild_poll_interval` below 2 is clamped to 2 (TS-02-4)",
+            "Test that `max_resolve_retries` above 10 is clamped to 10 (TS-02-4)",
+            "Test that `max_resolve_retries` below 0 is clamped to 0 (TS-02-4)"
+          ],
+          "test_spec_refs": [
+            "TS-02-3",
+            "TS-02-4"
+          ],
+          "requirement_refs": [
+            "02-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write tests for AgentFoxConfig backward compatibility with new fields",
+          "details": [
+            "Test that `AgentFoxConfig` loads cleanly from a config dict that has no `[hub]` or `[carry_patch]` sections, using default_factory (TS-02-6)",
+            "Test that `AgentFoxConfig` exposes `.hub` as a `HubConfig` instance and `.carry_patch` as a `CarryPatchConfig` instance (TS-02-6)",
+            "Confirm no `ValidationError` is raised when loading legacy config without the new sections"
+          ],
+          "test_spec_refs": [
+            "TS-02-6"
+          ],
+          "requirement_refs": [
+            "02-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All tests in `packages/agentfox/tests/test_carry_patch_config.py` are collected and pass: `pytest packages/agentfox/tests/test_carry_patch_config.py -v`",
+          "No linter warnings in the test file: `ruff check packages/agentfox/tests/test_carry_patch_config.py`",
+          "TS-02-1 through TS-02-6 are all covered by at least one test function"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write tests for CLI flag 3-tier resolution (REQ-2)",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write tests for hub URL 3-tier resolution and carry-patch mode activation",
+          "details": [
+            "In `packages/nightshift/tests/test_carry_patch_startup.py`, write `test_hub_url_from_flag`: CLI `--hub-url` takes precedence over env and config (TS-02-7)",
+            "Write `test_hub_url_from_env`: `AF_HUB_URL` env var is used when no CLI flag is given (TS-02-8)",
+            "Write `test_hub_url_from_config`: `config.hub.endpoint_url` is used when neither flag nor env is set (TS-02-9)",
+            "Write `test_hub_url_only_skips_carry_patch`: resolving `--hub-url` alone (without `--workspace` and `--token`) does not activate carry-patch mode (TS-02-13)"
+          ],
+          "test_spec_refs": [
+            "TS-02-7",
+            "TS-02-8",
+            "TS-02-9",
+            "TS-02-13"
+          ],
+          "requirement_refs": [
+            "02-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write tests for workspace slug 3-tier resolution",
+          "details": [
+            "Write `test_workspace_from_flag`: `--workspace` CLI flag is used first (TS-02-14)",
+            "Write `test_workspace_from_env`: `AF_WORKSPACE` env var is used when no CLI flag is given (TS-02-15)",
+            "Write `test_workspace_from_config`: `config.carry_patch.workspace` is used as fallback (TS-02-15)",
+            "Inline resolution logic: `resolved_slug = workspace_flag or os.environ.get('AF_WORKSPACE', '') or config.carry_patch.workspace`"
+          ],
+          "test_spec_refs": [
+            "TS-02-14",
+            "TS-02-15"
+          ],
+          "requirement_refs": [
+            "02-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write tests for token resolution and error exit conditions",
+          "details": [
+            "Write `test_missing_token_exits`: when `--workspace` is resolved but no token from any source, nightshift exits with error explaining PAT is required (TS-02-10)",
+            "Write `test_missing_hub_url_exits`: when carry-patch mode is active but hub URL cannot be resolved, nightshift exits with error (TS-02-11)",
+            "Write `test_no_workspace_no_token_skips_carry_patch`: when neither workspace nor token is provided, carry-patch mode is skipped and nightshift runs normally (TS-02-12)"
+          ],
+          "test_spec_refs": [
+            "TS-02-10",
+            "TS-02-11",
+            "TS-02-12"
+          ],
+          "requirement_refs": [
+            "02-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All CLI resolution tests in `packages/nightshift/tests/test_carry_patch_startup.py` are collected: `pytest packages/nightshift/tests/test_carry_patch_startup.py -k 'hub_url or workspace or token or skips' -v`",
+          "TS-02-7 through TS-02-15 are each covered by a named test function",
+          "No linter warnings: `ruff check packages/nightshift/tests/test_carry_patch_startup.py`"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write tests for CWD validation sequence steps 1\u20135 (REQ-3)",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write tests for get_workspace API error exits (REQ-3 step 1)",
+          "details": [
+            "Write `test_get_workspace_auth_error_exits`: mock `HubClient.get_workspace` to raise `HubAuthError`; assert `sys.exit(1)` is called and error message references invalid PAT or slug (TS-02-16)",
+            "Write `test_get_workspace_not_found_exits`: mock `HubClient.get_workspace` to raise `HubNotFoundError`; assert `sys.exit(1)` is called (TS-02-17)",
+            "Use `pytest.raises(SystemExit)` and `click.testing.CliRunner` or direct async helper invocation via `asyncio.run()`"
+          ],
+          "test_spec_refs": [
+            "TS-02-16",
+            "TS-02-17"
+          ],
+          "requirement_refs": [
+            "02-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write tests for workspace_mode and clone_status validation exits (REQ-3 steps 2\u20133)",
+          "details": [
+            "Write `test_wrong_workspace_mode_exits`: mock `get_workspace` returning `workspace_mode='standard'`; assert exit with error (TS-02-18)",
+            "Write `test_clone_status_pending_exits`: mock `clone_status='pending'`; assert exit with error indicating clone not ready (TS-02-19)",
+            "Write `test_clone_status_failed_exits`: mock `clone_status='failed'`; assert exit with error (TS-02-20)"
+          ],
+          "test_spec_refs": [
+            "TS-02-18",
+            "TS-02-19",
+            "TS-02-20"
+          ],
+          "requirement_refs": [
+            "02-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write tests for git subprocess failure modes (REQ-3 step 4)",
+          "details": [
+            "Write `test_git_not_installed_exits`: mock `subprocess.run` to raise `FileNotFoundError`; assert exit with verbatim message `'git is not installed or not in PATH; nightshift requires git'` (TS-02-21)",
+            "Write `test_no_git_repo_exits`: mock `subprocess.run` returning non-zero returncode with stderr; assert exit with stderr detail (TS-02-22)",
+            "Write `test_git_timeout_exits`: mock `subprocess.run` to raise `subprocess.TimeoutExpired`; assert exit with a timeout-related error message (TS-02-23)"
+          ],
+          "test_spec_refs": [
+            "TS-02-21",
+            "TS-02-22",
+            "TS-02-23"
+          ],
+          "requirement_refs": [
+            "02-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Write tests for origin URL mismatch and validation success (REQ-3 steps 5\u20136)",
+          "details": [
+            "Write `test_origin_url_mismatch_exits`: mock subprocess returning a URL different from `workspace.git_url`; assert exit with error showing both URLs and `cd` instruction (TS-02-24)",
+            "Write `test_validation_success_logs_and_continues`: mock all checks passing; assert `logging.info` is called and execution continues past validation (TS-02-25, TS-02-26)"
+          ],
+          "test_spec_refs": [
+            "TS-02-24",
+            "TS-02-25",
+            "TS-02-26"
+          ],
+          "requirement_refs": [
+            "02-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All CWD validation tests collected and pass: `pytest packages/nightshift/tests/test_carry_patch_startup.py -k 'workspace_mode or clone_status or git or origin or validation' -v`",
+          "TS-02-16 through TS-02-26 are each covered by a named test function",
+          "No linter warnings: `ruff check packages/nightshift/tests/test_carry_patch_startup.py`"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "tests",
+      "title": "Write tests for default config generation and workspace variable initialization (REQ-4, REQ-5)",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Write tests for default config atomic write on first start (REQ-4)",
+          "details": [
+            "Write `test_config_written_on_first_start`: when `.nightshift/config.toml` does not exist, assert the file is created with correct TOML content including `[hub]`, `[carry_patch]`, and `[workspace]` sections (TS-02-27)",
+            "Write `test_config_not_overwritten_if_exists`: when `.nightshift/config.toml` already exists, assert it is not modified (TS-02-29)",
+            "Use `tmp_path` fixture to isolate filesystem; verify atomic write via `.tmp` intermediate file pattern"
+          ],
+          "test_spec_refs": [
+            "TS-02-27",
+            "TS-02-29"
+          ],
+          "requirement_refs": [
+            "02-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Write tests for config write failure non-fatal behavior and PAT exclusion (REQ-4)",
+          "details": [
+            "Write `test_config_write_failure_is_nonfatal`: mock `os.rename` or file write to raise `OSError`; assert `logging.warning` is called and execution continues without `sys.exit` (TS-02-28)",
+            "Write test asserting PAT is never written to the generated config file (TS-02-30)",
+            "Write test asserting `integration_branch` from `workspace.integration_branch` is written (or empty string if `None`) (TS-02-31)",
+            "Write test asserting nightshift does NOT reload the newly-written config into the live `AgentFoxConfig` (TS-02-32)"
+          ],
+          "test_spec_refs": [
+            "TS-02-28",
+            "TS-02-30",
+            "TS-02-31",
+            "TS-02-32"
+          ],
+          "requirement_refs": [
+            "02-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Write tests for workspace variable initialization and non-fatal exception handling (REQ-5)",
+          "details": [
+            "Write `test_set_variable_called_with_correct_args`: assert `hub_client.set_variable` is called with `(slug, 'AUTO_REBUILD_AFTER_SYNC', 'false')` and `(slug, 'AUTO_REBUILD_AFTER_PUSH', 'false')` (TS-02-35)",
+            "Write `test_set_variable_exception_is_nonfatal`: mock `set_variable` to raise `HubForbiddenError` (and separately `HubConnectionError`); assert `logging.warning` is called and execution continues (TS-02-33, TS-02-34)",
+            "Confirm a single `HubClient` instance is constructed once and reused across REQ-3 and REQ-5 calls"
+          ],
+          "test_spec_refs": [
+            "TS-02-33",
+            "TS-02-34",
+            "TS-02-35"
+          ],
+          "requirement_refs": [
+            "02-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "All config generation and variable init tests collected and pass: `pytest packages/nightshift/tests/test_carry_patch_startup.py -k 'config or set_variable' -v`",
+          "TS-02-27 through TS-02-35 are each covered by a named test function",
+          "No linter warnings: `ruff check packages/nightshift/tests/test_carry_patch_startup.py`"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement HubConfig and CarryPatchConfig Pydantic models (REQ-1)",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Add HubConfig model to agentfox/core/config.py",
+          "details": [
+            "In `packages/agentfox/agentfox/core/config.py`, define `HubConfig(BaseModel)` with `model_config = ConfigDict(extra='ignore')` and `endpoint_url: str = Field(default='', description='Hub API base URL')`",
+            "Ensure `Annotated` and `ConfigDict` imports are present (already used by existing models)",
+            "Add `hub: HubConfig = Field(default_factory=HubConfig)` to `AgentFoxConfig`"
+          ],
+          "test_spec_refs": [
+            "TS-02-1",
+            "TS-02-2"
+          ],
+          "requirement_refs": [
+            "02-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Add CarryPatchConfig model to agentfox/core/config.py",
+          "details": [
+            "Define `CarryPatchConfig(BaseModel)` with `model_config = ConfigDict(extra='ignore')`",
+            "Add all fields: `enabled: bool = Field(default=False)`, `workspace: str = Field(default='')`, `check_interval: Annotated[int, Clamped(ge=60)] = Field(default=300)`, `auto_resolve: bool = Field(default=True)`, `rebuild_timeout: int = Field(default=600)`, `rebuild_poll_interval: Annotated[int, Clamped(ge=2)] = Field(default=5)`, `max_resolve_retries: Annotated[int, Clamped(ge=0, le=10)] = Field(default=2)`",
+            "Add `carry_patch: CarryPatchConfig = Field(default_factory=CarryPatchConfig)` to `AgentFoxConfig`",
+            "Verify `Clamped` is already defined in the same file and no new import is needed"
+          ],
+          "test_spec_refs": [
+            "TS-02-3",
+            "TS-02-4",
+            "TS-02-5",
+            "TS-02-6"
+          ],
+          "requirement_refs": [
+            "02-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Update config_gen.py with hub and carry_patch TOML template sections",
+          "details": [
+            "In `packages/agentfox/agentfox/core/config_gen.py`, add `[hub]` and `[carry_patch]` sections to the global default AgentFoxConfig comment-annotated TOML template",
+            "Include all `CarryPatchConfig` fields with their defaults and inline comments explaining each field",
+            "This is the global template shown when no config file exists at all \u2014 distinct from the workspace-level `.nightshift/config.toml` written in REQ-4"
+          ],
+          "test_spec_refs": [
+            "TS-02-6"
+          ],
+          "requirement_refs": [
+            "02-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "All REQ-1 model tests pass: `pytest packages/agentfox/tests/test_carry_patch_config.py -v`",
+          "No linter warnings in modified files: `ruff check packages/agentfox/agentfox/core/config.py packages/agentfox/agentfox/core/config_gen.py`",
+          "02-REQ-1 acceptance criteria met: HubConfig and CarryPatchConfig instantiate with correct defaults, Clamped clamping works, extra fields ignored, AgentFoxConfig backward-compatible"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Implement CLI flags with 3-tier resolution in nightshift/app.py (REQ-2)",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Add --hub-url, --workspace, --token CLI options to main() in app.py",
+          "details": [
+            "In `packages/nightshift/nightshift/app.py`, add `@click.option('--hub-url', default=None, help='Hub API base URL')`, `@click.option('--workspace', default=None, help='Hub workspace slug')`, `@click.option('--token', default=None, help='Hub PAT')`",
+            "Import `resolve_hub_url`, `resolve_hub_pat` from `afhub.auth` and `HubAuthError`, `HubNotFoundError`, `HubConnectionError`, `HubForbiddenError` from `afhub`",
+            "Add `afhub` as a dependency in `packages/nightshift/pyproject.toml` and as an optional dependency in `packages/agentfox/pyproject.toml`"
+          ],
+          "test_spec_refs": [
+            "TS-02-7",
+            "TS-02-8",
+            "TS-02-9"
+          ],
+          "requirement_refs": [
+            "02-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Implement 3-tier resolution logic and carry-patch mode activation rules",
+          "details": [
+            "Call `resolved_hub_url = resolve_hub_url(hub_url_flag=hub_url_flag, config_url=config.hub.endpoint_url)` for hub URL resolution",
+            "Resolve workspace slug inline: `resolved_slug = workspace_flag or os.environ.get('AF_WORKSPACE', '') or config.carry_patch.workspace`",
+            "Resolve PAT: use CLI `--token` first; if absent, call `resolve_hub_pat()` to read `AF_HUB_TOKEN`",
+            "Carry-patch mode is active only when both `resolved_slug` and `resolved_pat` are non-empty",
+            "If `--workspace` resolved but no token from any source: `click.echo(..., err=True)` and `sys.exit(1)` with PAT-required message",
+            "If carry-patch active but hub URL empty: `click.echo(..., err=True)` and `sys.exit(1)` with hub-URL-required message",
+            "If only hub URL resolved (no workspace/token): silently skip carry-patch, run normally"
+          ],
+          "test_spec_refs": [
+            "TS-02-10",
+            "TS-02-11",
+            "TS-02-12",
+            "TS-02-13",
+            "TS-02-14",
+            "TS-02-15"
+          ],
+          "requirement_refs": [
+            "02-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "All CLI resolution tests pass: `pytest packages/nightshift/tests/test_carry_patch_startup.py -k 'hub_url or workspace or token or skips' -v`",
+          "No linter warnings: `ruff check packages/nightshift/nightshift/app.py`",
+          "02-REQ-2 acceptance criteria met: all 3-tier resolution paths and mode activation rules verified"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Implement async startup helper with CWD validation sequence (REQ-3)",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Create async startup helper function and HubClient instantiation",
+          "details": [
+            "In `packages/nightshift/nightshift/app.py`, define an async helper function (e.g. `async def _carry_patch_startup(resolved_hub_url, resolved_slug, resolved_pat, config)`) that encapsulates REQ-3 and REQ-5",
+            "Construct a single `HubClient` instance: `hub_client = HubClient(endpoint_url=resolved_hub_url, pat=resolved_pat)` inside the helper",
+            "This instance is reused for all API calls in both REQ-3 and REQ-5"
+          ],
+          "test_spec_refs": [
+            "TS-02-16",
+            "TS-02-17"
+          ],
+          "requirement_refs": [
+            "02-REQ-3",
+            "02-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Implement workspace API validation steps (steps 1\u20133)",
+          "details": [
+            "Call `workspace = await hub_client.get_workspace(resolved_slug)`; catch `HubAuthError` and `HubNotFoundError` \u2192 `click.echo(..., err=True)` + `sys.exit(1)` with diagnostic message",
+            "Check `workspace.workspace_mode == 'carry_patch'`; if not \u2192 `click.echo(..., err=True)` + `sys.exit(1)`",
+            "Check `workspace.clone_status == 'ready'`; if not \u2192 `click.echo(..., err=True)` + `sys.exit(1)` indicating clone not ready"
+          ],
+          "test_spec_refs": [
+            "TS-02-16",
+            "TS-02-17",
+            "TS-02-18",
+            "TS-02-19",
+            "TS-02-20"
+          ],
+          "requirement_refs": [
+            "02-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Implement git subprocess origin URL check (step 4)",
+          "details": [
+            "Call `subprocess.run(['git', 'remote', 'get-url', 'origin'], stdout=PIPE, stderr=PIPE, timeout=10)` (blocking)",
+            "Catch `FileNotFoundError` \u2192 emit verbatim message `'git is not installed or not in PATH; nightshift requires git'` via `click.echo(..., err=True)` + `sys.exit(1)`",
+            "Catch `subprocess.TimeoutExpired` \u2192 `click.echo(..., err=True)` with timeout message + `sys.exit(1)`",
+            "If returncode != 0 \u2192 `click.echo(stderr_output, err=True)` + `sys.exit(1)`"
+          ],
+          "test_spec_refs": [
+            "TS-02-21",
+            "TS-02-22",
+            "TS-02-23"
+          ],
+          "requirement_refs": [
+            "02-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.4",
+          "title": "Implement origin URL comparison and success logging (steps 5\u20136)",
+          "details": [
+            "Strip trailing whitespace from subprocess stdout and compare to `workspace.git_url`",
+            "If mismatch \u2192 `click.echo(f'Local origin URL {local_url!r} does not match workspace git_url {workspace.git_url!r}. cd into the correct directory.', err=True)` + `sys.exit(1)`",
+            "If all checks pass \u2192 `logging.info('CWD validation succeeded for workspace %s', resolved_slug)` and continue",
+            "Wire the async helper invocation: `asyncio.run(_carry_patch_startup(...))` from synchronous `main()` before `DaemonRunner.run()`"
+          ],
+          "test_spec_refs": [
+            "TS-02-24",
+            "TS-02-25",
+            "TS-02-26"
+          ],
+          "requirement_refs": [
+            "02-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "All CWD validation tests pass: `pytest packages/nightshift/tests/test_carry_patch_startup.py -k 'workspace_mode or clone_status or git or origin or validation' -v`",
+          "No linter warnings: `ruff check packages/nightshift/nightshift/app.py`",
+          "02-REQ-3 acceptance criteria met: all 6 validation steps implemented with correct exit messages and logging"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Implement default config generation on first start (REQ-4)",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Implement atomic config file write logic for .nightshift/config.toml",
+          "details": [
+            "Inside the async startup helper (after CWD validation passes), check if `.nightshift/config.toml` exists in CWD; if it does, skip generation entirely",
+            "Create `.nightshift/` directory if it does not exist (`os.makedirs('.nightshift', exist_ok=True)`)",
+            "Write to `.nightshift/config.toml.tmp` first (UTF-8 encoding), then `os.rename('.nightshift/config.toml.tmp', '.nightshift/config.toml')` for atomic replace"
+          ],
+          "test_spec_refs": [
+            "TS-02-27",
+            "TS-02-29"
+          ],
+          "requirement_refs": [
+            "02-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Generate correct TOML content with all required sections",
+          "details": [
+            "Write `[hub]` section with `endpoint_url = '<resolved_hub_url>'`",
+            "Write `[carry_patch]` section with all tunable fields: `enabled = true`, `workspace`, `check_interval = 300`, `auto_resolve = true`, `rebuild_timeout = 600`, `rebuild_poll_interval = 5`, `max_resolve_retries = 2`",
+            "Write `[workspace]` section with `integration_branch = '<workspace.integration_branch or empty string>'` and `merge_strategy = 'direct'`",
+            "Never write the PAT to the file",
+            "Wrap write in try/except; on any exception emit `logging.warning(...)` and continue (non-fatal)"
+          ],
+          "test_spec_refs": [
+            "TS-02-28",
+            "TS-02-30",
+            "TS-02-31",
+            "TS-02-32"
+          ],
+          "requirement_refs": [
+            "02-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "All config generation tests pass: `pytest packages/nightshift/tests/test_carry_patch_startup.py -k 'config' -v`",
+          "No linter warnings: `ruff check packages/nightshift/nightshift/app.py`",
+          "02-REQ-4 acceptance criteria met: atomic write verified, no overwrite of existing file, PAT absent from output, write failure is non-fatal"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "standard",
+      "title": "Implement workspace variable initialization (REQ-5)",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Call set_variable for AUTO_REBUILD_AFTER_SYNC and AUTO_REBUILD_AFTER_PUSH",
+          "details": [
+            "After CWD validation and config generation, inside the async helper, call `await hub_client.set_variable(resolved_slug, 'AUTO_REBUILD_AFTER_SYNC', 'false')`",
+            "Then call `await hub_client.set_variable(resolved_slug, 'AUTO_REBUILD_AFTER_PUSH', 'false')`",
+            "Reuse the single `HubClient` instance constructed at the top of the helper (no new instance)"
+          ],
+          "test_spec_refs": [
+            "TS-02-35"
+          ],
+          "requirement_refs": [
+            "02-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Handle set_variable exceptions as non-fatal with logging.warning",
+          "details": [
+            "Wrap each `set_variable` call in try/except catching all exceptions (or at minimum `Exception`)",
+            "On any exception: emit `logging.warning('Failed to set workspace variable %s: %s', key, exc)` and continue",
+            "Daemon must continue to function correctly even if both set_variable calls fail"
+          ],
+          "test_spec_refs": [
+            "TS-02-33",
+            "TS-02-34"
+          ],
+          "requirement_refs": [
+            "02-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "All variable initialization tests pass: `pytest packages/nightshift/tests/test_carry_patch_startup.py -k 'set_variable' -v`",
+          "No linter warnings: `ruff check packages/nightshift/nightshift/app.py`",
+          "02-REQ-5 acceptance criteria met: both variables set with correct args, exceptions are non-fatal and logged as warnings"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "checkpoint",
+      "title": "Integration checkpoint: full test suite passes",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Run full agentfox and nightshift test suites and confirm all pass",
+          "details": [
+            "Run `pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v` and confirm all 35 test cases pass",
+            "Run `pytest packages/ -q` to confirm no regressions in existing tests",
+            "Confirm TS-02-1 through TS-02-35 are all green"
+          ],
+          "test_spec_refs": [
+            "TS-02-1",
+            "TS-02-2",
+            "TS-02-3",
+            "TS-02-4",
+            "TS-02-5",
+            "TS-02-6",
+            "TS-02-7",
+            "TS-02-8",
+            "TS-02-9",
+            "TS-02-10",
+            "TS-02-11",
+            "TS-02-12",
+            "TS-02-13",
+            "TS-02-14",
+            "TS-02-15"
+          ],
+          "requirement_refs": [
+            "02-REQ-1",
+            "02-REQ-2",
+            "02-REQ-3",
+            "02-REQ-4",
+            "02-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Run linter across all modified files and confirm no warnings",
+          "details": [
+            "Run `ruff check packages/agentfox/agentfox/core/config.py packages/agentfox/agentfox/core/config_gen.py packages/nightshift/nightshift/app.py`",
+            "Run `ruff check packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py`",
+            "Fix any warnings before proceeding to wiring verification"
+          ],
+          "test_spec_refs": [
+            "TS-02-16",
+            "TS-02-17",
+            "TS-02-18",
+            "TS-02-19",
+            "TS-02-20",
+            "TS-02-21",
+            "TS-02-22",
+            "TS-02-23",
+            "TS-02-24",
+            "TS-02-25",
+            "TS-02-26",
+            "TS-02-27",
+            "TS-02-28",
+            "TS-02-29",
+            "TS-02-30"
+          ],
+          "requirement_refs": [
+            "02-REQ-1",
+            "02-REQ-2",
+            "02-REQ-3",
+            "02-REQ-4",
+            "02-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "Full spec test suite passes: `pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v`",
+          "No regressions: `pytest packages/ -q` exits with code 0",
+          "No linter warnings across all modified and test files: `ruff check packages/agentfox/ packages/nightshift/`"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "kind": "wiring_verification",
+      "title": "Wiring verification: end-to-end integration and stub audit",
+      "subtasks": [
+        {
+          "id": "11.1",
+          "title": "Trace execution paths from CLI entry point through startup helper to DaemonRunner",
+          "details": [
+            "Verify that `main()` in `app.py` calls `asyncio.run(_carry_patch_startup(...))` (or equivalent) before `DaemonRunner.run()` when carry-patch mode is active",
+            "Confirm the async helper calls `hub_client.get_workspace()`, `subprocess.run()`, config write, and `hub_client.set_variable()` in the correct order",
+            "Confirm that when carry-patch mode is NOT active, `_carry_patch_startup` is not called and `DaemonRunner.run()` proceeds normally",
+            "Verify `resolve_hub_url` and `resolve_hub_pat` are imported from `afhub.auth` and called from production code (not just tested)"
+          ],
+          "test_spec_refs": [
+            "TS-02-25",
+            "TS-02-26",
+            "TS-02-35"
+          ],
+          "requirement_refs": [
+            "02-REQ-2",
+            "02-REQ-3",
+            "02-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.2",
+          "title": "Stub and dead-code audit across all modified files",
+          "details": [
+            "Search for `raise NotImplementedError`, bare `pass` in non-abstract methods, and `return None` in functions that should return values across `config.py`, `config_gen.py`, and `app.py`",
+            "Confirm no placeholder stubs remain in `HubConfig`, `CarryPatchConfig`, or the async startup helper",
+            "Confirm `AgentFoxConfig` actually exposes `.hub` and `.carry_patch` fields (not just defined in isolation)",
+            "Confirm `config_gen.py` template includes `[hub]` and `[carry_patch]` sections in the rendered output"
+          ],
+          "test_spec_refs": [
+            "TS-02-1",
+            "TS-02-3",
+            "TS-02-6"
+          ],
+          "requirement_refs": [
+            "02-REQ-1",
+            "02-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.3",
+          "title": "Verify return value propagation and cross-spec call sites",
+          "details": [
+            "Confirm `resolve_hub_url()` return value is used as `resolved_hub_url` and passed to `HubClient(endpoint_url=...)` \u2014 not discarded",
+            "Confirm `hub_client.get_workspace()` return value (`Workspace`) is used for `workspace_mode`, `clone_status`, `git_url`, and `integration_branch` checks",
+            "Confirm `HubClient` is imported from `afhub` (Spec 01_afhub_client) and not re-implemented locally",
+            "Confirm `set_variable` is called on the same `HubClient` instance used for `get_workspace`"
+          ],
+          "test_spec_refs": [
+            "TS-02-33",
+            "TS-02-34",
+            "TS-02-35"
+          ],
+          "requirement_refs": [
+            "02-REQ-2",
+            "02-REQ-3",
+            "02-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "11.4",
+          "title": "Run smoke tests and full regression suite",
+          "details": [
+            "Run all spec tests: `pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v`",
+            "Run full package suite: `pytest packages/ -q`",
+            "Confirm TS-02-1 through TS-02-35 all pass with no skips",
+            "Confirm `pyproject.toml` for both `nightshift` and `agentfox` packages declare `afhub` as a dependency"
+          ],
+          "test_spec_refs": [
+            "TS-02-7",
+            "TS-02-16",
+            "TS-02-21",
+            "TS-02-27",
+            "TS-02-33",
+            "TS-02-SMOKE-1"
+          ],
+          "requirement_refs": [
+            "02-REQ-1",
+            "02-REQ-2",
+            "02-REQ-3",
+            "02-REQ-4",
+            "02-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "11.V",
+        "checks": [
+          "All 35 spec tests pass: `pytest packages/agentfox/tests/test_carry_patch_config.py packages/nightshift/tests/test_carry_patch_startup.py -v`",
+          "No regressions in full suite: `pytest packages/ -q` exits 0",
+          "No linter warnings: `ruff check packages/agentfox/ packages/nightshift/`",
+          "Stub audit clean: no `raise NotImplementedError`, bare `pass`, or unimplemented stubs found in `config.py`, `config_gen.py`, or `app.py`",
+          "Cross-spec wiring confirmed: `HubClient`, `resolve_hub_url`, `resolve_hub_pat` are imported from `afhub` and called from production `app.py` code",
+          "02-REQ-1 through 02-REQ-5 acceptance criteria all met as verified by the test suite",
+          "Smoke test TS-02-SMOKE-1 passes end-to-end carry-patch startup validation flow"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "02-REQ-1",
+      "test_spec_id": "TS-02-1",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-1",
+      "test_spec_id": "TS-02-2",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-1",
+      "test_spec_id": "TS-02-3",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-1",
+      "test_spec_id": "TS-02-4",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-1",
+      "test_spec_id": "TS-02-5",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-1",
+      "test_spec_id": "TS-02-6",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2",
+      "test_spec_id": "TS-02-7",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2",
+      "test_spec_id": "TS-02-8",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2",
+      "test_spec_id": "TS-02-9",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2",
+      "test_spec_id": "TS-02-10",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2",
+      "test_spec_id": "TS-02-11",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2",
+      "test_spec_id": "TS-02-12",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2",
+      "test_spec_id": "TS-02-13",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2",
+      "test_spec_id": "TS-02-14",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-2",
+      "test_spec_id": "TS-02-15",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-16",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-17",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-18",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-19",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-20",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-21",
+      "task_id": "7.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-22",
+      "task_id": "7.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-23",
+      "task_id": "7.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-24",
+      "task_id": "7.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-25",
+      "task_id": "7.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-3",
+      "test_spec_id": "TS-02-26",
+      "task_id": "7.4",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4",
+      "test_spec_id": "TS-02-27",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4",
+      "test_spec_id": "TS-02-28",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4",
+      "test_spec_id": "TS-02-29",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4",
+      "test_spec_id": "TS-02-30",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4",
+      "test_spec_id": "TS-02-31",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-4",
+      "test_spec_id": "TS-02-32",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-5",
+      "test_spec_id": "TS-02-33",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-5",
+      "test_spec_id": "TS-02-34",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "02-REQ-5",
+      "test_spec_id": "TS-02-35",
+      "task_id": "9.1",
+      "test_path": null
+    }
+  ]
+}

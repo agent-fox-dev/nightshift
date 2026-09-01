@@ -1,0 +1,923 @@
+{
+  "$schema": null,
+  "spec_id": "02",
+  "spec_name": "carry_patch_bootstrap",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-02-1",
+      "requirement_id": "02-REQ-1.1",
+      "kind": "unit",
+      "description": "AgentFoxConfig instantiated without a [hub] section populates config.hub with HubConfig defaults, including endpoint_url as empty string.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py contains HubConfig and AgentFoxConfig with hub field",
+        "No [hub] section is present in the TOML input"
+      ],
+      "input": "AgentFoxConfig parsed from a TOML string that omits the [hub] section entirely",
+      "expected": "config.hub is a HubConfig instance; config.hub.endpoint_url == ''",
+      "assertion_pseudocode": "config = AgentFoxConfig.model_validate({}); assert isinstance(config.hub, HubConfig); assert config.hub.endpoint_url == ''"
+    },
+    {
+      "id": "TS-02-2",
+      "requirement_id": "02-REQ-1.2",
+      "kind": "unit",
+      "description": "AgentFoxConfig instantiated without a [carry_patch] section populates config.carry_patch with all documented defaults.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig and AgentFoxConfig with carry_patch field",
+        "No [carry_patch] section is present in the TOML input"
+      ],
+      "input": "AgentFoxConfig parsed from a TOML string that omits the [carry_patch] section entirely",
+      "expected": "config.carry_patch.enabled == False, workspace == '', check_interval == 300, auto_resolve == True, rebuild_timeout == 600, rebuild_poll_interval == 5, max_resolve_retries == 2",
+      "assertion_pseudocode": "config = AgentFoxConfig.model_validate({}); cp = config.carry_patch; assert cp.enabled == False; assert cp.workspace == ''; assert cp.check_interval == 300; assert cp.auto_resolve == True; assert cp.rebuild_timeout == 600; assert cp.rebuild_poll_interval == 5; assert cp.max_resolve_retries == 2"
+    },
+    {
+      "id": "TS-02-3",
+      "requirement_id": "02-REQ-1.3",
+      "kind": "unit",
+      "description": "CarryPatchConfig silently clamps check_interval below 60 to exactly 60 using the Clamped annotated-type utility.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=60) on check_interval"
+      ],
+      "input": "CarryPatchConfig(check_interval=10)",
+      "expected": "config.carry_patch.check_interval == 60; no ValidationError is raised",
+      "assertion_pseudocode": "cp = CarryPatchConfig(check_interval=10); assert cp.check_interval == 60"
+    },
+    {
+      "id": "TS-02-4",
+      "requirement_id": "02-REQ-1.4",
+      "kind": "unit",
+      "description": "CarryPatchConfig silently clamps rebuild_poll_interval below 2 to exactly 2 using the Clamped annotated-type utility.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=2) on rebuild_poll_interval"
+      ],
+      "input": "CarryPatchConfig(rebuild_poll_interval=0)",
+      "expected": "config.carry_patch.rebuild_poll_interval == 2; no ValidationError is raised",
+      "assertion_pseudocode": "cp = CarryPatchConfig(rebuild_poll_interval=0); assert cp.rebuild_poll_interval == 2"
+    },
+    {
+      "id": "TS-02-5",
+      "requirement_id": "02-REQ-1.5",
+      "kind": "unit",
+      "description": "CarryPatchConfig silently clamps max_resolve_retries above 10 to exactly 10 using the Clamped annotated-type utility.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=0, le=10) on max_resolve_retries"
+      ],
+      "input": "CarryPatchConfig(max_resolve_retries=99)",
+      "expected": "config.carry_patch.max_resolve_retries == 10; no ValidationError is raised",
+      "assertion_pseudocode": "cp = CarryPatchConfig(max_resolve_retries=99); assert cp.max_resolve_retries == 10"
+    },
+    {
+      "id": "TS-02-6",
+      "requirement_id": "02-REQ-1.6",
+      "kind": "unit",
+      "description": "AgentFoxConfig loads successfully when [hub] or [carry_patch] sections contain unknown keys, silently dropping them per extra='ignore'.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py has HubConfig and CarryPatchConfig with model_config = ConfigDict(extra='ignore')"
+      ],
+      "input": "TOML string with [hub] containing unknown_key='foo' and [carry_patch] containing unknown_field=42",
+      "expected": "AgentFoxConfig loads without raising ValidationError; unknown keys are absent from the resulting model",
+      "assertion_pseudocode": "toml_str = '[hub]\\nunknown_key = \"foo\"\\n[carry_patch]\\nunknown_field = 42'; config = parse_agentfox_config(toml_str); assert not hasattr(config.hub, 'unknown_key'); assert not hasattr(config.carry_patch, 'unknown_field')"
+    },
+    {
+      "id": "TS-02-7",
+      "requirement_id": "02-REQ-2.1",
+      "kind": "unit",
+      "description": "nightshift CLI with --hub-url, --workspace, and --token all set activates carry-patch mode and resolves all three values correctly.",
+      "preconditions": [
+        "packages/nightshift/nightshift/app.py has --hub-url, --workspace, --token CLI options",
+        "resolve_hub_url and resolve_hub_pat are importable from afhub.auth",
+        "HubClient is mocked to prevent real network calls"
+      ],
+      "input": "CLI invocation: nightshift --hub-url https://hub.example.com --workspace my-slug --token myPAT",
+      "expected": "carry-patch mode is active; resolved hub URL == 'https://hub.example.com'; resolved slug == 'my-slug'; resolved PAT == 'myPAT'",
+      "assertion_pseudocode": "with mock_hub_client() as mock_client: result = invoke_cli(['--hub-url', 'https://hub.example.com', '--workspace', 'my-slug', '--token', 'myPAT']); assert carry_patch_mode_was_activated(result); assert mock_client.constructor_args.endpoint_url == 'https://hub.example.com'; assert mock_client.constructor_args.pat == 'myPAT'"
+    },
+    {
+      "id": "TS-02-8",
+      "requirement_id": "02-REQ-2.2",
+      "kind": "unit",
+      "description": "nightshift CLI resolves hub URL from AF_HUB_URL environment variable when --hub-url flag is absent.",
+      "preconditions": [
+        "AF_HUB_URL is set to 'https://env.hub.example.com' in the environment",
+        "--hub-url flag is not passed",
+        "resolve_hub_url is mocked to return the env var value when hub_url_flag is empty"
+      ],
+      "input": "CLI invocation: nightshift --workspace my-slug --token myPAT with AF_HUB_URL=https://env.hub.example.com",
+      "expected": "resolved hub URL == 'https://env.hub.example.com'",
+      "assertion_pseudocode": "with env({'AF_HUB_URL': 'https://env.hub.example.com'}), mock_hub_client() as mock_client: invoke_cli(['--workspace', 'my-slug', '--token', 'myPAT']); assert mock_client.constructor_args.endpoint_url == 'https://env.hub.example.com'"
+    },
+    {
+      "id": "TS-02-9",
+      "requirement_id": "02-REQ-2.3",
+      "kind": "unit",
+      "description": "nightshift CLI resolves hub URL from config.hub.endpoint_url when --hub-url flag and AF_HUB_URL are both absent.",
+      "preconditions": [
+        "AF_HUB_URL is unset in the environment",
+        "--hub-url flag is not passed",
+        "config.hub.endpoint_url is set to 'https://config.hub.example.com'",
+        "resolve_hub_url returns config_url when both flag and env are empty"
+      ],
+      "input": "CLI invocation: nightshift --workspace my-slug --token myPAT with config.hub.endpoint_url='https://config.hub.example.com'",
+      "expected": "resolved hub URL == 'https://config.hub.example.com'",
+      "assertion_pseudocode": "with env({}), mock_config(hub_endpoint='https://config.hub.example.com'), mock_hub_client() as mock_client: invoke_cli(['--workspace', 'my-slug', '--token', 'myPAT']); assert mock_client.constructor_args.endpoint_url == 'https://config.hub.example.com'"
+    },
+    {
+      "id": "TS-02-10",
+      "requirement_id": "02-REQ-2.4",
+      "kind": "unit",
+      "description": "nightshift CLI resolves workspace slug from AF_WORKSPACE environment variable when --workspace flag is absent.",
+      "preconditions": [
+        "AF_WORKSPACE is set to 'env-slug' in the environment",
+        "--workspace flag is not passed",
+        "--token flag is set to a non-empty value"
+      ],
+      "input": "CLI invocation: nightshift --hub-url https://hub.example.com --token myPAT with AF_WORKSPACE=env-slug",
+      "expected": "resolved workspace slug == 'env-slug'; carry-patch mode is active",
+      "assertion_pseudocode": "with env({'AF_WORKSPACE': 'env-slug'}), mock_hub_client() as mock_client: invoke_cli(['--hub-url', 'https://hub.example.com', '--token', 'myPAT']); assert get_resolved_slug(mock_client) == 'env-slug'"
+    },
+    {
+      "id": "TS-02-11",
+      "requirement_id": "02-REQ-2.5",
+      "kind": "unit",
+      "description": "nightshift CLI resolves workspace slug from config.carry_patch.workspace when --workspace flag and AF_WORKSPACE are both absent.",
+      "preconditions": [
+        "AF_WORKSPACE is unset in the environment",
+        "--workspace flag is not passed",
+        "config.carry_patch.workspace is set to 'config-slug'",
+        "--token flag is set to a non-empty value"
+      ],
+      "input": "CLI invocation: nightshift --hub-url https://hub.example.com --token myPAT with config.carry_patch.workspace='config-slug'",
+      "expected": "resolved workspace slug == 'config-slug'; carry-patch mode is active",
+      "assertion_pseudocode": "with env({}), mock_config(carry_patch_workspace='config-slug'), mock_hub_client() as mock_client: invoke_cli(['--hub-url', 'https://hub.example.com', '--token', 'myPAT']); assert get_resolved_slug(mock_client) == 'config-slug'"
+    },
+    {
+      "id": "TS-02-12",
+      "requirement_id": "02-REQ-2.6",
+      "kind": "unit",
+      "description": "nightshift CLI skips carry-patch mode and runs normally when neither --workspace nor --token resolve to non-empty values.",
+      "preconditions": [
+        "AF_WORKSPACE is unset; config.carry_patch.workspace is empty",
+        "AF_HUB_TOKEN is unset; --token flag is absent",
+        "DaemonRunner is mocked"
+      ],
+      "input": "CLI invocation: nightshift with no carry-patch flags",
+      "expected": "carry-patch mode is not activated; no hub API calls are made; DaemonRunner.run() is called directly",
+      "assertion_pseudocode": "with mock_hub_client() as mock_client, mock_daemon_runner() as mock_runner: invoke_cli([]); assert mock_client.get_workspace.call_count == 0; assert mock_runner.run.called"
+    },
+    {
+      "id": "TS-02-13",
+      "requirement_id": "02-REQ-2.7",
+      "kind": "unit",
+      "description": "nightshift CLI silently ignores a resolved hub URL when --workspace and --token are both absent, running in normal mode.",
+      "preconditions": [
+        "AF_WORKSPACE is unset; config.carry_patch.workspace is empty",
+        "AF_HUB_TOKEN is unset; --token flag is absent",
+        "--hub-url is provided with a non-empty value",
+        "DaemonRunner is mocked"
+      ],
+      "input": "CLI invocation: nightshift --hub-url https://hub.example.com",
+      "expected": "carry-patch mode is not activated; no hub API calls are made; DaemonRunner.run() is called",
+      "assertion_pseudocode": "with mock_hub_client() as mock_client, mock_daemon_runner() as mock_runner: invoke_cli(['--hub-url', 'https://hub.example.com']); assert mock_client.get_workspace.call_count == 0; assert mock_runner.run.called"
+    },
+    {
+      "id": "TS-02-14",
+      "requirement_id": "02-REQ-2.8",
+      "kind": "unit",
+      "description": "nightshift CLI exits with code 1 and writes an error to stderr when workspace slug is non-empty but PAT is absent from all sources.",
+      "preconditions": [
+        "AF_HUB_TOKEN is unset in the environment",
+        "--token flag is not passed",
+        "--workspace is set to 'my-slug'",
+        "resolve_hub_pat() returns empty string"
+      ],
+      "input": "CLI invocation: nightshift --workspace my-slug with no token source",
+      "expected": "process exits with code 1; stderr contains a message explaining the PAT is required",
+      "assertion_pseudocode": "result = invoke_cli(['--workspace', 'my-slug']); assert result.exit_code == 1; assert 'PAT' in result.stderr or 'token' in result.stderr.lower()"
+    },
+    {
+      "id": "TS-02-15",
+      "requirement_id": "02-REQ-2.9",
+      "kind": "unit",
+      "description": "nightshift CLI exits with code 1 and writes an error to stderr when hub URL cannot be resolved from any source while carry-patch mode is otherwise active.",
+      "preconditions": [
+        "AF_HUB_URL is unset in the environment",
+        "--hub-url flag is not passed",
+        "config.hub.endpoint_url is empty",
+        "--workspace and --token are both non-empty"
+      ],
+      "input": "CLI invocation: nightshift --workspace my-slug --token myPAT with no hub URL source",
+      "expected": "process exits with code 1; stderr contains a message explaining the hub URL is required",
+      "assertion_pseudocode": "result = invoke_cli(['--workspace', 'my-slug', '--token', 'myPAT']); assert result.exit_code == 1; assert 'hub' in result.stderr.lower() and ('url' in result.stderr.lower() or 'required' in result.stderr.lower())"
+    },
+    {
+      "id": "TS-02-16",
+      "requirement_id": "02-REQ-3.1",
+      "kind": "unit",
+      "description": "The async startup helper constructs exactly one HubClient instance and calls get_workspace with the resolved slug.",
+      "preconditions": [
+        "carry-patch mode is active with resolved_hub_url='https://hub.example.com', resolved_pat='myPAT', slug='my-slug'",
+        "HubClient is mocked to return a valid Workspace",
+        "subprocess.run is mocked to return a matching git URL"
+      ],
+      "input": "async startup helper invoked via asyncio.run() with resolved values",
+      "expected": "HubClient is constructed once with endpoint_url='https://hub.example.com' and pat='myPAT'; get_workspace is called once with 'my-slug'",
+      "assertion_pseudocode": "with mock_hub_client_class() as MockHubClient: asyncio.run(startup_helper(hub_url='https://hub.example.com', pat='myPAT', slug='my-slug', ...)); assert MockHubClient.call_count == 1; assert MockHubClient.call_args == {'endpoint_url': 'https://hub.example.com', 'pat': 'myPAT'}; assert MockHubClient.return_value.get_workspace.call_count == 1; assert MockHubClient.return_value.get_workspace.call_args[0][0] == 'my-slug'"
+    },
+    {
+      "id": "TS-02-17",
+      "requirement_id": "02-REQ-3.2",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and writes a diagnostic error to stderr when get_workspace raises HubAuthError.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "HubClient.get_workspace is mocked to raise HubAuthError"
+      ],
+      "input": "async startup helper invoked; get_workspace raises HubAuthError",
+      "expected": "process exits with code 1; stderr contains a message indicating invalid PAT or insufficient permissions",
+      "assertion_pseudocode": "with mock_hub_client(get_workspace_raises=HubAuthError()): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert captured_stderr contains 'PAT' or 'permission' or 'auth'"
+    },
+    {
+      "id": "TS-02-18",
+      "requirement_id": "02-REQ-3.3",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and writes a diagnostic error to stderr when get_workspace raises HubNotFoundError.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "HubClient.get_workspace is mocked to raise HubNotFoundError"
+      ],
+      "input": "async startup helper invoked; get_workspace raises HubNotFoundError",
+      "expected": "process exits with code 1; stderr contains a message indicating the workspace slug was not found",
+      "assertion_pseudocode": "with mock_hub_client(get_workspace_raises=HubNotFoundError()): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'not found' in captured_stderr.lower() or 'slug' in captured_stderr.lower()"
+    },
+    {
+      "id": "TS-02-19",
+      "requirement_id": "02-REQ-3.4",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and writes an error to stderr when workspace_mode is not 'carry_patch'.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "HubClient.get_workspace returns a Workspace with workspace_mode='standard'"
+      ],
+      "input": "async startup helper invoked; get_workspace returns Workspace(workspace_mode='standard', clone_status='ready', git_url='https://git.example.com/repo.git')",
+      "expected": "process exits with code 1; stderr contains a message indicating the workspace is not in carry-patch mode",
+      "assertion_pseudocode": "workspace = Workspace(workspace_mode='standard', clone_status='ready', git_url='https://git.example.com/repo.git'); with mock_hub_client(get_workspace_returns=workspace): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'carry_patch' in captured_stderr or 'carry-patch' in captured_stderr"
+    },
+    {
+      "id": "TS-02-20",
+      "requirement_id": "02-REQ-3.5",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and shows the actual clone_status value in stderr when clone_status is not 'ready'.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "HubClient.get_workspace returns a Workspace with workspace_mode='carry_patch' and clone_status='cloning'"
+      ],
+      "input": "async startup helper invoked; get_workspace returns Workspace(workspace_mode='carry_patch', clone_status='cloning', git_url='https://git.example.com/repo.git')",
+      "expected": "process exits with code 1; stderr contains 'cloning' (the actual clone_status value)",
+      "assertion_pseudocode": "workspace = Workspace(workspace_mode='carry_patch', clone_status='cloning', git_url='https://git.example.com/repo.git'); with mock_hub_client(get_workspace_returns=workspace): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'cloning' in captured_stderr"
+    },
+    {
+      "id": "TS-02-21",
+      "requirement_id": "02-REQ-3.6",
+      "kind": "unit",
+      "description": "The async startup helper invokes subprocess.run with the correct git command, stdout=PIPE, stderr=PIPE, and timeout=10 to read the local origin URL.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "get_workspace returns a valid Workspace with workspace_mode='carry_patch' and clone_status='ready'",
+        "subprocess.run is mocked to return a successful result with stdout='https://git.example.com/repo.git\\n'"
+      ],
+      "input": "async startup helper invoked; workspace checks pass; subprocess.run is called",
+      "expected": "subprocess.run is called with args=['git', 'remote', 'get-url', 'origin'], stdout=PIPE, stderr=PIPE, timeout=10",
+      "assertion_pseudocode": "with mock_subprocess_run(returncode=0, stdout=b'https://git.example.com/repo.git\\n') as mock_run, mock_hub_client(git_url='https://git.example.com/repo.git'): asyncio.run(startup_helper(...)); assert mock_run.call_args.args[0] == ['git', 'remote', 'get-url', 'origin']; assert mock_run.call_args.kwargs['stdout'] == PIPE; assert mock_run.call_args.kwargs['stderr'] == PIPE; assert mock_run.call_args.kwargs['timeout'] == 10"
+    },
+    {
+      "id": "TS-02-22",
+      "requirement_id": "02-REQ-3.7",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and emits the exact message 'git is not installed or not in PATH; nightshift requires git' when subprocess.run raises FileNotFoundError.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "workspace checks pass",
+        "subprocess.run is mocked to raise FileNotFoundError"
+      ],
+      "input": "async startup helper invoked; subprocess.run raises FileNotFoundError",
+      "expected": "process exits with code 1; stderr contains exactly 'git is not installed or not in PATH; nightshift requires git'",
+      "assertion_pseudocode": "with mock_subprocess_run(raises=FileNotFoundError()), mock_hub_client(): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert captured_stderr.strip() == 'git is not installed or not in PATH; nightshift requires git'"
+    },
+    {
+      "id": "TS-02-23",
+      "requirement_id": "02-REQ-3.8",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and writes an error to stderr when subprocess.run raises subprocess.TimeoutExpired.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "workspace checks pass",
+        "subprocess.run is mocked to raise subprocess.TimeoutExpired(cmd=['git', 'remote', 'get-url', 'origin'], timeout=10)"
+      ],
+      "input": "async startup helper invoked; subprocess.run raises TimeoutExpired",
+      "expected": "process exits with code 1; stderr contains a message indicating the git command timed out",
+      "assertion_pseudocode": "with mock_subprocess_run(raises=subprocess.TimeoutExpired(cmd=['git', 'remote', 'get-url', 'origin'], timeout=10)), mock_hub_client(): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'timed out' in captured_stderr.lower() or 'timeout' in captured_stderr.lower()"
+    },
+    {
+      "id": "TS-02-24",
+      "requirement_id": "02-REQ-3.9",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and includes captured git stderr in the error message when subprocess.run returns a non-zero exit code.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "workspace checks pass",
+        "subprocess.run is mocked to return returncode=128, stderr=b'fatal: not a git repository'"
+      ],
+      "input": "async startup helper invoked; subprocess.run returns returncode=128 with stderr='fatal: not a git repository'",
+      "expected": "process exits with code 1; stderr output includes 'fatal: not a git repository'",
+      "assertion_pseudocode": "with mock_subprocess_run(returncode=128, stderr=b'fatal: not a git repository'), mock_hub_client(): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'fatal: not a git repository' in captured_stderr"
+    },
+    {
+      "id": "TS-02-25",
+      "requirement_id": "02-REQ-3.10",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and shows both the local origin URL and workspace.git_url in stderr when they do not match, instructing the operator to cd into the correct directory.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "workspace checks pass with git_url='https://git.example.com/correct-repo.git'",
+        "subprocess.run returns stdout='https://git.example.com/wrong-repo.git\\n'"
+      ],
+      "input": "async startup helper invoked; local origin URL 'https://git.example.com/wrong-repo.git' does not match workspace.git_url 'https://git.example.com/correct-repo.git'",
+      "expected": "process exits with code 1; stderr contains both 'https://git.example.com/wrong-repo.git' and 'https://git.example.com/correct-repo.git' and a 'cd' instruction",
+      "assertion_pseudocode": "workspace = Workspace(workspace_mode='carry_patch', clone_status='ready', git_url='https://git.example.com/correct-repo.git'); with mock_hub_client(get_workspace_returns=workspace), mock_subprocess_run(returncode=0, stdout=b'https://git.example.com/wrong-repo.git\\n'): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'https://git.example.com/wrong-repo.git' in captured_stderr; assert 'https://git.example.com/correct-repo.git' in captured_stderr; assert 'cd' in captured_stderr"
+    },
+    {
+      "id": "TS-02-26",
+      "requirement_id": "02-REQ-3.11",
+      "kind": "unit",
+      "description": "The async startup helper emits a logging.info message and continues execution when all six CWD validation steps pass.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "get_workspace returns Workspace(workspace_mode='carry_patch', clone_status='ready', git_url='https://git.example.com/repo.git')",
+        "subprocess.run returns returncode=0, stdout='https://git.example.com/repo.git\\n'",
+        "set_variable is mocked to succeed"
+      ],
+      "input": "async startup helper invoked with all validation conditions satisfied",
+      "expected": "logging.info is called with a message indicating CWD validation succeeded; execution continues to set_variable calls",
+      "assertion_pseudocode": "with mock_hub_client(), mock_subprocess_run(returncode=0, stdout=b'https://git.example.com/repo.git\\n'), capture_logs() as logs: asyncio.run(startup_helper(...)); info_messages = [r.message for r in logs if r.levelname == 'INFO']; assert any('valid' in m.lower() or 'success' in m.lower() for m in info_messages)"
+    },
+    {
+      "id": "TS-02-27",
+      "requirement_id": "02-REQ-4.1",
+      "kind": "unit",
+      "description": "nightshift writes a UTF-8 encoded .nightshift/config.toml atomically via a temp file when the file does not exist, containing [hub], [carry_patch], and [workspace] sections.",
+      "preconditions": [
+        ".nightshift/config.toml does not exist in the CWD",
+        "CWD validation has passed",
+        "resolved_hub_url='https://hub.example.com', slug='my-slug', workspace.integration_branch='main'"
+      ],
+      "input": "config generation triggered after successful CWD validation; .nightshift/ directory does not exist",
+      "expected": ".nightshift/config.toml exists with UTF-8 TOML content containing [hub], [carry_patch], and [workspace] sections; .nightshift/config.toml.tmp does not exist",
+      "assertion_pseudocode": "with tmp_cwd() as cwd: run_config_generation(hub_url='https://hub.example.com', slug='my-slug', integration_branch='main'); config_path = cwd / '.nightshift' / 'config.toml'; assert config_path.exists(); content = config_path.read_text(encoding='utf-8'); assert '[hub]' in content; assert '[carry_patch]' in content; assert '[workspace]' in content; assert 'endpoint_url = \"https://hub.example.com\"' in content; assert not (cwd / '.nightshift' / 'config.toml.tmp').exists()"
+    },
+    {
+      "id": "TS-02-28",
+      "requirement_id": "02-REQ-4.2",
+      "kind": "unit",
+      "description": "nightshift skips config generation entirely when .nightshift/config.toml already exists, leaving the existing file unchanged.",
+      "preconditions": [
+        ".nightshift/config.toml already exists with content 'existing content'",
+        "CWD validation has passed"
+      ],
+      "input": "config generation triggered; .nightshift/config.toml already exists",
+      "expected": ".nightshift/config.toml content is unchanged ('existing content'); no write operations are performed on the file",
+      "assertion_pseudocode": "with tmp_cwd() as cwd: config_path = cwd / '.nightshift' / 'config.toml'; config_path.parent.mkdir(); config_path.write_text('existing content'); run_config_generation(...); assert config_path.read_text() == 'existing content'"
+    },
+    {
+      "id": "TS-02-29",
+      "requirement_id": "02-REQ-4.3",
+      "kind": "unit",
+      "description": "The generated .nightshift/config.toml writes integration_branch as an empty string when workspace.integration_branch is None.",
+      "preconditions": [
+        ".nightshift/config.toml does not exist",
+        "workspace.integration_branch is None"
+      ],
+      "input": "config generation triggered with workspace.integration_branch=None",
+      "expected": "generated TOML contains 'integration_branch = \"\"'",
+      "assertion_pseudocode": "with tmp_cwd() as cwd: run_config_generation(integration_branch=None); content = (cwd / '.nightshift' / 'config.toml').read_text(); assert 'integration_branch = \"\"' in content"
+    },
+    {
+      "id": "TS-02-30",
+      "requirement_id": "02-REQ-4.4",
+      "kind": "unit",
+      "description": "nightshift emits logging.warning and continues startup without exiting when writing .nightshift/config.toml fails due to an OS-level exception.",
+      "preconditions": [
+        ".nightshift/config.toml does not exist",
+        "CWD validation has passed",
+        "filesystem write is mocked to raise PermissionError"
+      ],
+      "input": "config generation triggered; directory creation or file write raises PermissionError",
+      "expected": "logging.warning is called with a message describing the failure; nightshift continues running without calling sys.exit()",
+      "assertion_pseudocode": "with mock_filesystem_write(raises=PermissionError('Permission denied')), capture_logs() as logs: run_config_generation_and_continue(); warning_messages = [r.message for r in logs if r.levelname == 'WARNING']; assert any('permission' in m.lower() or 'failed' in m.lower() for m in warning_messages); assert startup_continued_normally()"
+    },
+    {
+      "id": "TS-02-31",
+      "requirement_id": "02-REQ-4.5",
+      "kind": "unit",
+      "description": "The generated .nightshift/config.toml never contains the PAT or token value under any circumstances.",
+      "preconditions": [
+        ".nightshift/config.toml does not exist",
+        "resolved PAT is 'super-secret-token'",
+        "CWD validation has passed"
+      ],
+      "input": "config generation triggered with resolved_pat='super-secret-token'",
+      "expected": "generated .nightshift/config.toml does not contain 'super-secret-token' or any token/PAT value",
+      "assertion_pseudocode": "with tmp_cwd() as cwd: run_config_generation(pat='super-secret-token'); content = (cwd / '.nightshift' / 'config.toml').read_text(); assert 'super-secret-token' not in content; assert 'token' not in content.lower() or all lines with 'token' are comments"
+    },
+    {
+      "id": "TS-02-32",
+      "requirement_id": "02-REQ-4.6",
+      "kind": "unit",
+      "description": "The in-memory AgentFoxConfig instance is unchanged after config file generation; nightshift does not reload the newly-written config.",
+      "preconditions": [
+        ".nightshift/config.toml does not exist",
+        "CWD validation has passed",
+        "in-memory config has carry_patch.workspace='original-slug'"
+      ],
+      "input": "config generation triggered; new config.toml is written with different values",
+      "expected": "in-memory config.carry_patch.workspace remains 'original-slug' after config generation",
+      "assertion_pseudocode": "config = AgentFoxConfig(carry_patch=CarryPatchConfig(workspace='original-slug')); run_config_generation(config=config, slug='new-slug'); assert config.carry_patch.workspace == 'original-slug'"
+    },
+    {
+      "id": "TS-02-33",
+      "requirement_id": "02-REQ-5.1",
+      "kind": "unit",
+      "description": "The async startup helper calls set_variable with the correct arguments for both AUTO_REBUILD_AFTER_SYNC and AUTO_REBUILD_AFTER_PUSH after CWD validation passes.",
+      "preconditions": [
+        "carry-patch mode is active with slug='my-slug'",
+        "CWD validation passes",
+        "HubClient.set_variable is mocked to succeed"
+      ],
+      "input": "async startup helper invoked; CWD validation passes; set_variable is called",
+      "expected": "set_variable is called twice: first with ('my-slug', 'AUTO_REBUILD_AFTER_SYNC', 'false'), then with ('my-slug', 'AUTO_REBUILD_AFTER_PUSH', 'false')",
+      "assertion_pseudocode": "with mock_hub_client() as mock_client, mock_subprocess_run(returncode=0, stdout=b'https://git.example.com/repo.git\\n'): asyncio.run(startup_helper(slug='my-slug', ...)); calls = mock_client.set_variable.call_args_list; assert calls[0] == call('my-slug', 'AUTO_REBUILD_AFTER_SYNC', 'false'); assert calls[1] == call('my-slug', 'AUTO_REBUILD_AFTER_PUSH', 'false')"
+    },
+    {
+      "id": "TS-02-34",
+      "requirement_id": "02-REQ-5.2",
+      "kind": "unit",
+      "description": "The async startup helper emits logging.warning and continues startup without exiting when set_variable raises any exception.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "CWD validation passes",
+        "HubClient.set_variable is mocked to raise HubForbiddenError on both calls"
+      ],
+      "input": "async startup helper invoked; both set_variable calls raise HubForbiddenError",
+      "expected": "logging.warning is called for each failure; nightshift does not exit; daemon loop starts normally",
+      "assertion_pseudocode": "with mock_hub_client(set_variable_raises=HubForbiddenError()), capture_logs() as logs, mock_daemon_runner() as mock_runner: invoke_full_startup(); warning_messages = [r for r in logs if r.levelname == 'WARNING']; assert len(warning_messages) >= 1; assert mock_runner.run.called"
+    },
+    {
+      "id": "TS-02-35",
+      "requirement_id": "02-REQ-5.3",
+      "kind": "unit",
+      "description": "The async startup helper returns control to synchronous main() which then invokes DaemonRunner.run() after the helper completes successfully.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "CWD validation passes",
+        "set_variable calls succeed",
+        "DaemonRunner is mocked"
+      ],
+      "input": "async startup helper completes successfully; main() continues",
+      "expected": "DaemonRunner.run() is called after asyncio.run(startup_helper(...)) returns",
+      "assertion_pseudocode": "call_order = []; with mock_startup_helper(side_effect=lambda: call_order.append('startup')), mock_daemon_runner(side_effect=lambda: call_order.append('daemon')): invoke_full_startup(); assert call_order == ['startup', 'daemon']"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-02-P1",
+      "property_id": "02-PROP-1",
+      "validates": [],
+      "description": "For any integer value supplied for check_interval, rebuild_poll_interval, or max_resolve_retries, the stored value equals max(min_bound, min(v, max_bound)) as declared by Clamped.",
+      "for_any_strategy": "Sample integers uniformly from [-1000, 1000] for each of check_interval (bounds: ge=60), rebuild_poll_interval (bounds: ge=2), and max_resolve_retries (bounds: ge=0, le=10) using hypothesis.strategies.integers(min_value=-1000, max_value=1000)",
+      "invariant_check": "cp = CarryPatchConfig(check_interval=v1, rebuild_poll_interval=v2, max_resolve_retries=v3); assert cp.check_interval == max(60, v1); assert cp.rebuild_poll_interval == max(2, v2); assert cp.max_resolve_retries == max(0, min(v3, 10))"
+    },
+    {
+      "id": "TS-02-P2",
+      "property_id": "02-PROP-2",
+      "validates": [],
+      "description": "For any combination of CLI flags, environment variables, and config values, carry-patch mode is active if and only if both the resolved workspace slug and resolved PAT are non-empty strings.",
+      "for_any_strategy": "Sample from hypothesis.strategies.text() for workspace_flag, AF_WORKSPACE, config_workspace, token_flag, AF_HUB_TOKEN; include empty string in the sample space; use hypothesis.strategies.one_of(st.just(''), st.text(min_size=1)) for each source",
+      "invariant_check": "resolved_slug = workspace_flag or os.environ.get('AF_WORKSPACE', '') or config_workspace; resolved_pat = token_flag or os.environ.get('AF_HUB_TOKEN', ''); carry_patch_active = bool(resolved_slug) and bool(resolved_pat); assert carry_patch_mode_activated(result) == carry_patch_active"
+    },
+    {
+      "id": "TS-02-P3",
+      "property_id": "02-PROP-3",
+      "validates": [],
+      "description": "For any combination of --hub-url flag, AF_HUB_URL env var, and config.hub.endpoint_url, the resolved hub URL is the first non-empty value in the priority order: CLI flag > AF_HUB_URL > config.hub.endpoint_url.",
+      "for_any_strategy": "Sample from hypothesis.strategies.one_of(st.just(''), st.from_regex(r'https://[a-z]+\\.example\\.com', fullmatch=True)) for each of hub_url_flag, af_hub_url_env, and config_endpoint_url independently",
+      "invariant_check": "expected = hub_url_flag or af_hub_url_env or config_endpoint_url; resolved = resolve_hub_url(hub_url_flag=hub_url_flag, config_url=config_endpoint_url) with AF_HUB_URL=af_hub_url_env in env; assert resolved == expected"
+    },
+    {
+      "id": "TS-02-P4",
+      "property_id": "02-PROP-4",
+      "validates": [],
+      "description": "For any startup invocation with carry-patch mode active, the daemon loop starts if and only if all six CWD validation steps pass; any single step failure causes process exit with code 1.",
+      "for_any_strategy": "Enumerate all failure modes: HubAuthError, HubNotFoundError, wrong workspace_mode, non-ready clone_status ('pending'/'cloning'/'failed'), FileNotFoundError from git, TimeoutExpired from git, non-zero git return code, URL mismatch; for each, mock exactly that failure while all others succeed",
+      "invariant_check": "for each failure_mode in all_failure_modes: with inject_failure(failure_mode): result = invoke_full_startup(); assert result.exit_code == 1; assert daemon_runner_not_called(); with all_passing(): result = invoke_full_startup(); assert result.exit_code == 0; assert daemon_runner_called()"
+    },
+    {
+      "id": "TS-02-P5",
+      "property_id": "02-PROP-5",
+      "validates": [],
+      "description": "For any startup invocation where .nightshift/config.toml already exists, the content of the file is identical before and after nightshift startup.",
+      "for_any_strategy": "Sample arbitrary file content strings using hypothesis.strategies.text(min_size=1, max_size=10000) as the pre-existing config.toml content; run config generation with various resolved values",
+      "invariant_check": "with tmp_cwd() as cwd: config_path = cwd / '.nightshift' / 'config.toml'; config_path.parent.mkdir(); config_path.write_text(original_content); run_config_generation(...); assert config_path.read_text() == original_content"
+    },
+    {
+      "id": "TS-02-P6",
+      "property_id": "02-PROP-6",
+      "validates": [],
+      "description": "For any startup invocation that generates .nightshift/config.toml, the generated file contains no PAT or token value.",
+      "for_any_strategy": "Sample arbitrary PAT strings using hypothesis.strategies.text(min_size=1, max_size=200, alphabet=hypothesis.strategies.characters(whitelist_categories=('Lu','Ll','Nd'))) to represent realistic token values",
+      "invariant_check": "with tmp_cwd() as cwd: run_config_generation(pat=arbitrary_pat); content = (cwd / '.nightshift' / 'config.toml').read_text(); assert arbitrary_pat not in content"
+    },
+    {
+      "id": "TS-02-P7",
+      "property_id": "02-PROP-7",
+      "validates": [],
+      "description": "For any exception raised by set_variable during startup, nightshift emits a warning log and proceeds to start the daemon loop; it never exits due to a set_variable failure.",
+      "for_any_strategy": "Sample from the set of all HubError subclasses: [HubAuthError, HubNotFoundError, HubForbiddenError, HubConnectionError, HubConflictError, generic HubError]; also include generic Exception; inject each as the exception raised by set_variable",
+      "invariant_check": "for exc_class in all_hub_error_classes + [Exception]: with mock_hub_client(set_variable_raises=exc_class()), mock_daemon_runner() as mock_runner: invoke_full_startup(); assert mock_runner.run.called; assert not process_exited_with_error()"
+    },
+    {
+      "id": "TS-02-P8",
+      "property_id": "02-PROP-8",
+      "validates": [],
+      "description": "For any startup invocation with carry-patch mode active, exactly one HubClient instance is constructed and reused for get_workspace and both set_variable calls.",
+      "for_any_strategy": "Sample valid startup configurations (non-empty hub_url, slug, pat) using hypothesis.strategies.fixed_dictionaries with text fields; vary which set_variable calls succeed or fail",
+      "invariant_check": "with track_hub_client_instantiation() as tracker: asyncio.run(startup_helper(hub_url=hub_url, pat=pat, slug=slug, ...)); assert tracker.instantiation_count == 1; assert tracker.instance.get_workspace.called; assert tracker.instance.set_variable.call_count == 2"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-02-E1",
+      "requirement_id": "02-REQ-1.E1",
+      "kind": "unit",
+      "description": "CarryPatchConfig accepts max_resolve_retries=0 as-is without clamping, since 0 is the declared minimum.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=0, le=10) on max_resolve_retries"
+      ],
+      "input": "CarryPatchConfig(max_resolve_retries=0)",
+      "expected": "config.carry_patch.max_resolve_retries == 0; no ValidationError is raised",
+      "assertion_pseudocode": "cp = CarryPatchConfig(max_resolve_retries=0); assert cp.max_resolve_retries == 0"
+    },
+    {
+      "id": "TS-02-E2",
+      "requirement_id": "02-REQ-1.E2",
+      "kind": "unit",
+      "description": "CarryPatchConfig accepts check_interval=60 as-is without clamping, since 60 is the declared minimum boundary.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=60) on check_interval"
+      ],
+      "input": "CarryPatchConfig(check_interval=60)",
+      "expected": "config.carry_patch.check_interval == 60; no ValidationError is raised",
+      "assertion_pseudocode": "cp = CarryPatchConfig(check_interval=60); assert cp.check_interval == 60"
+    },
+    {
+      "id": "TS-02-E3",
+      "requirement_id": "02-REQ-1.E3",
+      "kind": "unit",
+      "description": "An existing config file without [hub] or [carry_patch] sections loads successfully with defaults, confirming backward compatibility.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py has AgentFoxConfig with hub and carry_patch fields using default_factory"
+      ],
+      "input": "TOML string representing a pre-existing config file with only legacy sections (e.g. [nightshift]) and no [hub] or [carry_patch]",
+      "expected": "AgentFoxConfig loads without error; config.carry_patch.enabled == False; config.hub.endpoint_url == ''",
+      "assertion_pseudocode": "toml_str = '[nightshift]\\nsome_key = \"value\"'; config = parse_agentfox_config(toml_str); assert config.carry_patch.enabled == False; assert config.hub.endpoint_url == ''"
+    },
+    {
+      "id": "TS-02-E4",
+      "requirement_id": "02-REQ-2.E1",
+      "kind": "unit",
+      "description": "nightshift CLI uses the --token flag value as the PAT directly without calling resolve_hub_pat() when --token is supplied.",
+      "preconditions": [
+        "AF_HUB_TOKEN is unset in the environment",
+        "--token flag is set to 'cli-token-value'",
+        "resolve_hub_pat is mocked to track calls"
+      ],
+      "input": "CLI invocation: nightshift --workspace my-slug --hub-url https://hub.example.com --token cli-token-value",
+      "expected": "resolved PAT == 'cli-token-value'; resolve_hub_pat() is not called",
+      "assertion_pseudocode": "with mock_resolve_hub_pat() as mock_pat, mock_hub_client() as mock_client: invoke_cli(['--workspace', 'my-slug', '--hub-url', 'https://hub.example.com', '--token', 'cli-token-value']); assert mock_client.constructor_args.pat == 'cli-token-value'; assert mock_pat.call_count == 0"
+    },
+    {
+      "id": "TS-02-E5",
+      "requirement_id": "02-REQ-2.E2",
+      "kind": "unit",
+      "description": "nightshift CLI prefers the --hub-url flag value over AF_HUB_URL environment variable when both are set.",
+      "preconditions": [
+        "AF_HUB_URL is set to 'https://env.hub.example.com' in the environment",
+        "--hub-url flag is set to 'https://flag.hub.example.com'",
+        "resolve_hub_url returns the flag value when hub_url_flag is non-empty"
+      ],
+      "input": "CLI invocation: nightshift --hub-url https://flag.hub.example.com --workspace my-slug --token myPAT with AF_HUB_URL=https://env.hub.example.com",
+      "expected": "resolved hub URL == 'https://flag.hub.example.com'",
+      "assertion_pseudocode": "with env({'AF_HUB_URL': 'https://env.hub.example.com'}), mock_hub_client() as mock_client: invoke_cli(['--hub-url', 'https://flag.hub.example.com', '--workspace', 'my-slug', '--token', 'myPAT']); assert mock_client.constructor_args.endpoint_url == 'https://flag.hub.example.com'"
+    },
+    {
+      "id": "TS-02-E6",
+      "requirement_id": "02-REQ-2.E3",
+      "kind": "unit",
+      "description": "nightshift CLI exits with code 1 when all three hub URL resolution tiers are empty strings and carry-patch mode is otherwise active.",
+      "preconditions": [
+        "--hub-url flag is not passed",
+        "AF_HUB_URL is unset",
+        "config.hub.endpoint_url is ''",
+        "--workspace and --token are both non-empty"
+      ],
+      "input": "CLI invocation: nightshift --workspace my-slug --token myPAT with no hub URL source",
+      "expected": "process exits with code 1; stderr contains a message about hub URL being required",
+      "assertion_pseudocode": "result = invoke_cli(['--workspace', 'my-slug', '--token', 'myPAT']); assert result.exit_code == 1; assert 'hub' in result.stderr.lower()"
+    },
+    {
+      "id": "TS-02-E7",
+      "requirement_id": "02-REQ-3.E1",
+      "kind": "unit",
+      "description": "The async startup helper strips trailing whitespace from the local origin URL before comparing to workspace.git_url, avoiding false mismatches.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "workspace.git_url == 'https://git.example.com/repo.git'",
+        "subprocess.run returns stdout='https://git.example.com/repo.git\\n' (with trailing newline)"
+      ],
+      "input": "async startup helper invoked; git stdout has trailing newline",
+      "expected": "CWD validation passes; no URL mismatch error is raised; logging.info is called",
+      "assertion_pseudocode": "workspace = Workspace(workspace_mode='carry_patch', clone_status='ready', git_url='https://git.example.com/repo.git'); with mock_hub_client(get_workspace_returns=workspace), mock_subprocess_run(returncode=0, stdout=b'https://git.example.com/repo.git\\n'), capture_logs() as logs: asyncio.run(startup_helper(...)); assert any('valid' in m.lower() or 'success' in m.lower() for m in [r.message for r in logs if r.levelname == 'INFO'])"
+    },
+    {
+      "id": "TS-02-E8",
+      "requirement_id": "02-REQ-3.E2",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and shows 'pending' in the error message when clone_status is 'pending'.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "get_workspace returns Workspace(workspace_mode='carry_patch', clone_status='pending', git_url='https://git.example.com/repo.git')"
+      ],
+      "input": "async startup helper invoked; workspace.clone_status == 'pending'",
+      "expected": "process exits with code 1; stderr contains 'pending'",
+      "assertion_pseudocode": "workspace = Workspace(workspace_mode='carry_patch', clone_status='pending', git_url='https://git.example.com/repo.git'); with mock_hub_client(get_workspace_returns=workspace): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'pending' in captured_stderr"
+    },
+    {
+      "id": "TS-02-E9",
+      "requirement_id": "02-REQ-3.E3",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and shows 'failed' in the error message when clone_status is 'failed'.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "get_workspace returns Workspace(workspace_mode='carry_patch', clone_status='failed', git_url='https://git.example.com/repo.git')"
+      ],
+      "input": "async startup helper invoked; workspace.clone_status == 'failed'",
+      "expected": "process exits with code 1; stderr contains 'failed'",
+      "assertion_pseudocode": "workspace = Workspace(workspace_mode='carry_patch', clone_status='failed', git_url='https://git.example.com/repo.git'); with mock_hub_client(get_workspace_returns=workspace): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'failed' in captured_stderr"
+    },
+    {
+      "id": "TS-02-E10",
+      "requirement_id": "02-REQ-3.E4",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and writes a connection failure error to stderr when get_workspace raises HubConnectionError.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "HubClient.get_workspace is mocked to raise HubConnectionError"
+      ],
+      "input": "async startup helper invoked; get_workspace raises HubConnectionError",
+      "expected": "process exits with code 1; stderr contains a message indicating a connection failure",
+      "assertion_pseudocode": "with mock_hub_client(get_workspace_raises=HubConnectionError()): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'connect' in captured_stderr.lower() or 'network' in captured_stderr.lower() or 'connection' in captured_stderr.lower()"
+    },
+    {
+      "id": "TS-02-E11",
+      "requirement_id": "02-REQ-3.E5",
+      "kind": "unit",
+      "description": "The async startup helper treats an empty workspace.git_url as a mismatch against any non-empty local origin URL and exits with the URL mismatch error.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "workspace.git_url == '' (empty string)",
+        "subprocess.run returns stdout='https://git.example.com/repo.git\\n'"
+      ],
+      "input": "async startup helper invoked; workspace.git_url is empty; local origin URL is non-empty",
+      "expected": "process exits with code 1; stderr shows both URLs (empty and local) and a 'cd' instruction",
+      "assertion_pseudocode": "workspace = Workspace(workspace_mode='carry_patch', clone_status='ready', git_url=''); with mock_hub_client(get_workspace_returns=workspace), mock_subprocess_run(returncode=0, stdout=b'https://git.example.com/repo.git\\n'): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'cd' in captured_stderr"
+    },
+    {
+      "id": "TS-02-E12",
+      "requirement_id": "02-REQ-4.E1",
+      "kind": "unit",
+      "description": "nightshift writes .nightshift/config.toml successfully when .nightshift/ directory already exists but config.toml is absent.",
+      "preconditions": [
+        ".nightshift/ directory already exists",
+        ".nightshift/config.toml does not exist",
+        "CWD validation has passed"
+      ],
+      "input": "config generation triggered; .nightshift/ exists but config.toml is absent",
+      "expected": ".nightshift/config.toml is created successfully with expected TOML content",
+      "assertion_pseudocode": "with tmp_cwd() as cwd: (cwd / '.nightshift').mkdir(); run_config_generation(hub_url='https://hub.example.com', slug='my-slug'); assert (cwd / '.nightshift' / 'config.toml').exists()"
+    },
+    {
+      "id": "TS-02-E13",
+      "requirement_id": "02-REQ-4.E2",
+      "kind": "unit",
+      "description": "nightshift emits logging.warning and continues when the atomic rename of config.toml.tmp to config.toml raises an exception.",
+      "preconditions": [
+        ".nightshift/config.toml does not exist",
+        "CWD validation has passed",
+        "os.rename is mocked to raise OSError after temp file is written"
+      ],
+      "input": "config generation triggered; temp file write succeeds but rename raises OSError",
+      "expected": "logging.warning is called; nightshift continues running; config.toml.tmp may remain on disk",
+      "assertion_pseudocode": "with mock_os_rename(raises=OSError('rename failed')), capture_logs() as logs: run_config_generation_and_continue(); warning_messages = [r for r in logs if r.levelname == 'WARNING']; assert len(warning_messages) >= 1; assert startup_continued_normally()"
+    },
+    {
+      "id": "TS-02-E14",
+      "requirement_id": "02-REQ-4.E3",
+      "kind": "unit",
+      "description": "The generated .nightshift/config.toml writes the actual branch name as integration_branch when workspace.integration_branch is a non-empty string.",
+      "preconditions": [
+        ".nightshift/config.toml does not exist",
+        "workspace.integration_branch == 'main'"
+      ],
+      "input": "config generation triggered with workspace.integration_branch='main'",
+      "expected": "generated TOML contains 'integration_branch = \"main\"'",
+      "assertion_pseudocode": "with tmp_cwd() as cwd: run_config_generation(integration_branch='main'); content = (cwd / '.nightshift' / 'config.toml').read_text(); assert 'integration_branch = \"main\"' in content"
+    },
+    {
+      "id": "TS-02-E15",
+      "requirement_id": "02-REQ-4.E4",
+      "kind": "unit",
+      "description": "The global AgentFoxConfig TOML template in config_gen.py includes [hub] and [carry_patch] sections with comment annotations.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config_gen.py exists and contains the global default TOML template"
+      ],
+      "input": "Read the global TOML template string from config_gen.py",
+      "expected": "template string contains '[hub]' and '[carry_patch]' sections",
+      "assertion_pseudocode": "from agentfox.core.config_gen import DEFAULT_CONFIG_TEMPLATE; assert '[hub]' in DEFAULT_CONFIG_TEMPLATE; assert '[carry_patch]' in DEFAULT_CONFIG_TEMPLATE"
+    },
+    {
+      "id": "TS-02-E16",
+      "requirement_id": "02-REQ-5.E1",
+      "kind": "unit",
+      "description": "When the first set_variable call raises an exception, nightshift emits logging.warning and still attempts the second set_variable call for AUTO_REBUILD_AFTER_PUSH.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "CWD validation passes",
+        "set_variable is mocked to raise HubConnectionError on the first call and succeed on the second"
+      ],
+      "input": "async startup helper invoked; first set_variable raises HubConnectionError",
+      "expected": "logging.warning is called once; set_variable is called twice (both AUTO_REBUILD_AFTER_SYNC and AUTO_REBUILD_AFTER_PUSH); nightshift continues",
+      "assertion_pseudocode": "call_count = [0]; def side_effect(*args): call_count[0] += 1; if call_count[0] == 1: raise HubConnectionError(); with mock_hub_client(set_variable_side_effect=side_effect), capture_logs() as logs: asyncio.run(startup_helper(...)); assert call_count[0] == 2; assert any(r.levelname == 'WARNING' for r in logs)"
+    },
+    {
+      "id": "TS-02-E17",
+      "requirement_id": "02-REQ-5.E2",
+      "kind": "unit",
+      "description": "set_variable completes without error when the variables are already set to 'false' on the hub (idempotent PATCH-then-POST upsert).",
+      "preconditions": [
+        "carry-patch mode is active",
+        "CWD validation passes",
+        "HubClient.set_variable is mocked to succeed (simulating idempotent upsert)"
+      ],
+      "input": "async startup helper invoked; set_variable called when variables already set to 'false'",
+      "expected": "set_variable completes without raising any exception; no warning log is emitted",
+      "assertion_pseudocode": "with mock_hub_client(set_variable_returns=None), capture_logs() as logs: asyncio.run(startup_helper(...)); assert not any(r.levelname == 'WARNING' for r in logs if 'set_variable' in r.message.lower() or 'AUTO_REBUILD' in r.message)"
+    },
+    {
+      "id": "TS-02-E18",
+      "requirement_id": "02-REQ-5.E3",
+      "kind": "unit",
+      "description": "The async startup helper executes within a single event loop created by asyncio.run() without raising RuntimeError from a pre-existing running loop.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "all validation mocks are in place",
+        "test is run from a synchronous context (not inside an existing event loop)"
+      ],
+      "input": "asyncio.run(startup_helper(...)) called from synchronous main()",
+      "expected": "no RuntimeError is raised; the event loop is created and destroyed by asyncio.run()",
+      "assertion_pseudocode": "try: asyncio.run(startup_helper(...)); except RuntimeError as e: assert False, f'RuntimeError raised: {e}'"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-02-SMOKE-1",
+      "execution_path_id": "02-PATH-1",
+      "description": "Happy path: first-time carry-patch startup with all flags provided, CWD validation passes, config is generated, and variables are set.",
+      "trigger": "Invoke nightshift CLI with --hub-url https://hub.example.com --workspace my-slug --token myPAT from a directory whose git origin matches the hub workspace git_url",
+      "real_components": [
+        "nightshift CLI (packages/nightshift/nightshift/app.py)",
+        "async startup helper",
+        "nightshift config generator",
+        "AgentFoxConfig (packages/agentfox/agentfox/core/config.py)"
+      ],
+      "mockable": [
+        "HubClient.get_workspace (returns Workspace with workspace_mode='carry_patch', clone_status='ready', git_url matching local origin)",
+        "HubClient.set_variable (returns None)",
+        "subprocess.run (returns returncode=0, stdout=matching git_url bytes)",
+        "DaemonRunner.run (no-op to prevent daemon from running indefinitely)",
+        "filesystem (.nightshift/ directory and config.toml creation in a temp directory)"
+      ],
+      "expected_effects": [
+        "HubClient is constructed once with endpoint_url='https://hub.example.com' and pat='myPAT'",
+        "get_workspace is called once with 'my-slug'",
+        "subprocess.run is called with ['git', 'remote', 'get-url', 'origin']",
+        "logging.info is emitted indicating CWD validation succeeded",
+        ".nightshift/config.toml is created with [hub], [carry_patch], and [workspace] sections",
+        "set_variable is called with ('my-slug', 'AUTO_REBUILD_AFTER_SYNC', 'false')",
+        "set_variable is called with ('my-slug', 'AUTO_REBUILD_AFTER_PUSH', 'false')",
+        "DaemonRunner.run() is called",
+        "process exits with code 0"
+      ]
+    },
+    {
+      "id": "TS-02-SMOKE-2",
+      "execution_path_id": "02-PATH-2",
+      "description": "CWD mismatch: operator is in the wrong directory; nightshift exits with code 1 showing both URLs and a cd instruction.",
+      "trigger": "Invoke nightshift CLI with --workspace my-slug --token myPAT from a directory whose git origin does not match the hub workspace git_url",
+      "real_components": [
+        "nightshift CLI (packages/nightshift/nightshift/app.py)",
+        "async startup helper"
+      ],
+      "mockable": [
+        "HubClient.get_workspace (returns Workspace with workspace_mode='carry_patch', clone_status='ready', git_url='https://git.example.com/correct-repo.git')",
+        "subprocess.run (returns returncode=0, stdout='https://git.example.com/wrong-repo.git\\n')",
+        "resolve_hub_url (returns 'https://hub.example.com')"
+      ],
+      "expected_effects": [
+        "click.echo is called with err=True containing both 'https://git.example.com/wrong-repo.git' and 'https://git.example.com/correct-repo.git'",
+        "stderr contains a 'cd' instruction",
+        "process exits with code 1",
+        "DaemonRunner.run() is never called"
+      ]
+    },
+    {
+      "id": "TS-02-SMOKE-3",
+      "execution_path_id": "02-PATH-3",
+      "description": "No carry-patch flags: nightshift runs in normal mode without any hub API calls.",
+      "trigger": "Invoke nightshift with no --workspace, --token, or --hub-url flags and no corresponding environment variables or config values",
+      "real_components": [
+        "nightshift CLI (packages/nightshift/nightshift/app.py)",
+        "AgentFoxConfig (packages/agentfox/agentfox/core/config.py)",
+        "DaemonRunner"
+      ],
+      "mockable": [
+        "DaemonRunner.run (no-op to prevent daemon from running indefinitely)",
+        "HubClient (track that it is never instantiated)"
+      ],
+      "expected_effects": [
+        "HubClient is never instantiated",
+        "get_workspace is never called",
+        "async startup helper is never invoked",
+        "DaemonRunner.run() is called directly",
+        "process does not exit with code 1"
+      ]
+    },
+    {
+      "id": "TS-02-SMOKE-4",
+      "execution_path_id": "02-PATH-4",
+      "description": "Missing PAT with workspace slug: nightshift exits with code 1 and an error message explaining the PAT is required.",
+      "trigger": "Invoke nightshift CLI with --workspace my-slug and no --token flag, with AF_HUB_TOKEN unset",
+      "real_components": [
+        "nightshift CLI (packages/nightshift/nightshift/app.py)"
+      ],
+      "mockable": [
+        "resolve_hub_pat (returns empty string)",
+        "resolve_hub_url (returns 'https://hub.example.com')"
+      ],
+      "expected_effects": [
+        "click.echo is called with err=True containing a message about PAT being required",
+        "process exits with code 1",
+        "HubClient is never instantiated",
+        "DaemonRunner.run() is never called"
+      ]
+    },
+    {
+      "id": "TS-02-SMOKE-5",
+      "execution_path_id": "02-PATH-5",
+      "description": "set_variable failures are non-fatal: both set_variable calls raise exceptions, warnings are logged, and the daemon starts anyway.",
+      "trigger": "Invoke nightshift CLI with --workspace my-slug --token myPAT in a valid workspace directory where set_variable raises exceptions",
+      "real_components": [
+        "nightshift CLI (packages/nightshift/nightshift/app.py)",
+        "async startup helper",
+        "AgentFoxConfig (packages/agentfox/agentfox/core/config.py)"
+      ],
+      "mockable": [
+        "HubClient.get_workspace (returns valid Workspace with workspace_mode='carry_patch', clone_status='ready')",
+        "HubClient.set_variable (first call raises HubForbiddenError, second call raises HubConnectionError)",
+        "subprocess.run (returns returncode=0, stdout=matching git_url bytes)",
+        "DaemonRunner.run (no-op)",
+        "resolve_hub_url (returns 'https://hub.example.com')"
+      ],
+      "expected_effects": [
+        "logging.warning is emitted for the HubForbiddenError from the first set_variable call",
+        "set_variable is called a second time for AUTO_REBUILD_AFTER_PUSH despite the first failure",
+        "logging.warning is emitted for the HubConnectionError from the second set_variable call",
+        "DaemonRunner.run() is called",
+        "process does not exit with code 1"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}

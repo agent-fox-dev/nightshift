@@ -1,0 +1,287 @@
+{
+  "state": "generated",
+  "prd_path": "prd.md",
+  "assessment_history": [
+    {
+      "quality": "needs_refinement",
+      "summary": "The PRD for `afhub_client` is well-structured and detailed overall. It clearly defines intent, goals, tech stack, out-of-scope boundaries, and granular requirements for the client's API surface, data models, error hierarchy, auth helpers, polling helpers, and retry logic. The package layout is explicit and actionable. However, there are notable gaps: (1) the external Hub REST API surface is not documented \u2014 no endpoint URLs, HTTP methods, request/response shapes, rate limits, or failure modes are specified; (2) test tooling is not named; (3) measurable success criteria (Goals) are functional rather than quantitative; (4) the owner field in the outer frontmatter is blank; and (5) there is no mention of versioning or compatibility expectations for the Hub API itself.",
+      "gaps": [
+        "External API surface is undocumented: the PRD defines HubClient methods but never specifies the actual Hub REST endpoints (paths, HTTP methods), request body shapes, or expected response JSON schemas. Without this, implementers must reverse-engineer the API from a live server or other sources.",
+        "Failure modes of the Hub API are only partially documented: rate limiting, pagination, and non-error envelope response shapes (e.g., for 204 No Content responses like remove_patch, forget_rerere, set_variable, create_secret) are not described.",
+        "Test tooling is unspecified: the tech stack names Python 3.12+, httpx, and pydantic, but does not name the test framework (e.g., pytest, pytest-asyncio) or any mocking strategy for httpx (e.g., respx, pytest-httpx).",
+        "Goals are functional/qualitative rather than measurable: there are no quantitative acceptance criteria (e.g., retry behavior timing tolerances, polling accuracy, test coverage targets).",
+        "The owner field in the outer YAML frontmatter is empty, leaving accountability undefined.",
+        "No versioning or API stability contract is stated: it is unclear which version of the af-hub API this client targets, and what happens if the hub API evolves (no mention of backward compatibility or versioning strategy).",
+        "The `PatchStatusDashboard` model references `PatchDetail` and `PatchSummary` sub-models but their fields are not specified, leaving those models underspecified.",
+        "The `RebuildPreview` model references `RebuildPreviewPatchResult` but its fields are not defined anywhere in the PRD."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Can you provide or point to documentation for the af-hub REST API? Specifically: what are the base URL structure, path patterns, HTTP methods, and JSON request/response shapes for each endpoint mapped by HubClient?",
+          "context": "The PRD defines Python method signatures but never specifies the underlying HTTP endpoints. Without endpoint paths, methods, and response schemas, implementers cannot write the client without access to a live hub server or separate API docs. This is the most critical gap blocking implementation.",
+          "options": [
+            "Provide a link to existing Hub API documentation (e.g., OpenAPI spec, Swagger, or internal wiki)",
+            "Enumerate the endpoints inline in the PRD under a new 'Verified External API' section",
+            "Confirm that implementers have access to a live Hub server and can infer the API surface from it"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "What are the failure modes of the Hub API that the client must handle beyond HTTP status codes? Specifically: does the Hub enforce rate limits, return paginated responses, or use any non-envelope response shapes (e.g., plain 204 for deletes)?",
+          "context": "Several client methods (remove_patch, forget_rerere, set_variable, create_secret) are typed as returning None, suggesting 204 responses, but this is not confirmed. Rate limiting behavior (429 responses) is also unaddressed, which affects the retry logic in REQ-9.",
+          "options": [
+            "The Hub returns 204 No Content for all void operations \u2014 confirm this",
+            "The Hub returns a 200 with an empty or confirmation envelope for void operations",
+            "The Hub enforces rate limits (please describe: limits, headers, backoff expectations)",
+            "No rate limiting exists; 204s confirmed for void operations"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "What test framework and async test tooling should be used? Should the test suite use pytest with pytest-asyncio, and which httpx mocking library is preferred (e.g., respx, pytest-httpx)?",
+          "context": "The tech stack specifies Python, httpx, and pydantic but omits test tooling. Since the client is async, the test framework must support async test functions. Naming the tools avoids implementers making inconsistent choices.",
+          "options": [
+            "pytest + pytest-asyncio + respx",
+            "pytest + pytest-asyncio + pytest-httpx",
+            "pytest + anyio + respx",
+            "Mirror whatever test tooling is used in packages/afissues/"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Can you specify the fields for the PatchDetail, PatchSummary, and RebuildPreviewPatchResult sub-models referenced in REQ-5?",
+          "context": "PatchStatusDashboard contains `patches: list[PatchDetail]` and `summary: PatchSummary`, and RebuildPreview contains `patch_results: list[RebuildPreviewPatchResult]`, but none of these nested models have their fields defined. Without field definitions, the models cannot be implemented correctly.",
+          "options": [
+            "Provide field definitions inline",
+            "Reference an existing schema file or API response example",
+            "Confirm these models should mirror the fields of Patch and PatchResult respectively"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "Which version of the af-hub API does this client target, and is there an expectation of backward compatibility or versioned endpoint paths (e.g., /v1/, /v2/)?",
+          "context": "No API version is mentioned. If the Hub API evolves, it is unclear whether the client must support multiple versions or can break with Hub upgrades. This affects the package's versioning strategy and whether version negotiation logic is needed.",
+          "options": [
+            "The Hub API is unversioned; the client tracks the current Hub server version",
+            "The Hub API uses URL versioning (e.g., /api/v1/); specify the target version",
+            "The Hub API uses header-based versioning; specify the header and value",
+            "No compatibility guarantees are needed at this stage"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Who is the owner/maintainer of this package? The outer YAML frontmatter has an empty `owner` field.",
+          "context": "Accountability for the spec and the resulting package is undefined. This is important for review, on-call, and future spec updates.",
+          "options": [],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "This PRD is exceptionally well-structured and thorough. It clearly defines intent, goals, non-goals, tech stack, API surface, error hierarchy, data models, and package layout. The level of detail is production-ready for most sections. However, a handful of gaps could cause ambiguity during implementation: variable/secret response model shapes are underspecified, the `add_patch` batch vs. single dispatch logic is unclear, some polling edge cases are undocumented, the `Variable` model is missing from the data models section, and the `set_variable` PATCH/POST routing logic needs clarification.",
+      "gaps": [
+        "Variable and Secret response shapes are not defined \u2014 the API surface table uses '(variable list)', '(created variable)', '(updated variable)' placeholders without a corresponding Pydantic model in REQ-5. It is unclear whether a `Variable` model should be added or if these endpoints truly return opaque/ignored bodies.",
+        "REQ-2 `add_patch` vs `add_patches_batch` dispatch: the PRD lists them as two separate methods, but the API surface shows a single `POST /patches` that accepts either a single object or a JSON array. It is unclear whether `HubClient` should auto-detect based on input type or always use separate code paths.",
+        "`set_variable` (REQ-4) maps to both POST (create, 201) and PATCH (update, 200) but the method signature only shows `(slug, key, value) -> None`. It is not specified how the client decides which HTTP method to use, or whether separate `create_variable` / `update_variable` methods should exist.",
+        "Polling helpers (REQ-8) do not specify behaviour when `get_workspace()` raises a transient `HubConnectionError` mid-poll \u2014 should the poll retry independently or propagate immediately?",
+        "`poll_clone_ready` terminal condition for `failed` clone_status raises `HubError`, but the constructor arguments for that synthetic error (status_code, message, error_type) are not specified.",
+        "The `__init__.py` public API surface is stated at a high level ('all models, all errors\u2026') but does not enumerate which symbols are exported, making it hard to write the public API contract or catch accidental omissions.",
+        "No mention of `pyproject.toml` contents: required dependencies (httpx, pydantic versions/constraints), package name, version, or whether the package is editable-installed in the monorepo."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "Should a `Variable` Pydantic model be defined for the workspace variable endpoints, and if so, what fields does it carry (e.g. `key`, `value`, `source`, `is_secret`)?",
+          "context": "The API surface table uses placeholder descriptions for variable responses. REQ-5 lists no Variable model. Without a model definition, implementers will guess the schema.",
+          "options": [
+            "Yes \u2014 define a Variable model with at least `key: str` and `value: str` fields (add others as known)",
+            "Yes \u2014 the GET /vars list and PATCH /vars/:key responses should return a full Variable model; POST /vars returns the same model at 201",
+            "No \u2014 variable endpoints return opaque bodies; all variable-mutating methods return None and only get_resolved_variables (dict[str,str]) is typed"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "How should `set_variable` determine whether to POST (create) or PATCH (update) a variable \u2014 and should it be a single method or split into `create_variable` / `update_variable`?",
+          "context": "REQ-4 defines a single `set_variable(slug, key, value) -> None`, but the API has distinct POST and PATCH endpoints. An upsert would require a GET first or a try/catch on 404, which is not mentioned.",
+          "options": [
+            "Split into create_variable (POST, 201) and update_variable (PATCH, 200) \u2014 both return None",
+            "Single set_variable that always tries PATCH first and falls back to POST on 404",
+            "Single set_variable that always POSTs \u2014 the hub is responsible for upsert semantics",
+            "Single set_variable with a boolean `create: bool = True` param to pick the method"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "For `poll_clone_ready`, what arguments should the synthetic `HubError` carry when `clone_status` transitions to `failed`?",
+          "context": "REQ-8 says to raise HubError if clone transitions to failed, but doesn't specify status_code, message, or error_type values for the synthesised exception. Implementers need a concrete spec.",
+          "options": [
+            "status_code=0, error_type='clone_failed', message taken from workspace.clone_error field",
+            "status_code=500, error_type='clone_failed', message='Workspace clone failed'",
+            "Raise a dedicated HubCloneError subclass of HubError with the workspace.clone_error as message"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Should polling helpers (poll_rebuild, poll_clone_ready) silently retry on transient HubConnectionError mid-poll, or propagate immediately?",
+          "context": "REQ-9 defines retry at the HTTP layer inside HubClient, but if retries are exhausted and HubConnectionError propagates, it will abort the poll. It is ambiguous whether the polling layer should add an outer retry.",
+          "options": [
+            "Propagate immediately \u2014 HubClient's own retry (REQ-9) is sufficient; a permanent network failure should abort the poll",
+            "Retry transparently up to N times at the poll level before propagating"
+          ],
+          "required": false
+        },
+        {
+          "id": "q5",
+          "text": "What are the minimum pyproject.toml requirements for this package \u2014 specifically the pinned or minimum versions of httpx and pydantic, and the package version?",
+          "context": "Without dependency constraints in pyproject.toml, the CI environment may resolve incompatible versions of httpx or pydantic, breaking the package silently.",
+          "options": [
+            "Match whatever versions afissues/agentfox already pin in the monorepo",
+            "Specify minimums: httpx>=0.27, pydantic>=2.0",
+            "Leave unconstrained and let the monorepo lock file manage versions"
+          ],
+          "required": false
+        },
+        {
+          "id": "q6",
+          "text": "Should `add_patch` and `add_patches_batch` remain two separate public methods, or should they be unified into a single method that dispatches based on whether it receives a single dict or a list?",
+          "context": "The hub API accepts both a single-object body and a JSON array on the same POST /patches endpoint. Two separate methods are explicit but redundant; a unified method is concise but may be surprising.",
+          "options": [
+            "Keep as two separate methods (add_patch for single, add_patches_batch for batch) \u2014 explicit is better",
+            "Unify into add_patch that accepts a list[dict] | dict and dispatches internally",
+            "Keep two methods but have add_patch delegate to add_patches_batch with a single-item list"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "needs_refinement",
+      "summary": "This PRD is exceptionally detailed and well-structured. The intent, goals, non-goals, tech stack, package layout, and external API surface are all thoroughly documented. The requirements are specific and actionable. A few targeted gaps remain: the field types and optionality of the `Workspace` and `Patch` models are not fully specified, the `set_variable` upsert method appears in REQ-4 despite being listed as a Non-Goal (the Non-Goal language needs clarification), the polling interval strategy on `HubConnectionError` mid-poll is partially specified but the interaction with the HTTP-layer retry deserves explicit confirmation, and there is no stated policy on how `asyncio.sleep` is called in polling (impacting testability). These are refinements rather than blockers, but resolving them will prevent ambiguity during implementation.",
+      "gaps": [
+        "Workspace and Patch Pydantic model field types and optionality are not fully specified \u2014 it is unclear which fields are Optional/have defaults versus required, beyond what is stated for RebuildJob.",
+        "The Non-Goals section excludes 'A unified set_variable dispatch method based on input type inspection', but REQ-4 includes a set_variable upsert method (PATCH-then-POST fallback). These are different semantics, but the naming overlap may cause confusion. The Non-Goal should clarify it refers to runtime type-dispatch, not the upsert pattern.",
+        "The retry logic in REQ-9 lists ConnectTimeout, ReadTimeout, and ConnectError as retryable \u2014 it is not stated whether httpx.TimeoutException (the base class) is also caught, or strictly the named subclasses.",
+        "The polling helpers in REQ-8 rely on asyncio.sleep for intervals, but there is no mention of how sleep is injected or mocked in tests \u2014 this affects whether test_polling.py can run without real delays.",
+        "The rollback_rebuild return type is described as 'previous integration SHA (string)' but the exact response shape from the hub (e.g., plain string body vs. JSON-wrapped string) is not documented in the External API Surface table.",
+        "No explicit statement on whether HubClient uses a single shared httpx.AsyncClient instance per HubClient lifetime or creates a new client per request \u2014 this has implications for connection pooling and test setup/teardown.",
+        "The config file source mentioned in the Background for auth resolution (resolve_hub_url accepts config_url) is not described \u2014 callers must pre-read the config file and pass config_url themselves, but this contract is implicit rather than stated."
+      ],
+      "questions": [
+        {
+          "id": "q1",
+          "text": "For the Workspace and Patch Pydantic models, which fields are required (no default) versus optional (None default)? For example, are clone_error, sync_error, upstream_pr_url, description, deleted_at all Optional[str] = None?",
+          "context": "Without knowing field optionality, implementers may make incorrect assumptions that cause runtime validation errors when the hub omits nullable fields.",
+          "options": [
+            "All fields not obviously required (errors, nullable timestamps, URLs) are Optional[X] = None; only slug/git_url/status are required on Workspace, and id/workspace_slug/branch_name/position/status are required on Patch",
+            "Provide a full explicit field table with types and defaults for Workspace and Patch",
+            "Leave all fields optional with None defaults for maximum hub-response tolerance"
+          ],
+          "required": true
+        },
+        {
+          "id": "q2",
+          "text": "The Non-Goals list excludes 'A unified set_variable dispatch method based on input type inspection', but REQ-4 includes set_variable as a PATCH-then-POST upsert. Should the Non-Goal entry be reworded to clarify it refers only to type-dispatch unification (not the upsert helper), so there is no contradiction?",
+          "context": "A reader skimming Non-Goals before REQ-4 may conclude set_variable should not exist at all, creating confusion.",
+          "options": [
+            "Yes \u2014 reword the Non-Goal to: 'A set_variable method that unifies create/update by inspecting the runtime type of the value argument'",
+            "Remove the Non-Goal entry entirely since set_variable is well-defined in REQ-4",
+            "Keep as-is; the distinction is clear enough from context"
+          ],
+          "required": true
+        },
+        {
+          "id": "q3",
+          "text": "For the rollback_rebuild endpoint, what is the exact hub response body shape? Is it a plain text string, a JSON string (quoted), or a JSON object like {\"sha\": \"...\"}}?",
+          "context": "The client return type is documented as str, but the deserialization logic differs significantly depending on the wire format.",
+          "options": [
+            "Plain text body (Content-Type: text/plain), read with response.text",
+            "JSON-encoded string (Content-Type: application/json), parsed with response.json() yielding a str",
+            "JSON object e.g. {\"sha\": \"<value>\"}, extract the sha key"
+          ],
+          "required": true
+        },
+        {
+          "id": "q4",
+          "text": "Should HubClient own a single httpx.AsyncClient instance for its lifetime (created in __init__ or via an async context manager), or create a new AsyncClient per request?",
+          "context": "A shared client enables connection pooling and is the httpx best practice, but requires explicit lifecycle management (aclose / async with). A per-request client is simpler but less efficient. The choice also affects how tests set up mocks.",
+          "options": [
+            "Single shared AsyncClient per HubClient instance; expose async context manager (__aenter__/__aexit__) for lifecycle",
+            "Single shared AsyncClient created lazily on first request; caller must call await client.aclose() when done",
+            "New AsyncClient per request (simpler, no lifecycle management needed)"
+          ],
+          "required": true
+        },
+        {
+          "id": "q5",
+          "text": "In test_polling.py, how should asyncio.sleep calls inside poll_rebuild and poll_clone_ready be handled to avoid real delays in the test suite?",
+          "context": "If asyncio.sleep is not injectable or patchable, polling tests will be slow or require real time to pass. Common approaches are dependency injection of a sleep callable or patching via unittest.mock.patch.",
+          "options": [
+            "Inject sleep as an optional parameter (sleep_fn=asyncio.sleep) so tests can pass a no-op coroutine",
+            "Patch asyncio.sleep via unittest.mock.patch('asyncio.sleep', new_callable=AsyncMock) in test fixtures",
+            "No special handling needed \u2014 use pytest-asyncio with a fast interval (e.g., 0.001 s) in tests"
+          ],
+          "required": false
+        }
+      ]
+    },
+    {
+      "quality": "ready",
+      "summary": "The PRD is now implementation-ready. All five gaps identified in the previous assessment have been resolved: Workspace and Patch field optionality is fully specified, the confusing Non-Goal entry for set_variable has been removed (the upsert method is unambiguously defined in REQ-4), the rollback_rebuild response shape is documented in both the External API Surface table and REQ-3, HubClient's AsyncClient lifecycle (shared instance, aclose(), context-manager support) is explicit in REQ-1, and the asyncio.sleep patching strategy for polling tests is documented in REQ-8. The retryable exception types (specific named subclasses, not the base) and the config_url contract for auth helpers are also now clearly stated.",
+      "gaps": [],
+      "questions": []
+    }
+  ],
+  "qa_exchanges": [
+    {
+      "assessment_index": 0,
+      "answers": {
+        "q1": "The Hub REST API is fully documented in docs/proposals/carry_patch_support.md under 'Hub Integration Surface'. Base path is /api/v1. Endpoints by resource: Workspace: POST /workspaces (201), GET /workspaces (200), GET /workspaces/:slug (200), PATCH /workspaces/:slug (200), POST /workspaces/:slug/sync (200, SyncResult body), POST /workspaces/:slug/reclone (200, Workspace body), GET /workspaces/:slug/patch-status (200, PatchStatusDashboard body). Patches under /workspaces/:slug/patches: GET (200, list), POST (201, Patch or list[Patch] for batch), PATCH /:id (200), DELETE /:id (204), POST /:id/restore (200), POST /reorder (200). Rebuilds under /workspaces/:slug: POST /rebuild (202, RebuildJob), GET /rebuilds (200, {jobs:[...]}), GET /rebuilds/:id (200, RebuildJob), DELETE /rebuilds/:id (200, RebuildJob), POST /rebuilds/:id/requeue (200), POST /rebuilds/:id/rollback (200, returns previous SHA string), GET /rebuild-preview (200, RebuildPreview). Rerere: GET /rerere (200, {resolutions:[...]}), DELETE /rerere/*pathspec (204). Variables: GET /vars (200), POST /vars (201), PATCH /vars/:key (200), DELETE /vars/:key (204), GET /vars/resolved (200, dict). Secrets: POST /secrets (201). All API calls use Authorization: Bearer <pat>.",
+        "q2": "Void operations return 204 No Content: DELETE /patches/:id, DELETE /rerere/*pathspec, DELETE /vars/:key. POST /secrets returns 201 with no useful body. POST /vars returns 201, PATCH /vars/:key returns 200. No rate limiting is documented in the Hub API surface. The 204 responses should be handled by returning None from the client method. No pagination is used - all list endpoints return complete arrays.",
+        "q3": "pytest + pytest-asyncio with asyncio_mode=auto + unittest.mock.AsyncMock for httpx mocking. This matches the pattern used in packages/afissues/tests/. No external mock library (no respx or pytest-httpx). Tests use MagicMock for response objects and AsyncMock for the httpx.AsyncClient, matching the afissues retry test pattern.",
+        "q4": "PatchDetail fields: id (str), branch_name (str), position (int), status (str), last_rebuild_result (str | None, values: success/conflict/skipped/null), conflict_files (list[str] | None). PatchSummary fields: total_patches (int), active (int), merged_upstream (int), conflict (int), disabled (int), total_rerere_resolutions (int, default 0). RebuildPreviewPatchResult fields: patch_id (str), branch_name (str), position (int), status (str, values: would_succeed/would_conflict), tree_sha (str | None), conflict_files (list[str] | None). All use model_config = ConfigDict(extra='ignore').",
+        "q5": "The Hub API uses URL versioning at /api/v1/. This client targets v1. No version negotiation is needed. If the Hub API evolves with additive fields, the extra='ignore' model config handles it gracefully. Breaking changes would require a new client version.",
+        "q6": "Owner: nightshift (Michael Kuehl / candlekeep)"
+      },
+      "timestamp": "2026-09-01T10:14:12.522212+00:00"
+    },
+    {
+      "assessment_index": 1,
+      "answers": {
+        "q1": "No Variable model needed. Variable endpoints return opaque bodies. All variable-mutating methods (set_variable, delete_variable) return None. get_resolved_variables returns dict[str, str]. The GET /vars list response is not needed by nightshift, so list_variables is omitted from the client.",
+        "q2": "Split into create_variable (POST /vars, 201) and update_variable (PATCH /vars/:key, 200), both returning None. The set_variable convenience method tries PATCH first, and if the hub returns 404 (variable does not exist), falls back to POST. This is the simplest upsert that does not require a prior GET.",
+        "q3": "Raise HubError with status_code=0, error_type='clone_failed', message taken from workspace.clone_error if non-empty, otherwise 'Workspace clone failed'.",
+        "q4": "Propagate immediately. HubClient's own retry (REQ-9) handles transient failures. A permanent network failure after retries should abort the poll and surface to the caller.",
+        "q5": "Match the monorepo: httpx>=0.27, pydantic>=2.0. Pin the same lower bounds as afissues and agentfox to avoid incompatibilities.",
+        "q6": "Keep as two separate methods. add_patch for single (most common), add_patches_batch for batch (initial bootstrap). Explicit is better than a dispatching heuristic."
+      },
+      "timestamp": "2026-09-01T10:16:07.713302+00:00"
+    },
+    {
+      "assessment_index": 2,
+      "answers": {
+        "q1": "Required fields on Workspace: slug, git_url, workspace_mode, status, clone_status, sync_status. All other fields (clone_error, sync_error, sync_mode, upstream_url, upstream_head_sha, head_sha, integration_branch, last_sync_at) are Optional[str] = None. Required fields on Patch: id, workspace_slug, branch_name, position, status, added_at, updated_at. All other fields (conflict_files, upstream_pr_url, description, deleted_at) are Optional with None defaults (conflict_files is list[str] | None = None).",
+        "q2": "Remove the Non-Goal entry entirely. set_variable is a clearly defined PATCH-then-POST upsert in REQ-4; the Non-Goal entry is confusing and adds no value.",
+        "q3": "JSON object response: {\"previous_integration_head_sha\": \"<sha>\"}. Extract the sha value from that key. Return type is str.",
+        "q4": "Single shared AsyncClient per HubClient instance, created in __init__. Expose an aclose() async method for explicit cleanup. Tests use unittest.mock.patch to replace the AsyncClient.",
+        "q5": "Patch asyncio.sleep via unittest.mock.patch('asyncio.sleep', new_callable=AsyncMock) in test fixtures. This is consistent with how afissues tests patch asyncio.sleep."
+      },
+      "timestamp": "2026-09-01T10:20:20.201542+00:00"
+    }
+  ],
+  "generated_artifacts": [
+    "requirements",
+    "test_spec",
+    "tasks"
+  ],
+  "mode": "interactive"
+}

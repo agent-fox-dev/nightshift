@@ -1,0 +1,1242 @@
+{
+  "$schema": null,
+  "spec_id": "03",
+  "spec_name": "carry_patch_pipeline_monitor",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-03-1",
+      "requirement_id": "03-REQ-1.1",
+      "kind": "unit",
+      "description": "When carry-patch is enabled and a HubClient is provided, the fix pipeline pushes the branch, registers the patch, submits a rebuild, polls to completion, and closes the issue.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "A mock HubClient is injected with add_patch(), submit_rebuild(), and list_rebuilds() returning successful responses",
+        "poll_rebuild() mock returns a RebuildJob with status='completed'",
+        "push_to_remote() mock succeeds",
+        "A fix issue is in post-coder-reviewer-loop state"
+      ],
+      "input": {
+        "branch_name": "fix/issue-42",
+        "config.carry_patch.enabled": true,
+        "hub_client": "mock HubClient",
+        "workspace_slug": "my-workspace"
+      },
+      "expected": {
+        "add_patch_called_with": {
+          "branch_name": "fix/issue-42",
+          "if_not_exists": true,
+          "skip_branch_check": true,
+          "slug": "my-workspace"
+        },
+        "issue_closed": true,
+        "no_local_squash_merge": true,
+        "poll_rebuild_called": true,
+        "push_to_remote_called": true,
+        "submit_rebuild_called_with": {
+          "slug": "my-workspace"
+        }
+      },
+      "assertion_pseudocode": "pipeline = FixPipeline(config=carry_patch_config, hub_client=mock_hub_client)\nawait pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\nassert mock_push_to_remote.called_once()\nassert mock_hub_client.add_patch.called_with('my-workspace', 'fix/issue-42', skip_branch_check=True, if_not_exists=True)\nassert mock_hub_client.submit_rebuild.called_with('my-workspace')\nassert mock_poll_rebuild.called_once()\nassert fix_issue.status == 'closed'\nassert mock_local_squash_merge.not_called()"
+    },
+    {
+      "id": "TS-03-2",
+      "requirement_id": "03-REQ-1.2",
+      "kind": "unit",
+      "description": "When submit_rebuild() raises HubConflictError, the fix pipeline calls list_rebuilds() to find the active job and polls that job instead.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "mock HubClient.submit_rebuild() raises HubConflictError",
+        "mock HubClient.list_rebuilds() returns [RebuildJob(id='active-job-1', status='running')]",
+        "poll_rebuild() mock returns RebuildJob with status='completed'"
+      ],
+      "input": {
+        "branch_name": "fix/issue-42",
+        "workspace_slug": "my-workspace"
+      },
+      "expected": {
+        "issue_closed": true,
+        "list_rebuilds_called_with": {
+          "slug": "my-workspace"
+        },
+        "no_exception_raised": true,
+        "poll_rebuild_called_with_job_id": "active-job-1"
+      },
+      "assertion_pseudocode": "mock_hub_client.submit_rebuild.side_effect = HubConflictError()\nmock_hub_client.list_rebuilds.return_value = [RebuildJob(id='active-job-1', status='running')]\nawait pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\nassert mock_hub_client.list_rebuilds.called_with('my-workspace')\nassert mock_poll_rebuild.called_with(mock_hub_client, 'my-workspace', 'active-job-1', timeout=ANY, interval=ANY)\nassert fix_issue.status == 'closed'"
+    },
+    {
+      "id": "TS-03-3",
+      "requirement_id": "03-REQ-1.3",
+      "kind": "unit",
+      "description": "When submit_rebuild() raises HubNoActivePatchesError, the fix pipeline logs a warning, skips the rebuild, and proceeds to issue closure without raising.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "mock HubClient.add_patch() succeeds",
+        "mock HubClient.submit_rebuild() raises HubNoActivePatchesError",
+        "Logger is captured for assertion"
+      ],
+      "input": {
+        "branch_name": "fix/issue-42",
+        "workspace_slug": "my-workspace"
+      },
+      "expected": {
+        "issue_proceeds_to_closure": true,
+        "no_exception_raised": true,
+        "poll_rebuild_not_called": true,
+        "warning_logged": true
+      },
+      "assertion_pseudocode": "mock_hub_client.submit_rebuild.side_effect = HubNoActivePatchesError()\nwith capture_logs() as logs:\n    await pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\nassert any('warning' in log.level and 'no active patches' in log.message.lower() for log in logs)\nassert mock_poll_rebuild.not_called()\nassert fix_issue.status != 'retry'"
+    },
+    {
+      "id": "TS-03-4",
+      "requirement_id": "03-REQ-1.4",
+      "kind": "unit",
+      "description": "When poll_rebuild() returns a job with status 'failed' or 'dead_letter', the fix pipeline logs the error and marks the issue for retry.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "mock HubClient.submit_rebuild() returns RebuildJob(id='job-1')",
+        "mock poll_rebuild() returns RebuildJob(id='job-1', status='failed')",
+        "Logger is captured"
+      ],
+      "input": {
+        "branch_name": "fix/issue-42",
+        "terminal_status": "failed",
+        "workspace_slug": "my-workspace"
+      },
+      "expected": {
+        "error_logged": true,
+        "issue_marked_for_retry": true,
+        "issue_not_closed": true
+      },
+      "assertion_pseudocode": "for terminal_status in ['failed', 'dead_letter']:\n    mock_poll_rebuild.return_value = RebuildJob(id='job-1', status=terminal_status)\n    with capture_logs() as logs:\n        await pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\n    assert any('error' in log.level.lower() for log in logs)\n    assert fix_issue.status == 'retry'\n    assert fix_issue.status != 'closed'"
+    },
+    {
+      "id": "TS-03-5",
+      "requirement_id": "03-REQ-1.5",
+      "kind": "unit",
+      "description": "On successful patch registration and rebuild completion, the fix pipeline emits CARRY_PATCH_PATCH_REGISTERED, CARRY_PATCH_REBUILD_REQUESTED, and CARRY_PATCH_REBUILD_COMPLETED audit events.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "All hub mocks succeed",
+        "poll_rebuild() returns status='completed'",
+        "emit_audit_event() is mocked and captured"
+      ],
+      "input": {
+        "branch_name": "fix/issue-42",
+        "workspace_slug": "my-workspace"
+      },
+      "expected": {
+        "audit_events_emitted": [
+          "carry_patch.patch_registered",
+          "carry_patch.rebuild_requested",
+          "carry_patch.rebuild_completed"
+        ]
+      },
+      "assertion_pseudocode": "emitted_events = []\nmock_emit_audit_event.side_effect = lambda event_type, **kw: emitted_events.append(event_type)\nawait pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\nassert AuditEventType.CARRY_PATCH_PATCH_REGISTERED in emitted_events\nassert AuditEventType.CARRY_PATCH_REBUILD_REQUESTED in emitted_events\nassert AuditEventType.CARRY_PATCH_REBUILD_COMPLETED in emitted_events"
+    },
+    {
+      "id": "TS-03-6",
+      "requirement_id": "03-REQ-2.1",
+      "kind": "unit",
+      "description": "CarryPatchMonitor constructor accepts hub_client, workspace_slug, config, and engine and stores them as instance attributes.",
+      "preconditions": [
+        "Valid mock HubClient, AgentFoxConfig with carry_patch enabled, and NightShiftEngine instances are available"
+      ],
+      "input": {
+        "config": "AgentFoxConfig with carry_patch.enabled=True",
+        "engine": "mock NightShiftEngine",
+        "hub_client": "mock HubClient",
+        "workspace_slug": "test-workspace"
+      },
+      "expected": {
+        "monitor.config": "AgentFoxConfig instance",
+        "monitor.engine": "mock NightShiftEngine",
+        "monitor.hub_client": "mock HubClient",
+        "monitor.workspace_slug": "test-workspace"
+      },
+      "assertion_pseudocode": "monitor = CarryPatchMonitor(hub_client=mock_hub_client, workspace_slug='test-workspace', config=mock_config, engine=mock_engine)\nassert monitor.hub_client is mock_hub_client\nassert monitor.workspace_slug == 'test-workspace'\nassert monitor.config is mock_config\nassert monitor.engine is mock_engine"
+    },
+    {
+      "id": "TS-03-7",
+      "requirement_id": "03-REQ-2.2",
+      "kind": "unit",
+      "description": "CarryPatchMonitor.run_cycle() is an async method that returns a MonitorCycleResult dataclass with all five required fields.",
+      "preconditions": [
+        "CarryPatchMonitor is instantiated with valid mocks",
+        "HubClient.get_patch_status() returns an empty PatchStatusDashboard"
+      ],
+      "input": {},
+      "expected": {
+        "field_types": {
+          "conflicts_detected": "int",
+          "conflicts_failed": "int",
+          "conflicts_resolved": "int",
+          "patches_merged": "int",
+          "rebuild_triggered": "bool"
+        },
+        "fields_present": [
+          "conflicts_detected",
+          "conflicts_resolved",
+          "conflicts_failed",
+          "patches_merged",
+          "rebuild_triggered"
+        ],
+        "return_type": "MonitorCycleResult"
+      },
+      "assertion_pseudocode": "result = await monitor.run_cycle()\nassert isinstance(result, MonitorCycleResult)\nassert isinstance(result.conflicts_detected, int)\nassert isinstance(result.conflicts_resolved, int)\nassert isinstance(result.conflicts_failed, int)\nassert isinstance(result.patches_merged, int)\nassert isinstance(result.rebuild_triggered, bool)"
+    },
+    {
+      "id": "TS-03-8",
+      "requirement_id": "03-REQ-2.3",
+      "kind": "unit",
+      "description": "The per-patch retry counter persists across multiple run_cycle() calls within the same CarryPatchMonitor instance and is not reset between cycles.",
+      "preconditions": [
+        "CarryPatchMonitor is instantiated with max_resolve_retries=2",
+        "HubClient.get_patch_status() returns a dashboard with one patch in 'conflict' status with id='patch-1'",
+        "_run_coder_session() always raises an exception (simulating failure)"
+      ],
+      "input": {
+        "max_resolve_retries": 2,
+        "patch_id": "patch-1"
+      },
+      "expected": {
+        "after_cycle_1_retry_count": 1,
+        "after_cycle_2_retry_count": 2,
+        "after_cycle_3_patch_skipped": true
+      },
+      "assertion_pseudocode": "monitor = CarryPatchMonitor(..., config=config_with_max_retries_2, ...)\nmock_coder_session.side_effect = Exception('coder failed')\nawait monitor.run_cycle()  # retry_count becomes 1\nawait monitor.run_cycle()  # retry_count becomes 2\nresult = await monitor.run_cycle()  # patch should be skipped\nassert result.conflicts_detected == 1\nassert result.conflicts_resolved == 0\nassert result.conflicts_failed == 0  # skipped, not failed"
+    },
+    {
+      "id": "TS-03-9",
+      "requirement_id": "03-REQ-3.1",
+      "kind": "unit",
+      "description": "When get_patch_status() raises any exception, run_cycle() logs the error and returns an empty MonitorCycleResult without propagating the exception.",
+      "preconditions": [
+        "CarryPatchMonitor is instantiated with valid mocks",
+        "HubClient.get_patch_status() raises a generic HubError",
+        "Logger is captured"
+      ],
+      "input": {
+        "get_patch_status_raises": "HubError('connection failed')"
+      },
+      "expected": {
+        "error_logged": true,
+        "no_exception_raised": true,
+        "result.conflicts_detected": 0,
+        "result.conflicts_failed": 0,
+        "result.conflicts_resolved": 0,
+        "result.patches_merged": 0,
+        "result.rebuild_triggered": false
+      },
+      "assertion_pseudocode": "mock_hub_client.get_patch_status.side_effect = HubError('connection failed')\nwith capture_logs() as logs:\n    result = await monitor.run_cycle()\nassert result.conflicts_detected == 0\nassert result.conflicts_resolved == 0\nassert result.conflicts_failed == 0\nassert result.patches_merged == 0\nassert result.rebuild_triggered == False\nassert any('error' in log.level.lower() for log in logs)"
+    },
+    {
+      "id": "TS-03-10",
+      "requirement_id": "03-REQ-3.2",
+      "kind": "unit",
+      "description": "When the dashboard contains patches with status 'merged_upstream', run_cycle() logs each, increments patches_merged, and emits CARRY_PATCH_MERGED_DETECTED for each.",
+      "preconditions": [
+        "HubClient.get_patch_status() returns a PatchStatusDashboard with 2 patches having status='merged_upstream'",
+        "emit_audit_event() is mocked and captured"
+      ],
+      "input": {
+        "merged_upstream_count": 2
+      },
+      "expected": {
+        "audit_events_emitted": [
+          "carry_patch.merged_detected",
+          "carry_patch.merged_detected"
+        ],
+        "result.patches_merged": 2
+      },
+      "assertion_pseudocode": "dashboard = PatchStatusDashboard(patches=[PatchDetail(id='p1', status='merged_upstream'), PatchDetail(id='p2', status='merged_upstream')])\nmock_hub_client.get_patch_status.return_value = dashboard\nemitted = []\nmock_emit_audit_event.side_effect = lambda et, **kw: emitted.append(et)\nresult = await monitor.run_cycle()\nassert result.patches_merged == 2\nassert emitted.count(AuditEventType.CARRY_PATCH_MERGED_DETECTED) == 2"
+    },
+    {
+      "id": "TS-03-11",
+      "requirement_id": "03-REQ-3.3",
+      "kind": "unit",
+      "description": "When auto_resolve is False and the dashboard has conflicting patches, run_cycle() logs the count and returns without invoking the coder or triggering a rebuild.",
+      "preconditions": [
+        "config.carry_patch.auto_resolve = False",
+        "HubClient.get_patch_status() returns a dashboard with 3 patches in 'conflict' status",
+        "_run_coder_session() is mocked"
+      ],
+      "input": {
+        "auto_resolve": false,
+        "conflict_count": 3
+      },
+      "expected": {
+        "coder_session_not_called": true,
+        "result.conflicts_detected": 3,
+        "result.conflicts_failed": 0,
+        "result.conflicts_resolved": 0,
+        "result.rebuild_triggered": false
+      },
+      "assertion_pseudocode": "config.carry_patch.auto_resolve = False\ndashboard = PatchStatusDashboard(patches=[PatchDetail(id=f'p{i}', status='conflict') for i in range(3)])\nmock_hub_client.get_patch_status.return_value = dashboard\nresult = await monitor.run_cycle()\nassert result.conflicts_detected == 3\nassert result.conflicts_resolved == 0\nassert result.conflicts_failed == 0\nassert result.rebuild_triggered == False\nassert mock_engine._run_coder_session.not_called()"
+    },
+    {
+      "id": "TS-03-12",
+      "requirement_id": "03-REQ-3.4",
+      "kind": "unit",
+      "description": "When auto_resolve is True and the dashboard has conflicting patches, run_cycle() processes each in position order, fetches/checks out the branch, invokes the coder in carry-patch mode, and on success commits, pushes, and triggers a rebuild.",
+      "preconditions": [
+        "config.carry_patch.auto_resolve = True",
+        "HubClient.get_patch_status() returns a dashboard with 2 patches in 'conflict' status",
+        "fetch_remote(), checkout_branch(), _run_coder_session() all succeed",
+        "push_to_remote() and submit_rebuild() succeed",
+        "Retry counters are at 0 for both patches"
+      ],
+      "input": {
+        "auto_resolve": true,
+        "conflict_count": 2
+      },
+      "expected": {
+        "coder_called_with_archetype": "coder",
+        "coder_called_with_mode": "carry-patch",
+        "result.conflicts_detected": 2,
+        "result.conflicts_failed": 0,
+        "result.conflicts_resolved": 2,
+        "result.rebuild_triggered": true
+      },
+      "assertion_pseudocode": "config.carry_patch.auto_resolve = True\ndashboard = PatchStatusDashboard(patches=[PatchDetail(id='p1', status='conflict', position=0), PatchDetail(id='p2', status='conflict', position=1)])\nmock_hub_client.get_patch_status.return_value = dashboard\nmock_engine._run_coder_session.return_value = success_result\nresult = await monitor.run_cycle()\nassert result.conflicts_detected == 2\nassert result.conflicts_resolved == 2\nassert result.conflicts_failed == 0\nassert result.rebuild_triggered == True\nfor call in mock_engine._run_coder_session.calls:\n    assert call.kwargs['archetype'] == 'coder'\n    assert call.kwargs['mode'] == 'carry-patch'"
+    },
+    {
+      "id": "TS-03-13",
+      "requirement_id": "03-REQ-3.5",
+      "kind": "unit",
+      "description": "When a conflict resolution attempt fails, run_cycle() increments the retry counter, increments conflicts_failed, emits CARRY_PATCH_CONFLICT_FAILED, and continues processing remaining patches.",
+      "preconditions": [
+        "config.carry_patch.auto_resolve = True",
+        "Dashboard has 2 conflicting patches",
+        "_run_coder_session() raises Exception for the first patch, succeeds for the second",
+        "emit_audit_event() is mocked"
+      ],
+      "input": {
+        "patch_1_coder_result": "raises Exception",
+        "patch_2_coder_result": "success"
+      },
+      "expected": {
+        "CARRY_PATCH_CONFLICT_FAILED_emitted": true,
+        "no_exception_raised": true,
+        "result.conflicts_detected": 2,
+        "result.conflicts_failed": 1,
+        "result.conflicts_resolved": 1
+      },
+      "assertion_pseudocode": "mock_engine._run_coder_session.side_effect = [Exception('coder failed'), success_result]\nemitted = []\nmock_emit_audit_event.side_effect = lambda et, **kw: emitted.append(et)\nresult = await monitor.run_cycle()\nassert result.conflicts_detected == 2\nassert result.conflicts_resolved == 1\nassert result.conflicts_failed == 1\nassert AuditEventType.CARRY_PATCH_CONFLICT_FAILED in emitted"
+    },
+    {
+      "id": "TS-03-14",
+      "requirement_id": "03-REQ-3.6",
+      "kind": "unit",
+      "description": "When a conflict resolution attempt succeeds, run_cycle() emits CARRY_PATCH_CONFLICT_RESOLVED, increments conflicts_resolved, pushes the resolved branch, and calls submit_rebuild().",
+      "preconditions": [
+        "config.carry_patch.auto_resolve = True",
+        "Dashboard has 1 conflicting patch",
+        "_run_coder_session() succeeds",
+        "push_to_remote() and submit_rebuild() succeed",
+        "emit_audit_event() is mocked"
+      ],
+      "input": {
+        "coder_result": "success",
+        "patch_id": "patch-1"
+      },
+      "expected": {
+        "CARRY_PATCH_CONFLICT_RESOLVED_emitted": true,
+        "push_to_remote_called": true,
+        "result.conflicts_resolved": 1,
+        "result.rebuild_triggered": true,
+        "submit_rebuild_called": true
+      },
+      "assertion_pseudocode": "emitted = []\nmock_emit_audit_event.side_effect = lambda et, **kw: emitted.append(et)\nresult = await monitor.run_cycle()\nassert result.conflicts_resolved == 1\nassert result.rebuild_triggered == True\nassert AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED in emitted\nassert mock_push_to_remote.called_once()\nassert mock_hub_client.submit_rebuild.called_with('my-workspace')"
+    },
+    {
+      "id": "TS-03-15",
+      "requirement_id": "03-REQ-4.1",
+      "kind": "unit",
+      "description": "Before invoking the coder session, run_cycle() assembles a context dict with patch_description, conflict_files, upstream_context from git diff, and rerere_resolutions from list_rerere().",
+      "preconditions": [
+        "Dashboard has 1 conflicting patch with description='Fix auth bug', conflict_files=['auth.py']",
+        "list_rerere() returns ['auth.py']",
+        "Local git diff returns 'diff --git a/auth.py ...'",
+        "_run_coder_session() is mocked to capture context argument"
+      ],
+      "input": {
+        "conflict_files": [
+          "auth.py"
+        ],
+        "git_diff_output": "diff --git a/auth.py ...",
+        "patch_description": "Fix auth bug",
+        "rerere_paths": [
+          "auth.py"
+        ]
+      },
+      "expected": {
+        "context_dict.conflict_files": [
+          "auth.py"
+        ],
+        "context_dict.patch_description": "Fix auth bug",
+        "context_dict.rerere_resolutions": [
+          "auth.py"
+        ],
+        "context_dict.upstream_context": "diff --git a/auth.py ..."
+      },
+      "assertion_pseudocode": "captured_context = {}\nmock_engine._run_coder_session.side_effect = lambda **kw: captured_context.update(kw.get('context', {}))\nawait monitor.run_cycle()\nassert captured_context['patch_description'] == 'Fix auth bug'\nassert captured_context['conflict_files'] == ['auth.py']\nassert 'diff --git a/auth.py' in captured_context['upstream_context']\nassert captured_context['rerere_resolutions'] == ['auth.py']"
+    },
+    {
+      "id": "TS-03-16",
+      "requirement_id": "03-REQ-4.2",
+      "kind": "unit",
+      "description": "list_rerere() is called with no write-side-effect arguments and no rerere state is modified during run_cycle().",
+      "preconditions": [
+        "Dashboard has 1 conflicting patch",
+        "list_rerere() is mocked and call arguments are captured"
+      ],
+      "input": {},
+      "expected": {
+        "list_rerere_called_with_slug_only": true,
+        "no_write_arguments_passed": true
+      },
+      "assertion_pseudocode": "await monitor.run_cycle()\ncall_args = mock_hub_client.list_rerere.call_args\nassert call_args == call('my-workspace')  # only slug, no write-side-effect args\nassert len(call_args.args) == 1\nassert len(call_args.kwargs) == 0"
+    },
+    {
+      "id": "TS-03-17",
+      "requirement_id": "03-REQ-5.1",
+      "kind": "unit",
+      "description": "The coder archetype registry in archetypes.py contains a 'carry-patch' key mapped to a ModeConfig with model_tier='STANDARD', max_turns=200, thinking_mode='adaptive', and effort='high'.",
+      "preconditions": [
+        "agentfox/archetypes.py is importable"
+      ],
+      "input": {},
+      "expected": {
+        "archetypes['coder']['carry-patch'].effort": "high",
+        "archetypes['coder']['carry-patch'].max_turns": 200,
+        "archetypes['coder']['carry-patch'].model_tier": "STANDARD",
+        "archetypes['coder']['carry-patch'].thinking_mode": "adaptive"
+      },
+      "assertion_pseudocode": "from agentfox.archetypes import archetypes\nmode_config = archetypes['coder']['carry-patch']\nassert isinstance(mode_config, ModeConfig)\nassert mode_config.model_tier == 'STANDARD'\nassert mode_config.max_turns == 200\nassert mode_config.thinking_mode == 'adaptive'\nassert mode_config.effort == 'high'"
+    },
+    {
+      "id": "TS-03-18",
+      "requirement_id": "03-REQ-6.1",
+      "kind": "unit",
+      "description": "The profile template file coder_carry-patch.md exists at the expected path and contains all five required instruction categories.",
+      "preconditions": [
+        "agentfox package is installed or source is available",
+        "agentfox/_templates/profiles/ directory exists"
+      ],
+      "input": {
+        "profile_path": "agentfox/_templates/profiles/coder_carry-patch.md"
+      },
+      "expected": {
+        "contains_commit_message_body_instruction": true,
+        "contains_conflict_files_only_instruction": true,
+        "contains_conventional_commit_format": true,
+        "contains_patch_description_instruction": true,
+        "contains_run_tests_instruction": true,
+        "file_exists": true
+      },
+      "assertion_pseudocode": "import importlib.resources\nprofile_path = Path('packages/agentfox/agentfox/_templates/profiles/coder_carry-patch.md')\nassert profile_path.exists()\ncontent = profile_path.read_text()\nassert 'patch_description' in content or 'original intent' in content.lower()\nassert 'conflict_files' in content or 'conflict files' in content.lower()\nassert 'fix: resolve conflict' in content\nassert 'test' in content.lower()\nassert 'commit message' in content.lower() or 'commit body' in content.lower()"
+    },
+    {
+      "id": "TS-03-19",
+      "requirement_id": "03-REQ-7.1",
+      "kind": "unit",
+      "description": "build_streams() includes a CarryPatchStream with name='carry-patch', check_interval from config, and enabled=True when carry_patch.enabled is True and a HubClient is provided.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "config.carry_patch.check_interval = 60",
+        "A valid mock HubClient is provided"
+      ],
+      "input": {
+        "config.carry_patch.check_interval": 60,
+        "config.carry_patch.enabled": true,
+        "hub_client": "mock HubClient"
+      },
+      "expected": {
+        "carry_patch_stream.check_interval": 60,
+        "carry_patch_stream.enabled": true,
+        "carry_patch_stream.name": "carry-patch",
+        "stream_list_contains_carry_patch": true
+      },
+      "assertion_pseudocode": "streams = build_streams(config=carry_patch_config, hub_client=mock_hub_client)\ncarry_patch_streams = [s for s in streams if s.name == 'carry-patch']\nassert len(carry_patch_streams) == 1\nstream = carry_patch_streams[0]\nassert stream.name == 'carry-patch'\nassert stream.check_interval == 60\nassert stream.enabled == True"
+    },
+    {
+      "id": "TS-03-20",
+      "requirement_id": "03-REQ-7.2",
+      "kind": "unit",
+      "description": "build_streams() omits the CarryPatchStream when carry_patch.enabled is False or no HubClient is provided.",
+      "preconditions": [
+        "Two scenarios: (1) config.carry_patch.enabled=False with hub_client provided, (2) config.carry_patch.enabled=True with hub_client=None"
+      ],
+      "input": [
+        {
+          "config.carry_patch.enabled": false,
+          "hub_client": "mock HubClient"
+        },
+        {
+          "config.carry_patch.enabled": true,
+          "hub_client": null
+        }
+      ],
+      "expected": {
+        "stream_list_contains_carry_patch": false
+      },
+      "assertion_pseudocode": "# Scenario 1: disabled\nconfig.carry_patch.enabled = False\nstreams = build_streams(config=config, hub_client=mock_hub_client)\nassert not any(s.name == 'carry-patch' for s in streams)\n# Scenario 2: no hub client\nconfig.carry_patch.enabled = True\nstreams = build_streams(config=config, hub_client=None)\nassert not any(s.name == 'carry-patch' for s in streams)"
+    },
+    {
+      "id": "TS-03-21",
+      "requirement_id": "03-REQ-7.3",
+      "kind": "unit",
+      "description": "The daemon display name registry contains 'carry-patch' as a key in both _STREAM_DISPLAY_NAMES and _STREAM_ACTIVE_LABELS with non-empty string values.",
+      "preconditions": [
+        "agentfox/nightshift/daemon.py is importable"
+      ],
+      "input": {},
+      "expected": {
+        "_STREAM_ACTIVE_LABELS['carry-patch']": "non-empty string",
+        "_STREAM_DISPLAY_NAMES['carry-patch']": "non-empty string"
+      },
+      "assertion_pseudocode": "from agentfox.nightshift.daemon import _STREAM_DISPLAY_NAMES, _STREAM_ACTIVE_LABELS\nassert 'carry-patch' in _STREAM_DISPLAY_NAMES\nassert isinstance(_STREAM_DISPLAY_NAMES['carry-patch'], str)\nassert len(_STREAM_DISPLAY_NAMES['carry-patch']) > 0\nassert 'carry-patch' in _STREAM_ACTIVE_LABELS\nassert isinstance(_STREAM_ACTIVE_LABELS['carry-patch'], str)\nassert len(_STREAM_ACTIVE_LABELS['carry-patch']) > 0"
+    },
+    {
+      "id": "TS-03-22",
+      "requirement_id": "03-REQ-7.4",
+      "kind": "unit",
+      "description": "NightShiftEngine._run_carry_patch_monitor(slug) delegates to CarryPatchMonitor.run_cycle() and returns its MonitorCycleResult.",
+      "preconditions": [
+        "NightShiftEngine is instantiated with carry_patch config and a mock HubClient",
+        "CarryPatchMonitor.run_cycle() is mocked to return a known MonitorCycleResult"
+      ],
+      "input": {
+        "slug": "my-workspace"
+      },
+      "expected": {
+        "return_type": "MonitorCycleResult",
+        "return_value": "MonitorCycleResult(conflicts_detected=1, conflicts_resolved=1, conflicts_failed=0, patches_merged=0, rebuild_triggered=True)"
+      },
+      "assertion_pseudocode": "expected_result = MonitorCycleResult(conflicts_detected=1, conflicts_resolved=1, conflicts_failed=0, patches_merged=0, rebuild_triggered=True)\nmock_monitor.run_cycle.return_value = expected_result\nresult = await engine._run_carry_patch_monitor(slug='my-workspace')\nassert result == expected_result\nassert isinstance(result, MonitorCycleResult)"
+    },
+    {
+      "id": "TS-03-23",
+      "requirement_id": "03-REQ-8.1",
+      "kind": "unit",
+      "description": "AuditEventType in afaudit/events.py defines all eight carry-patch constants with the exact string values specified in the requirements.",
+      "preconditions": [
+        "afaudit package is installed or source is available"
+      ],
+      "input": {},
+      "expected": {
+        "CARRY_PATCH_CONFLICT_DETECTED": "carry_patch.conflict_detected",
+        "CARRY_PATCH_CONFLICT_FAILED": "carry_patch.conflict_failed",
+        "CARRY_PATCH_CONFLICT_RESOLVED": "carry_patch.conflict_resolved",
+        "CARRY_PATCH_MERGED_DETECTED": "carry_patch.merged_detected",
+        "CARRY_PATCH_PATCH_REGISTERED": "carry_patch.patch_registered",
+        "CARRY_PATCH_REBUILD_COMPLETED": "carry_patch.rebuild_completed",
+        "CARRY_PATCH_REBUILD_FAILED": "carry_patch.rebuild_failed",
+        "CARRY_PATCH_REBUILD_REQUESTED": "carry_patch.rebuild_requested"
+      },
+      "assertion_pseudocode": "from afaudit.events import AuditEventType\nassert AuditEventType.CARRY_PATCH_CONFLICT_DETECTED == 'carry_patch.conflict_detected'\nassert AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED == 'carry_patch.conflict_resolved'\nassert AuditEventType.CARRY_PATCH_CONFLICT_FAILED == 'carry_patch.conflict_failed'\nassert AuditEventType.CARRY_PATCH_PATCH_REGISTERED == 'carry_patch.patch_registered'\nassert AuditEventType.CARRY_PATCH_REBUILD_REQUESTED == 'carry_patch.rebuild_requested'\nassert AuditEventType.CARRY_PATCH_REBUILD_COMPLETED == 'carry_patch.rebuild_completed'\nassert AuditEventType.CARRY_PATCH_REBUILD_FAILED == 'carry_patch.rebuild_failed'\nassert AuditEventType.CARRY_PATCH_MERGED_DETECTED == 'carry_patch.merged_detected'"
+    },
+    {
+      "id": "TS-03-24",
+      "requirement_id": "03-REQ-8.2",
+      "kind": "unit",
+      "description": "emit_audit_event() is called with the appropriate AuditEventType constant at each significant carry-patch state transition in both the fix pipeline and CarryPatchMonitor.",
+      "preconditions": [
+        "emit_audit_event() is mocked and all calls are captured",
+        "Full happy-path scenario: patch registered, rebuild requested, rebuild completed, conflict detected, conflict resolved, merged patch detected"
+      ],
+      "input": {
+        "scenario": "full happy path with one conflict resolved and one merged patch"
+      },
+      "expected": {
+        "events_emitted_include": [
+          "carry_patch.patch_registered",
+          "carry_patch.rebuild_requested",
+          "carry_patch.rebuild_completed",
+          "carry_patch.conflict_detected",
+          "carry_patch.conflict_resolved",
+          "carry_patch.merged_detected"
+        ]
+      },
+      "assertion_pseudocode": "emitted = []\nmock_emit_audit_event.side_effect = lambda et, **kw: emitted.append(et)\n# Run fix pipeline integration phase\nawait pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\n# Run monitor cycle with one conflict and one merged patch\nawait monitor.run_cycle()\nassert AuditEventType.CARRY_PATCH_PATCH_REGISTERED in emitted\nassert AuditEventType.CARRY_PATCH_REBUILD_REQUESTED in emitted\nassert AuditEventType.CARRY_PATCH_REBUILD_COMPLETED in emitted\nassert AuditEventType.CARRY_PATCH_CONFLICT_DETECTED in emitted\nassert AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED in emitted\nassert AuditEventType.CARRY_PATCH_MERGED_DETECTED in emitted"
+    },
+    {
+      "id": "TS-03-25",
+      "requirement_id": "03-REQ-1.6",
+      "kind": "unit",
+      "description": "Fix pipeline emits CARRY_PATCH_PATCH_REGISTERED, CARRY_PATCH_REBUILD_REQUESTED, and CARRY_PATCH_REBUILD_COMPLETED audit events on successful patch registration and rebuild.",
+      "preconditions": [
+        "carry_patch.enabled = True",
+        "HubClient mock configured to return successful add_patch (Patch), submit_rebuild (RebuildJob queued), and poll_rebuild (RebuildJob completed)",
+        "emit_audit_event spy installed"
+      ],
+      "input": {
+        "slug": "test-workspace",
+        "branch_name": "fix/issue-42",
+        "rebuild_status": "completed"
+      },
+      "expected": "emit_audit_event called with CARRY_PATCH_PATCH_REGISTERED, then CARRY_PATCH_REBUILD_REQUESTED, then CARRY_PATCH_REBUILD_COMPLETED in that order",
+      "assertion_pseudocode": "events = audit_spy.calls; assert events[0].event_type == CARRY_PATCH_PATCH_REGISTERED; assert events[1].event_type == CARRY_PATCH_REBUILD_REQUESTED; assert events[2].event_type == CARRY_PATCH_REBUILD_COMPLETED"
+    },
+    {
+      "id": "TS-03-26",
+      "requirement_id": "03-REQ-4.E3",
+      "kind": "unit",
+      "description": "Context assembly substitutes empty string for patch_description when PatchDetail.patch_description is None.",
+      "preconditions": [
+        "PatchDetail with status='conflict', conflict_files=['src/foo.py'], patch_description=None"
+      ],
+      "input": {
+        "patch_detail_description": null
+      },
+      "expected": "context dict has patch_description='' (empty string); coder session is invoked with this context; a debug log message is emitted",
+      "assertion_pseudocode": "ctx = build_conflict_context(patch_detail); assert ctx['patch_description'] == ''; assert coder_mock.called_with(context=ctx)"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-03-P1",
+      "property_id": "03-PROP-1",
+      "validates": [
+        "03-REQ-1.1",
+        "03-REQ-1.E4"
+      ],
+      "description": "For any fix pipeline execution with carry_patch.enabled=True and a HubClient provided, the local squash-merge is never called and all integration goes through hub API methods.",
+      "for_any_strategy": "Sample over: random branch names (alphanumeric strings), random workspace slugs, random issue IDs; always with carry_patch.enabled=True and a mock HubClient that succeeds",
+      "invariant_check": "After pipeline.run_integration_phase() completes for any sampled input, assert mock_local_squash_merge.call_count == 0 AND mock_hub_client.add_patch.call_count >= 1 AND mock_hub_client.submit_rebuild.call_count >= 1"
+    },
+    {
+      "id": "TS-03-P2",
+      "property_id": "03-PROP-2",
+      "validates": [
+        "03-REQ-3.4",
+        "03-REQ-3.5",
+        "03-REQ-3.6",
+        "03-REQ-3.E2"
+      ],
+      "description": "For any run_cycle() invocation processing N conflicting patches, conflicts_resolved + conflicts_failed <= conflicts_detected, and skipped patches are counted in conflicts_detected but not in resolved or failed.",
+      "for_any_strategy": "Sample over: N in range [0, 20] conflicting patches; random mix of coder success/failure/timeout outcomes; random retry counter states (some at max, some below); auto_resolve=True",
+      "invariant_check": "result = await monitor.run_cycle(); assert result.conflicts_resolved + result.conflicts_failed <= result.conflicts_detected; assert result.conflicts_detected == len([p for p in dashboard.patches if p.status == 'conflict'])"
+    },
+    {
+      "id": "TS-03-P3",
+      "property_id": "03-PROP-3",
+      "validates": [
+        "03-REQ-3.1"
+      ],
+      "description": "For any run_cycle() invocation where get_patch_status() raises any exception, run_cycle() always returns a MonitorCycleResult with all fields at zero/false defaults and never propagates the exception.",
+      "for_any_strategy": "Sample over: different exception types raised by get_patch_status() (HubError, ConnectionError, TimeoutError, ValueError, RuntimeError, KeyError); random workspace slugs",
+      "invariant_check": "result = await monitor.run_cycle(); assert result.conflicts_detected == 0; assert result.conflicts_resolved == 0; assert result.conflicts_failed == 0; assert result.patches_merged == 0; assert result.rebuild_triggered == False  # no exception should escape"
+    },
+    {
+      "id": "TS-03-P4",
+      "property_id": "03-PROP-4",
+      "validates": [
+        "03-REQ-2.3",
+        "03-REQ-3.5",
+        "03-REQ-3.E2"
+      ],
+      "description": "The retry counter for a given patch ID is monotonically non-decreasing across multiple run_cycle() calls and never resets between cycles within the same monitor instance.",
+      "for_any_strategy": "Sample over: sequences of 1-10 run_cycle() calls on the same CarryPatchMonitor instance; each cycle has the same patch in conflict status; coder randomly succeeds or fails; max_resolve_retries in [1, 5]",
+      "invariant_check": "counters_history = []; for each cycle: counter_before = monitor._retry_counters.get(patch_id, 0); await monitor.run_cycle(); counter_after = monitor._retry_counters.get(patch_id, 0); assert counter_after >= counter_before; counters_history.append(counter_after); assert counters_history == sorted(counters_history)"
+    },
+    {
+      "id": "TS-03-P5",
+      "property_id": "03-PROP-5",
+      "validates": [
+        "03-REQ-7.2",
+        "03-REQ-7.E1"
+      ],
+      "description": "For any build_streams() call where carry_patch.enabled is False or HubClient is None, the returned stream list never contains a stream named 'carry-patch'.",
+      "for_any_strategy": "Sample over: (enabled=False, hub_client=mock), (enabled=True, hub_client=None), (enabled=False, hub_client=None); random check_interval values in [10, 3600]; random other config fields",
+      "invariant_check": "streams = build_streams(config=config, hub_client=hub_client); assert not any(s.name == 'carry-patch' for s in streams)"
+    },
+    {
+      "id": "TS-03-P6",
+      "property_id": "03-PROP-6",
+      "validates": [
+        "03-REQ-8.2",
+        "03-REQ-1.5",
+        "03-REQ-3.2",
+        "03-REQ-3.5",
+        "03-REQ-3.6"
+      ],
+      "description": "For any carry-patch operation that reaches a state transition, exactly one emit_audit_event() call is made with the corresponding AuditEventType constant.",
+      "for_any_strategy": "Sample over: random sequences of fix pipeline and monitor cycle operations with varying success/failure outcomes; capture all emit_audit_event() calls",
+      "invariant_check": "For each state transition (patch_registered, rebuild_requested, rebuild_completed, rebuild_failed, conflict_detected, conflict_resolved, conflict_failed, merged_detected) that occurs: assert exactly one emit_audit_event call with the matching AuditEventType constant was made; assert no state transition is silently skipped (i.e., if the code path was reached, the event was emitted)"
+    },
+    {
+      "id": "TS-03-P7",
+      "property_id": "03-PROP-7",
+      "validates": [
+        "03-REQ-4.2"
+      ],
+      "description": "For any run_cycle() invocation that calls list_rerere(), no rerere state is written and list_rerere() is always called with only the workspace slug argument.",
+      "for_any_strategy": "Sample over: random workspace slugs; random dashboard states with 1-5 conflicting patches; list_rerere() returns random lists of file paths",
+      "invariant_check": "for each call to mock_hub_client.list_rerere: assert len(call.args) == 1; assert len(call.kwargs) == 0; assert call.args[0] == workspace_slug; assert no hub write methods (add_rerere, update_rerere, delete_rerere) were called"
+    },
+    {
+      "id": "TS-03-P8",
+      "property_id": "03-PROP-8",
+      "validates": [
+        "03-REQ-8.E1"
+      ],
+      "description": "For any carry-patch operation where emit_audit_event() raises an exception, the carry-patch workflow always continues to completion and the exception never propagates to the caller.",
+      "for_any_strategy": "Sample over: different exception types raised by emit_audit_event() (RuntimeError, IOError, ConnectionError); different carry-patch operation types (fix pipeline, monitor cycle); random operation outcomes",
+      "invariant_check": "mock_emit_audit_event.side_effect = sampled_exception; result = await operation(); assert result is not None or operation completed without raising; assert no exception escaped the operation boundary"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-03-E1",
+      "requirement_id": "03-REQ-1.E1",
+      "kind": "unit",
+      "description": "When push_to_remote() raises an exception in the fix pipeline carry-patch path, the exception propagates to the caller and add_patch() and submit_rebuild() are never called.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "push_to_remote() raises IOError('push failed')",
+        "add_patch() and submit_rebuild() are mocked"
+      ],
+      "input": {
+        "push_to_remote_raises": "IOError('push failed')"
+      },
+      "expected": {
+        "add_patch_not_called": true,
+        "exception_message": "push failed",
+        "exception_type": "IOError",
+        "issue_marked_for_retry": true,
+        "submit_rebuild_not_called": true
+      },
+      "assertion_pseudocode": "mock_push_to_remote.side_effect = IOError('push failed')\nwith assert_raises(IOError) as exc_info:\n    await pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\nassert 'push failed' in str(exc_info.value)\nassert mock_hub_client.add_patch.not_called()\nassert mock_hub_client.submit_rebuild.not_called()\nassert fix_issue.status == 'retry'"
+    },
+    {
+      "id": "TS-03-E2",
+      "requirement_id": "03-REQ-1.E2",
+      "kind": "unit",
+      "description": "When poll_rebuild() exceeds its configured timeout, the fix pipeline logs the timeout, emits CARRY_PATCH_REBUILD_FAILED, and marks the issue for retry.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "poll_rebuild() raises TimeoutError or returns a timeout indicator",
+        "emit_audit_event() is mocked"
+      ],
+      "input": {
+        "poll_rebuild_raises": "TimeoutError('rebuild timed out')"
+      },
+      "expected": {
+        "CARRY_PATCH_REBUILD_FAILED_emitted": true,
+        "issue_marked_for_retry": true,
+        "timeout_logged": true
+      },
+      "assertion_pseudocode": "mock_poll_rebuild.side_effect = TimeoutError('rebuild timed out')\nemitted = []\nmock_emit_audit_event.side_effect = lambda et, **kw: emitted.append(et)\nwith capture_logs() as logs:\n    await pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\nassert AuditEventType.CARRY_PATCH_REBUILD_FAILED in emitted\nassert fix_issue.status == 'retry'\nassert any('timeout' in log.message.lower() for log in logs)"
+    },
+    {
+      "id": "TS-03-E3",
+      "requirement_id": "03-REQ-1.E3",
+      "kind": "unit",
+      "description": "When add_patch() raises an unexpected exception (not HubConflictError or HubNoActivePatchesError), the exception propagates and submit_rebuild() is never called.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "push_to_remote() succeeds",
+        "add_patch() raises RuntimeError('unexpected API error')",
+        "submit_rebuild() is mocked"
+      ],
+      "input": {
+        "add_patch_raises": "RuntimeError('unexpected API error')"
+      },
+      "expected": {
+        "exception_message": "unexpected API error",
+        "exception_type": "RuntimeError",
+        "issue_marked_for_retry": true,
+        "submit_rebuild_not_called": true
+      },
+      "assertion_pseudocode": "mock_hub_client.add_patch.side_effect = RuntimeError('unexpected API error')\nwith assert_raises(RuntimeError) as exc_info:\n    await pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\nassert 'unexpected API error' in str(exc_info.value)\nassert mock_hub_client.submit_rebuild.not_called()\nassert fix_issue.status == 'retry'"
+    },
+    {
+      "id": "TS-03-E4",
+      "requirement_id": "03-REQ-1.E4",
+      "kind": "unit",
+      "description": "When carry_patch.enabled is False or no HubClient is provided, the fix pipeline executes the original local harvest and squash-merge path without calling any hub API methods.",
+      "preconditions": [
+        "Scenario 1: config.carry_patch.enabled = False, hub_client provided",
+        "Scenario 2: config.carry_patch.enabled = True, hub_client = None",
+        "Local harvest/squash-merge mock is available"
+      ],
+      "input": [
+        {
+          "config.carry_patch.enabled": false
+        },
+        {
+          "hub_client": null
+        }
+      ],
+      "expected": {
+        "add_patch_not_called": true,
+        "local_harvest_called": true,
+        "push_to_remote_hub_not_called": true,
+        "submit_rebuild_not_called": true
+      },
+      "assertion_pseudocode": "for scenario in [{'enabled': False, 'hub_client': mock_hub_client}, {'enabled': True, 'hub_client': None}]:\n    config.carry_patch.enabled = scenario['enabled']\n    pipeline = FixPipeline(config=config, hub_client=scenario['hub_client'])\n    await pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\n    assert mock_local_harvest.called()\n    assert mock_hub_client.add_patch.not_called()\n    assert mock_hub_client.submit_rebuild.not_called()"
+    },
+    {
+      "id": "TS-03-E5",
+      "requirement_id": "03-REQ-1.E5",
+      "kind": "unit",
+      "description": "When list_rebuilds() returns an empty list after a HubConflictError, the fix pipeline logs a warning and skips rebuild polling without raising.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "submit_rebuild() raises HubConflictError",
+        "list_rebuilds() returns []",
+        "Logger is captured"
+      ],
+      "input": {
+        "list_rebuilds_returns": [],
+        "submit_rebuild_raises": "HubConflictError"
+      },
+      "expected": {
+        "no_exception_raised": true,
+        "poll_rebuild_not_called": true,
+        "warning_logged": true
+      },
+      "assertion_pseudocode": "mock_hub_client.submit_rebuild.side_effect = HubConflictError()\nmock_hub_client.list_rebuilds.return_value = []\nwith capture_logs() as logs:\n    await pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\nassert any('warning' in log.level.lower() for log in logs)\nassert mock_poll_rebuild.not_called()"
+    },
+    {
+      "id": "TS-03-E6",
+      "requirement_id": "03-REQ-2.E1",
+      "kind": "unit",
+      "description": "CarryPatchMonitor raises ValueError immediately at construction time when hub_client=None is passed.",
+      "preconditions": [
+        "Valid config and engine mocks are available"
+      ],
+      "input": {
+        "hub_client": null
+      },
+      "expected": {
+        "exception_message_contains": "hub_client",
+        "exception_type": "ValueError",
+        "raised_at_construction": true
+      },
+      "assertion_pseudocode": "with assert_raises(ValueError) as exc_info:\n    CarryPatchMonitor(hub_client=None, workspace_slug='test', config=mock_config, engine=mock_engine)\nassert 'hub_client' in str(exc_info.value).lower() or 'hub client' in str(exc_info.value).lower()"
+    },
+    {
+      "id": "TS-03-E7",
+      "requirement_id": "03-REQ-2.E2",
+      "kind": "unit",
+      "description": "MonitorCycleResult is a Python dataclass that can be instantiated with no arguments, defaulting all int fields to 0 and rebuild_triggered to False.",
+      "preconditions": [
+        "agentfox/nightshift/carry_patch_monitor.py is importable"
+      ],
+      "input": {},
+      "expected": {
+        "conflicts_detected": 0,
+        "conflicts_failed": 0,
+        "conflicts_resolved": 0,
+        "is_dataclass": true,
+        "patches_merged": 0,
+        "rebuild_triggered": false
+      },
+      "assertion_pseudocode": "import dataclasses\nfrom agentfox.nightshift.carry_patch_monitor import MonitorCycleResult\nassert dataclasses.is_dataclass(MonitorCycleResult)\nresult = MonitorCycleResult()\nassert result.conflicts_detected == 0\nassert result.conflicts_resolved == 0\nassert result.conflicts_failed == 0\nassert result.patches_merged == 0\nassert result.rebuild_triggered == False"
+    },
+    {
+      "id": "TS-03-E8",
+      "requirement_id": "03-REQ-3.E1",
+      "kind": "unit",
+      "description": "When get_patch_status() returns a PatchStatusDashboard with an empty patch list, run_cycle() returns an empty MonitorCycleResult immediately without logging an error.",
+      "preconditions": [
+        "HubClient.get_patch_status() returns PatchStatusDashboard(patches=[])",
+        "Logger is captured"
+      ],
+      "input": {
+        "dashboard_patches": []
+      },
+      "expected": {
+        "no_error_logged": true,
+        "result.conflicts_detected": 0,
+        "result.patches_merged": 0,
+        "result.rebuild_triggered": false
+      },
+      "assertion_pseudocode": "mock_hub_client.get_patch_status.return_value = PatchStatusDashboard(patches=[])\nwith capture_logs() as logs:\n    result = await monitor.run_cycle()\nassert result.conflicts_detected == 0\nassert result.patches_merged == 0\nassert result.rebuild_triggered == False\nassert not any('error' in log.level.lower() for log in logs)"
+    },
+    {
+      "id": "TS-03-E9",
+      "requirement_id": "03-REQ-3.E2",
+      "kind": "unit",
+      "description": "When a patch's retry count has reached max_resolve_retries, run_cycle() skips it, logs a warning with patch ID and retry count, and counts it in conflicts_detected but not in conflicts_resolved or conflicts_failed.",
+      "preconditions": [
+        "config.carry_patch.max_resolve_retries = 2",
+        "Patch 'patch-1' has retry_count = 2 in the monitor's internal counter",
+        "Dashboard has 1 conflicting patch with id='patch-1'",
+        "Logger is captured"
+      ],
+      "input": {
+        "patch_id": "patch-1",
+        "retry_count_at_max": 2
+      },
+      "expected": {
+        "coder_not_called": true,
+        "result.conflicts_detected": 1,
+        "result.conflicts_failed": 0,
+        "result.conflicts_resolved": 0,
+        "warning_logged_with_patch_id": true,
+        "warning_logged_with_retry_count": true
+      },
+      "assertion_pseudocode": "monitor._retry_counters['patch-1'] = 2  # pre-set to max\nwith capture_logs() as logs:\n    result = await monitor.run_cycle()\nassert result.conflicts_detected == 1\nassert result.conflicts_resolved == 0\nassert result.conflicts_failed == 0\nassert any('patch-1' in log.message and '2' in log.message and 'warning' in log.level.lower() for log in logs)\nassert mock_engine._run_coder_session.not_called()"
+    },
+    {
+      "id": "TS-03-E10",
+      "requirement_id": "03-REQ-3.E3",
+      "kind": "unit",
+      "description": "When fetch_remote() or checkout_branch() raises an exception for a patch, run_cycle() increments conflicts_failed, emits CARRY_PATCH_CONFLICT_FAILED, logs the error, and continues to the next patch.",
+      "preconditions": [
+        "Dashboard has 2 conflicting patches",
+        "fetch_remote() raises IOError for the first patch, succeeds for the second",
+        "_run_coder_session() succeeds for the second patch",
+        "emit_audit_event() is mocked"
+      ],
+      "input": {
+        "fetch_remote_raises_for_patch_1": "IOError('fetch failed')"
+      },
+      "expected": {
+        "CARRY_PATCH_CONFLICT_FAILED_emitted": true,
+        "no_exception_raised": true,
+        "result.conflicts_detected": 2,
+        "result.conflicts_failed": 1,
+        "result.conflicts_resolved": 1
+      },
+      "assertion_pseudocode": "mock_fetch_remote.side_effect = [IOError('fetch failed'), None]\nemitted = []\nmock_emit_audit_event.side_effect = lambda et, **kw: emitted.append(et)\nresult = await monitor.run_cycle()\nassert result.conflicts_detected == 2\nassert result.conflicts_failed == 1\nassert result.conflicts_resolved == 1\nassert AuditEventType.CARRY_PATCH_CONFLICT_FAILED in emitted"
+    },
+    {
+      "id": "TS-03-E11",
+      "requirement_id": "03-REQ-3.E4",
+      "kind": "unit",
+      "description": "When _run_coder_session() times out or raises, run_cycle() increments the retry counter, increments conflicts_failed, emits CARRY_PATCH_CONFLICT_FAILED, and continues to the next patch without raising.",
+      "preconditions": [
+        "Dashboard has 2 conflicting patches",
+        "_run_coder_session() raises asyncio.TimeoutError for the first patch, succeeds for the second",
+        "emit_audit_event() is mocked"
+      ],
+      "input": {
+        "coder_session_raises": "asyncio.TimeoutError"
+      },
+      "expected": {
+        "CARRY_PATCH_CONFLICT_FAILED_emitted": true,
+        "no_exception_raised": true,
+        "result.conflicts_failed": 1,
+        "result.conflicts_resolved": 1,
+        "retry_counter_incremented_for_patch_1": true
+      },
+      "assertion_pseudocode": "import asyncio\nmock_engine._run_coder_session.side_effect = [asyncio.TimeoutError(), success_result]\nemitted = []\nmock_emit_audit_event.side_effect = lambda et, **kw: emitted.append(et)\nresult = await monitor.run_cycle()\nassert result.conflicts_failed == 1\nassert result.conflicts_resolved == 1\nassert AuditEventType.CARRY_PATCH_CONFLICT_FAILED in emitted\nassert monitor._retry_counters.get('patch-1', 0) == 1"
+    },
+    {
+      "id": "TS-03-E12",
+      "requirement_id": "03-REQ-3.E5",
+      "kind": "unit",
+      "description": "When a PatchDetail has missing or null conflict_files and patch_description, run_cycle() substitutes empty list and empty string respectively and processes the patch without raising.",
+      "preconditions": [
+        "Dashboard has 1 conflicting patch with conflict_files=None and patch_description=None",
+        "_run_coder_session() is mocked to capture context"
+      ],
+      "input": {
+        "patch_detail.conflict_files": null,
+        "patch_detail.patch_description": null
+      },
+      "expected": {
+        "context_dict.conflict_files": [],
+        "context_dict.patch_description": "",
+        "no_exception_raised": true,
+        "patch_processed": true
+      },
+      "assertion_pseudocode": "patch = PatchDetail(id='p1', status='conflict', conflict_files=None, description=None)\nmock_hub_client.get_patch_status.return_value = PatchStatusDashboard(patches=[patch])\ncaptured_context = {}\nmock_engine._run_coder_session.side_effect = lambda **kw: captured_context.update(kw.get('context', {}))\nresult = await monitor.run_cycle()\nassert captured_context['conflict_files'] == []\nassert captured_context['patch_description'] == ''"
+    },
+    {
+      "id": "TS-03-E13",
+      "requirement_id": "03-REQ-3.E6",
+      "kind": "unit",
+      "description": "When submit_rebuild() raises HubConflictError after a successful resolution, run_cycle() calls list_rebuilds() and sets rebuild_triggered=True if an active rebuild is found, or False if not.",
+      "preconditions": [
+        "Dashboard has 1 conflicting patch",
+        "_run_coder_session() succeeds",
+        "submit_rebuild() raises HubConflictError",
+        "Scenario A: list_rebuilds() returns [RebuildJob(id='active-1')]",
+        "Scenario B: list_rebuilds() returns []"
+      ],
+      "input": {
+        "submit_rebuild_raises": "HubConflictError"
+      },
+      "expected": {
+        "list_rebuilds_called": true,
+        "scenario_A.result.rebuild_triggered": true,
+        "scenario_B.result.rebuild_triggered": false
+      },
+      "assertion_pseudocode": "# Scenario A: active rebuild found\nmock_hub_client.submit_rebuild.side_effect = HubConflictError()\nmock_hub_client.list_rebuilds.return_value = [RebuildJob(id='active-1', status='running')]\nresult = await monitor.run_cycle()\nassert result.rebuild_triggered == True\nassert mock_hub_client.list_rebuilds.called_with('my-workspace')\n# Scenario B: no active rebuild\nmock_hub_client.list_rebuilds.return_value = []\nresult = await monitor.run_cycle()\nassert result.rebuild_triggered == False"
+    },
+    {
+      "id": "TS-03-E14",
+      "requirement_id": "03-REQ-4.E1",
+      "kind": "unit",
+      "description": "When list_rerere() raises an exception during context assembly, run_cycle() substitutes an empty list for rerere_resolutions and continues the resolution attempt without aborting.",
+      "preconditions": [
+        "Dashboard has 1 conflicting patch",
+        "list_rerere() raises HubError('rerere unavailable')",
+        "_run_coder_session() is mocked to capture context"
+      ],
+      "input": {
+        "list_rerere_raises": "HubError('rerere unavailable')"
+      },
+      "expected": {
+        "coder_session_called": true,
+        "context_dict.rerere_resolutions": [],
+        "no_exception_raised": true
+      },
+      "assertion_pseudocode": "mock_hub_client.list_rerere.side_effect = HubError('rerere unavailable')\ncaptured_context = {}\nmock_engine._run_coder_session.side_effect = lambda **kw: captured_context.update(kw.get('context', {}))\nresult = await monitor.run_cycle()\nassert captured_context['rerere_resolutions'] == []\nassert mock_engine._run_coder_session.called()"
+    },
+    {
+      "id": "TS-03-E15",
+      "requirement_id": "03-REQ-4.E2",
+      "kind": "unit",
+      "description": "When the local git diff command fails during context assembly, run_cycle() substitutes an empty string for upstream_context, logs a warning, and continues the resolution attempt.",
+      "preconditions": [
+        "Dashboard has 1 conflicting patch",
+        "Local git diff command raises subprocess.CalledProcessError or equivalent",
+        "_run_coder_session() is mocked to capture context",
+        "Logger is captured"
+      ],
+      "input": {
+        "git_diff_raises": "CalledProcessError(1, 'git diff')"
+      },
+      "expected": {
+        "coder_session_called": true,
+        "context_dict.upstream_context": "",
+        "no_exception_raised": true,
+        "warning_logged": true
+      },
+      "assertion_pseudocode": "mock_run_git.side_effect = CalledProcessError(1, 'git diff')\ncaptured_context = {}\nmock_engine._run_coder_session.side_effect = lambda **kw: captured_context.update(kw.get('context', {}))\nwith capture_logs() as logs:\n    result = await monitor.run_cycle()\nassert captured_context['upstream_context'] == ''\nassert any('warning' in log.level.lower() for log in logs)\nassert mock_engine._run_coder_session.called()"
+    },
+    {
+      "id": "TS-03-E16",
+      "requirement_id": "03-REQ-5.E1",
+      "kind": "unit",
+      "description": "When the 'carry-patch' key is absent from the coder archetype modes dict, the lookup raises KeyError and the coder session is not started with an incorrect mode.",
+      "preconditions": [
+        "A modified archetypes dict is used that does not contain 'carry-patch' under 'coder'",
+        "The monitor attempts to invoke the coder in carry-patch mode"
+      ],
+      "input": {
+        "archetypes['coder']": "dict without 'carry-patch' key"
+      },
+      "expected": {
+        "coder_session_not_started": true,
+        "exception_type": "KeyError"
+      },
+      "assertion_pseudocode": "# Simulate missing carry-patch mode\noriginal_modes = archetypes['coder'].copy()\ndel archetypes['coder']['carry-patch']\ntry:\n    with assert_raises(KeyError):\n        mode_config = archetypes['coder']['carry-patch']\nfinally:\n    archetypes['coder'].update(original_modes)\nassert mock_engine._run_coder_session.not_called()"
+    },
+    {
+      "id": "TS-03-E17",
+      "requirement_id": "03-REQ-6.E1",
+      "kind": "unit",
+      "description": "When coder_carry-patch.md is missing from the templates directory, the profile template loader raises FileNotFoundError and no coder session is started.",
+      "preconditions": [
+        "coder_carry-patch.md is temporarily renamed or deleted from agentfox/_templates/profiles/",
+        "The profile loader is invoked for the carry-patch mode"
+      ],
+      "input": {
+        "profile_file": "missing"
+      },
+      "expected": {
+        "coder_session_not_started": true,
+        "exception_type": "FileNotFoundError"
+      },
+      "assertion_pseudocode": "profile_path = Path('packages/agentfox/agentfox/_templates/profiles/coder_carry-patch.md')\nwith profile_path.renamed_temporarily():\n    with assert_raises(FileNotFoundError):\n        load_profile('coder', 'carry-patch')\nassert mock_engine._run_coder_session.not_called()"
+    },
+    {
+      "id": "TS-03-E18",
+      "requirement_id": "03-REQ-7.E1",
+      "kind": "unit",
+      "description": "When carry_patch.enabled is True but HubClient is None, build_streams() logs a warning and omits CarryPatchStream without raising an exception.",
+      "preconditions": [
+        "config.carry_patch.enabled = True",
+        "hub_client = None",
+        "Logger is captured"
+      ],
+      "input": {
+        "config.carry_patch.enabled": true,
+        "hub_client": null
+      },
+      "expected": {
+        "carry_patch_stream_absent": true,
+        "no_exception_raised": true,
+        "warning_logged": true
+      },
+      "assertion_pseudocode": "config.carry_patch.enabled = True\nwith capture_logs() as logs:\n    streams = build_streams(config=config, hub_client=None)\nassert not any(s.name == 'carry-patch' for s in streams)\nassert any('warning' in log.level.lower() for log in logs)"
+    },
+    {
+      "id": "TS-03-E19",
+      "requirement_id": "03-REQ-7.E2",
+      "kind": "unit",
+      "description": "When run_cycle() raises an unhandled exception during a scheduled poll, the CarryPatchStream wrapper catches it, logs at ERROR level, and does not crash the daemon.",
+      "preconditions": [
+        "CarryPatchStream is instantiated and scheduled",
+        "CarryPatchMonitor.run_cycle() raises RuntimeError('unexpected error')",
+        "Logger is captured"
+      ],
+      "input": {
+        "run_cycle_raises": "RuntimeError('unexpected error')"
+      },
+      "expected": {
+        "error_logged": true,
+        "no_exception_propagated_to_daemon": true,
+        "stream_remains_active": true
+      },
+      "assertion_pseudocode": "mock_monitor.run_cycle.side_effect = RuntimeError('unexpected error')\nwith capture_logs() as logs:\n    await carry_patch_stream.tick()  # simulate scheduled poll\nassert any('error' in log.level.lower() for log in logs)\nassert carry_patch_stream.enabled == True  # stream still active"
+    },
+    {
+      "id": "TS-03-E20",
+      "requirement_id": "03-REQ-8.E1",
+      "kind": "unit",
+      "description": "When emit_audit_event() raises an exception, the carry-patch operation logs the failure at WARNING level and continues without propagating the exception.",
+      "preconditions": [
+        "emit_audit_event() raises RuntimeError('audit service unavailable')",
+        "Logger is captured",
+        "A carry-patch operation (fix pipeline integration phase) is running"
+      ],
+      "input": {
+        "emit_audit_event_raises": "RuntimeError('audit service unavailable')"
+      },
+      "expected": {
+        "carry_patch_operation_continues": true,
+        "no_exception_propagated": true,
+        "warning_logged": true
+      },
+      "assertion_pseudocode": "mock_emit_audit_event.side_effect = RuntimeError('audit service unavailable')\nwith capture_logs() as logs:\n    # Should not raise\n    await pipeline.run_integration_phase(issue=fix_issue, branch_name='fix/issue-42')\nassert any('warning' in log.level.lower() for log in logs)\nassert fix_issue.status != 'error'  # operation continued"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-03-SMOKE-1",
+      "execution_path_id": "03-PATH-1",
+      "description": "End-to-end smoke test for the fix pipeline carry-patch integration path: push branch, register patch, submit rebuild, poll to completion, close issue.",
+      "trigger": "Call fix pipeline integration phase with carry_patch.enabled=True and a real HubClient mock that simulates the full API sequence",
+      "real_components": [
+        "FixPipeline",
+        "NightShiftEngine",
+        "emit_audit_event"
+      ],
+      "mockable": [
+        "HubClient.add_patch",
+        "HubClient.submit_rebuild",
+        "poll_rebuild",
+        "push_to_remote"
+      ],
+      "expected_effects": [
+        "push_to_remote() is called exactly once with the fix branch name",
+        "HubClient.add_patch() is called with workspace_slug, branch_name, skip_branch_check=True, if_not_exists=True",
+        "HubClient.submit_rebuild() is called with workspace_slug",
+        "poll_rebuild() is called with the job ID from submit_rebuild()",
+        "AuditEventType.CARRY_PATCH_PATCH_REGISTERED is emitted",
+        "AuditEventType.CARRY_PATCH_REBUILD_REQUESTED is emitted",
+        "AuditEventType.CARRY_PATCH_REBUILD_COMPLETED is emitted",
+        "The fix issue status is set to 'closed'",
+        "No local squash-merge is performed"
+      ]
+    },
+    {
+      "id": "TS-03-SMOKE-2",
+      "execution_path_id": "03-PATH-2",
+      "description": "End-to-end smoke test for the monitor cycle detecting and resolving a conflicting patch: fetch dashboard, detect conflict, assemble context, invoke coder, push resolved branch, trigger rebuild.",
+      "trigger": "Instantiate CarryPatchMonitor with auto_resolve=True and call run_cycle() with a dashboard containing one conflicting patch",
+      "real_components": [
+        "CarryPatchMonitor",
+        "NightShiftEngine",
+        "emit_audit_event"
+      ],
+      "mockable": [
+        "HubClient.get_patch_status",
+        "HubClient.list_rerere",
+        "HubClient.submit_rebuild",
+        "fetch_remote",
+        "checkout_branch",
+        "push_to_remote",
+        "NightShiftEngine._run_coder_session",
+        "run_git (for git diff)"
+      ],
+      "expected_effects": [
+        "HubClient.get_patch_status() is called with workspace_slug",
+        "AuditEventType.CARRY_PATCH_CONFLICT_DETECTED is emitted",
+        "fetch_remote() and checkout_branch() are called for the conflicting patch branch",
+        "HubClient.list_rerere() is called with workspace_slug",
+        "NightShiftEngine._run_coder_session() is called with archetype='coder', mode='carry-patch', and a context dict containing patch_description, conflict_files, upstream_context, rerere_resolutions",
+        "push_to_remote() is called after successful resolution",
+        "AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED is emitted",
+        "HubClient.submit_rebuild() is called",
+        "AuditEventType.CARRY_PATCH_REBUILD_REQUESTED is emitted",
+        "run_cycle() returns MonitorCycleResult(conflicts_detected=1, conflicts_resolved=1, conflicts_failed=0, patches_merged=0, rebuild_triggered=True)"
+      ]
+    },
+    {
+      "id": "TS-03-SMOKE-3",
+      "execution_path_id": "03-PATH-3",
+      "description": "Smoke test for the concurrent rebuild conflict fallback path: submit_rebuild raises HubConflictError, pipeline falls back to polling the active rebuild via list_rebuilds.",
+      "trigger": "Call fix pipeline integration phase where submit_rebuild() raises HubConflictError and list_rebuilds() returns an active job",
+      "real_components": [
+        "FixPipeline",
+        "NightShiftEngine",
+        "emit_audit_event"
+      ],
+      "mockable": [
+        "HubClient.submit_rebuild",
+        "HubClient.list_rebuilds",
+        "poll_rebuild",
+        "push_to_remote",
+        "HubClient.add_patch"
+      ],
+      "expected_effects": [
+        "HubClient.submit_rebuild() raises HubConflictError",
+        "HubClient.list_rebuilds() is called with workspace_slug",
+        "poll_rebuild() is called with the active job ID from list_rebuilds()",
+        "AuditEventType.CARRY_PATCH_REBUILD_COMPLETED is emitted after polling completes",
+        "The fix issue is closed normally",
+        "No exception propagates to the caller"
+      ]
+    },
+    {
+      "id": "TS-03-SMOKE-4",
+      "execution_path_id": "03-PATH-4",
+      "description": "Full end-to-end daemon startup through carry-patch conflict resolution: config loading, stream registration, daemon scheduling, monitor cycle execution.",
+      "trigger": "Simulate daemon startup with carry_patch.enabled=True, then fire the CarryPatchStream tick after check_interval, and verify the full resolution chain executes",
+      "real_components": [
+        "build_streams",
+        "CarryPatchStream",
+        "CarryPatchMonitor",
+        "NightShiftEngine",
+        "_run_carry_patch_monitor",
+        "emit_audit_event",
+        "daemon display name registry"
+      ],
+      "mockable": [
+        "HubClient (all methods)",
+        "push_to_remote",
+        "fetch_remote",
+        "checkout_branch",
+        "NightShiftEngine._run_coder_session",
+        "run_git (for git diff)"
+      ],
+      "expected_effects": [
+        "build_streams() returns a stream list containing a CarryPatchStream with name='carry-patch' and check_interval matching config",
+        "_STREAM_DISPLAY_NAMES['carry-patch'] and _STREAM_ACTIVE_LABELS['carry-patch'] are non-empty strings",
+        "After check_interval, CarryPatchStream triggers NightShiftEngine._run_carry_patch_monitor(workspace_slug)",
+        "_run_carry_patch_monitor() delegates to CarryPatchMonitor.run_cycle()",
+        "HubClient.get_patch_status() is called and a conflicting patch is detected",
+        "NightShiftEngine._run_coder_session() is called with mode='carry-patch'",
+        "push_to_remote() and HubClient.submit_rebuild() are called after resolution",
+        "run_cycle() returns a MonitorCycleResult with conflicts_resolved >= 1",
+        "Daemon logs the result and schedules the next tick without crashing"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [],
+    "properties_covered": [],
+    "paths_covered": [],
+    "gaps": []
+  }
+}
