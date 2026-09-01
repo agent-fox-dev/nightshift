@@ -570,6 +570,95 @@ class TestCarryPatchModeActivation:
             f"Expected error message mentioning PAT or token in stderr; got: {result.stderr!r}"
         )
 
+    def test_token_only_no_workspace_skips_carry_patch(self, cli_runner: CliRunner) -> None:
+        """Carry-patch mode is skipped when token resolves but workspace does not (02-REQ-2.11).
+
+        When --token is provided (or AF_HUB_TOKEN is set) but --workspace
+        resolves to empty from all sources (flag, AF_WORKSPACE, and
+        config.carry_patch.workspace), nightshift must silently skip
+        carry-patch mode and run normally. The resolved token is discarded.
+        No hub API calls should be made; no error is emitted.
+
+        Requirements: 02-REQ-2.11
+        """
+        config = _make_config(hub_endpoint_url="https://hub.example.com", carry_patch_workspace="")
+        with (
+            patch("nightshift.app.load_config", return_value=config),
+            patch(
+                "nightshift.app.resolve_hub_url",
+                create=True,
+                return_value="https://hub.example.com",
+            ),
+            patch("nightshift.app.resolve_hub_pat", create=True, return_value="fallback-pat"),
+            patch(
+                "nightshift.app._carry_patch_startup",
+                create=True,
+                new_callable=AsyncMock,
+            ) as mock_startup,
+            _clear_env("AF_HUB_URL", "AF_WORKSPACE", "AF_HUB_TOKEN"),
+        ):
+            result = cli_runner.invoke(
+                main,
+                ["--token", "myPAT"],
+            )
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 when token is set but no workspace; got {result.exit_code}.\n"
+            f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
+        )
+        assert mock_startup.call_count == 0, (
+            "Carry-patch startup helper was called despite empty workspace; "
+            "carry-patch mode must not activate without a resolved workspace slug"
+        )
+
+    def test_cli_token_skips_resolve_hub_pat(self, cli_runner: CliRunner) -> None:
+        """CLI --token flag is used directly without calling resolve_hub_pat() (02-REQ-2.E1).
+
+        When the operator supplies --token on the CLI, the flag value must be
+        used as the PAT. resolve_hub_pat() should not be called at all since
+        the CLI flag short-circuits the resolution.
+
+        Requirements: 02-REQ-2.E1
+        """
+        config = _make_config(hub_endpoint_url="", carry_patch_workspace="")
+        with (
+            patch("nightshift.app.load_config", return_value=config),
+            patch(
+                "nightshift.app.resolve_hub_url",
+                create=True,
+                return_value="https://hub.example.com",
+            ),
+            patch(
+                "nightshift.app.resolve_hub_pat",
+                create=True,
+                return_value="env-pat-should-not-be-used",
+            ) as mock_resolve_pat,
+            patch(
+                "nightshift.app._carry_patch_startup",
+                create=True,
+                new_callable=AsyncMock,
+            ) as mock_startup,
+            _clear_env("AF_HUB_URL", "AF_WORKSPACE", "AF_HUB_TOKEN"),
+        ):
+            result = cli_runner.invoke(
+                main,
+                ["--hub-url", "https://hub.example.com", "--workspace", "my-slug", "--token", "cli-pat"],
+            )
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 with all flags provided; got {result.exit_code}.\n"
+            f"stdout: {result.output!r}\nstderr: {result.stderr!r}"
+        )
+        assert mock_startup.call_count == 1, (
+            "Startup helper was not called; carry-patch mode was not activated"
+        )
+        # When --token is provided on the CLI, the CLI value must be used
+        # directly. resolve_hub_pat() should NOT be called.
+        assert mock_resolve_pat.call_count == 0, (
+            "resolve_hub_pat() was called despite --token being provided on the CLI; "
+            "the CLI --token flag must take precedence without calling resolve_hub_pat()"
+        )
+
     def test_missing_hub_url_exits(self, cli_runner: CliRunner) -> None:
         """CLI exits with code 1 and hub-URL-related error when carry-patch is active but hub URL is absent (TS-02-15).
 
