@@ -152,6 +152,12 @@ class NightShiftEngine:
         # staleness evaluation by sibling fixes.
         self._in_flight: set[int] = set()
         self._in_flight_lock = asyncio.Lock()
+        # Single CarryPatchMonitor instance reused across all calls to
+        # _run_carry_patch_monitor().  Set externally (e.g. by
+        # build_streams or the daemon wiring) — not created here because
+        # the engine __init__ does not receive hub_client or slug.
+        # Requirements: 03-REQ-7.4
+        self._carry_patch_monitor: object | None = None
 
     def _check_cost_limit(self) -> bool:
         """Check whether the cost limit has been reached.
@@ -724,3 +730,17 @@ class NightShiftEngine:
                 pipeline=pipeline,
             )
             self.state.issue_checks_completed += 1
+
+    async def _run_carry_patch_monitor(self, slug: str) -> object:
+        """Delegate to the stored CarryPatchMonitor instance.
+
+        The monitor is stored as ``self._carry_patch_monitor`` and reused
+        across all calls to preserve the in-memory session retry counter
+        (03-PROP-3).  Any exception raised by the monitor is propagated
+        to the caller (03-REQ-7.E2).
+
+        Returns a ``MonitorCycleResult`` instance.
+
+        Requirements: 03-REQ-7.4, 03-REQ-7.E2
+        """
+        return await self._carry_patch_monitor.run_cycle()

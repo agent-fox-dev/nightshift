@@ -132,7 +132,7 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     runner = DaemonRunner(
         config=config,
         platform=platform,
-        streams=build_streams(config, engine=engine, budget=budget),
+        streams=build_streams(config, engine=engine, budget=budget, hub_client=hub_client),
         budget=budget,
         pid_path=root / ".nightshift" / "daemon.pid",
         idle_callback=progress.update_spinner_text,

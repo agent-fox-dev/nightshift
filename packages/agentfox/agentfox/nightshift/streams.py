@@ -6,7 +6,8 @@ CLI flags, config, and platform degradation rules.
 
 Requirements: 85-REQ-1.1, 85-REQ-6.1, 85-REQ-6.2, 85-REQ-6.3,
               85-REQ-7.1, 85-REQ-7.E1, 125-REQ-3.1, 125-REQ-3.2,
-              125-REQ-3.3, 125-REQ-3.4, 125-REQ-3.E1
+              125-REQ-3.3, 125-REQ-3.4, 125-REQ-3.E1,
+              03-REQ-7.1, 03-REQ-7.2, 03-REQ-7.E1
 """
 
 from __future__ import annotations
@@ -119,6 +120,56 @@ class EngineWorkStream:
 
 
 # ---------------------------------------------------------------------------
+# CarryPatchStream — wraps CarryPatchMonitor.run_cycle()
+# ---------------------------------------------------------------------------
+
+
+class CarryPatchStream:
+    """Work stream that delegates to ``CarryPatchMonitor.run_cycle()``.
+
+    Unlike ``EngineWorkStream`` (which wraps an engine method by name),
+    this stream holds a direct reference to a ``CarryPatchMonitor`` and
+    invokes ``run_cycle()`` on each tick.
+
+    Requirements: 03-REQ-7.1
+    """
+
+    def __init__(
+        self,
+        *,
+        monitor: object,
+        check_interval: int,
+        enabled: bool = True,
+    ) -> None:
+        self._monitor = monitor
+        self._interval = check_interval
+        self._enabled = enabled
+
+    @property
+    def name(self) -> str:
+        return "carry-patch"
+
+    @property
+    def interval(self) -> int:
+        return self._interval
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    async def run_once(self) -> None:
+        """Run one monitor cycle."""
+        await self._monitor.run_cycle()
+
+    async def shutdown(self) -> None:
+        """No resources to clean up — HubClient is closed by main()."""
+
+
+# ---------------------------------------------------------------------------
 # build_streams() factory
 # ---------------------------------------------------------------------------
 
@@ -128,14 +179,16 @@ def build_streams(
     *,
     engine: object | None = None,
     budget: SharedBudget | None = None,
+    hub_client: object | None = None,
 ) -> list[WorkStream]:
     """Build work streams with proper enabled/disabled state.
 
-    Returns a list containing exactly one ``WorkStream`` — the fix-pipeline
-    stream.  The stream is disabled when the platform type is ``"none"``.
+    Returns a list of ``WorkStream`` instances — the fix-pipeline stream
+    (always present), optional pr-feedback, and optional carry-patch.
+    The fix-pipeline stream is disabled when the platform type is ``"none"``.
 
     Requirements: 85-REQ-6.1, 85-REQ-7.1, 125-REQ-3.3, 125-REQ-3.4,
-                  125-REQ-3.E1
+                  125-REQ-3.E1, 03-REQ-7.1, 03-REQ-7.2, 03-REQ-7.E1
     """
     from agentfox.nightshift.daemon import SharedBudget as _SharedBudget
 
@@ -183,6 +236,32 @@ def build_streams(
                 budget=budget,
                 enabled=True,
                 interval=pr_check_interval,
+            )
+        )
+
+    # Carry-patch stream: only when carry_patch.enabled and a HubClient
+    # is available (03-REQ-7.1, 03-REQ-7.2, 03-REQ-7.E1).
+    carry_patch = getattr(config, "carry_patch", None)
+    if carry_patch is not None and getattr(carry_patch, "enabled", False) and hub_client is not None:
+        check_interval = getattr(carry_patch, "check_interval", 0)
+        if check_interval <= 0:
+            raise ValueError(
+                f"check_interval must be a positive duration, got {check_interval}"
+            )
+        from agentfox.nightshift.carry_patch_monitor import CarryPatchMonitor  # noqa: PLC0415
+
+        # Build monitor — reuses the hub_client owned by main().
+        monitor = CarryPatchMonitor(
+            hub_client=hub_client,
+            workspace_slug=getattr(carry_patch, "workspace", ""),
+            config=config,
+            engine=engine,
+        )
+        streams.append(
+            CarryPatchStream(
+                monitor=monitor,
+                check_interval=check_interval,
+                enabled=True,
             )
         )
 

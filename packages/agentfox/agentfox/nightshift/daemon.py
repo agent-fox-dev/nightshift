@@ -37,12 +37,14 @@ _STREAM_DISPLAY_NAMES: dict[str, str] = {
     "fix-pipeline": "fix check",
     "spec-executor": "spec check",
     "pr-feedback": "PR check",
+    "carry-patch": "carry-patch check",
 }
 
 _STREAM_ACTIVE_LABELS: dict[str, str] = {
     "spec-executor": "spec sessions",
     "fix-pipeline": "fix pipeline",
     "pr-feedback": "PR feedback",
+    "carry-patch": "resolving conflicts",
 }
 
 
