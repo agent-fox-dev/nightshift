@@ -1,7 +1,7 @@
-"""Tests for HubClient workspace operations and lifecycle.
+"""Tests for HubClient workspace, patch, and rebuild operations.
 
-Covers: TS-01-1 through TS-01-7 (spec 01, group 1).
-Requirements: 01-REQ-1.1 through 01-REQ-1.7.
+Covers: TS-01-1 through TS-01-21 (spec 01, groups 1–3).
+Requirements: 01-REQ-1 through 01-REQ-3.
 
 These tests are written against the stub implementation and will FAIL until
 groups 13–14 provide the real implementation.
@@ -17,6 +17,8 @@ from afhub.client import HubClient
 from afhub.models import (
     PatchStatusDashboard,
     PatchSummary,
+    RebuildJob,
+    RebuildPreview,
     SyncResult,
     Workspace,
 )
@@ -796,3 +798,377 @@ class TestReorderPatches:
         await client.reorder_patches("my-workspace", ["p2", "p1"])
         call_args = str(client._http_client.post.call_args)
         assert "/api/v1/workspaces/my-workspace/patches/reorder" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-15: submit_rebuild sends POST and returns RebuildJob (202)
+# ---------------------------------------------------------------------------
+
+
+class TestSubmitRebuild:
+    """TS-01-15 — submit_rebuild sends POST /api/v1/workspaces/:slug/rebuild
+    with strategy and fail_mode in the JSON body and returns a RebuildJob on
+    HTTP 202.
+
+    Requirements: 01-REQ-3.1
+    """
+
+    _JOB_DATA = {
+        "id": "job-1",
+        "status": "pending",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+
+    async def test_submit_rebuild_returns_rebuild_job_instance(self) -> None:
+        """submit_rebuild returns a RebuildJob instance on HTTP 202."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=202, json=lambda: self._JOB_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.submit_rebuild("my-workspace", strategy="merge", fail_mode="stop")
+        assert isinstance(result, RebuildJob)
+
+    async def test_submit_rebuild_returns_correct_id(self) -> None:
+        """submit_rebuild result has the expected job id from the response."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=202, json=lambda: self._JOB_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.submit_rebuild("my-workspace", strategy="merge", fail_mode="stop")
+        assert result.id == "job-1"
+
+    async def test_submit_rebuild_sends_strategy_in_body(self) -> None:
+        """submit_rebuild includes strategy in the POST body when provided."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=202, json=lambda: self._JOB_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.submit_rebuild("my-workspace", strategy="merge", fail_mode="stop")
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert sent_body.get("strategy") == "merge"
+
+    async def test_submit_rebuild_sends_fail_mode_in_body(self) -> None:
+        """submit_rebuild includes fail_mode in the POST body when provided."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=202, json=lambda: self._JOB_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.submit_rebuild("my-workspace", strategy="merge", fail_mode="stop")
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert sent_body.get("fail_mode") == "stop"
+
+    async def test_submit_rebuild_omits_none_optional_fields(self) -> None:
+        """submit_rebuild omits strategy and fail_mode from the body when None."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=202, json=lambda: self._JOB_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.submit_rebuild("my-workspace")
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert "strategy" not in sent_body
+        assert "fail_mode" not in sent_body
+
+    async def test_submit_rebuild_posts_to_correct_path(self) -> None:
+        """submit_rebuild POSTs to /api/v1/workspaces/:slug/rebuild."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=202, json=lambda: self._JOB_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.submit_rebuild("my-workspace", strategy="merge", fail_mode="stop")
+        call_args = str(client._http_client.post.call_args)
+        assert "/api/v1/workspaces/my-workspace/rebuild" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-16: get_rebuild sends GET and returns RebuildJob
+# ---------------------------------------------------------------------------
+
+
+class TestGetRebuild:
+    """TS-01-16 — get_rebuild sends GET /api/v1/workspaces/:slug/rebuilds/:id
+    and returns a RebuildJob on HTTP 200.
+
+    Requirements: 01-REQ-3.2
+    """
+
+    _JOB_DATA = {
+        "id": "job-1",
+        "status": "running",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+
+    async def test_get_rebuild_returns_rebuild_job_instance(self) -> None:
+        """get_rebuild returns a RebuildJob instance on HTTP 200."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._JOB_DATA)
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.get_rebuild("my-workspace", "job-1")
+        assert isinstance(result, RebuildJob)
+
+    async def test_get_rebuild_returns_correct_id(self) -> None:
+        """get_rebuild result has id matching the queried rebuild_id."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._JOB_DATA)
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.get_rebuild("my-workspace", "job-1")
+        assert result.id == "job-1"
+
+    async def test_get_rebuild_calls_correct_path(self) -> None:
+        """get_rebuild GETs /api/v1/workspaces/:slug/rebuilds/:id."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._JOB_DATA)
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        await client.get_rebuild("my-workspace", "job-1")
+        call_args = str(client._http_client.get.call_args)
+        assert "/api/v1/workspaces/my-workspace/rebuilds/job-1" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-17: list_rebuilds unwraps 'jobs' envelope and returns list[RebuildJob]
+# ---------------------------------------------------------------------------
+
+
+class TestListRebuilds:
+    """TS-01-17 — list_rebuilds sends GET /api/v1/workspaces/:slug/rebuilds,
+    unwraps the 'jobs' array, and returns list[RebuildJob] on HTTP 200.
+
+    Requirements: 01-REQ-3.3
+    """
+
+    _JOB_DATA = {
+        "id": "job-1",
+        "status": "completed",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+
+    async def test_list_rebuilds_returns_list_of_rebuild_job_instances(self) -> None:
+        """list_rebuilds returns a list where every element is a RebuildJob."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200, json=lambda: {"jobs": [self._JOB_DATA]}
+        )
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.list_rebuilds("my-workspace")
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert isinstance(result[0], RebuildJob)
+
+    async def test_list_rebuilds_unwraps_jobs_envelope(self) -> None:
+        """list_rebuilds unwraps {jobs: [...]} and does not return the wrapper dict."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200, json=lambda: {"jobs": [self._JOB_DATA]}
+        )
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.list_rebuilds("my-workspace")
+        assert not isinstance(result, dict)
+        assert result[0].id == "job-1"
+
+    async def test_list_rebuilds_returns_empty_list_when_jobs_is_empty(self) -> None:
+        """list_rebuilds returns [] when the 'jobs' array is empty."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: {"jobs": []})
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.list_rebuilds("my-workspace")
+        assert result == []
+
+    async def test_list_rebuilds_calls_correct_path(self) -> None:
+        """list_rebuilds GETs /api/v1/workspaces/:slug/rebuilds."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: {"jobs": []})
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        await client.list_rebuilds("my-workspace")
+        call_args = str(client._http_client.get.call_args)
+        assert "/api/v1/workspaces/my-workspace/rebuilds" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-18: cancel_rebuild sends DELETE and returns RebuildJob
+# ---------------------------------------------------------------------------
+
+
+class TestCancelRebuild:
+    """TS-01-18 — cancel_rebuild sends DELETE /api/v1/workspaces/:slug/rebuilds/:id
+    and returns a RebuildJob representing the cancelled job on HTTP 200.
+
+    Requirements: 01-REQ-3.4
+    """
+
+    _JOB_DATA = {
+        "id": "job-1",
+        "status": "cancelled",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+
+    async def test_cancel_rebuild_returns_rebuild_job_instance(self) -> None:
+        """cancel_rebuild returns a RebuildJob instance on HTTP 200."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._JOB_DATA)
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        result = await client.cancel_rebuild("my-workspace", "job-1")
+        assert isinstance(result, RebuildJob)
+
+    async def test_cancel_rebuild_returns_job_with_cancelled_status(self) -> None:
+        """cancel_rebuild result has status='cancelled'."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._JOB_DATA)
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        result = await client.cancel_rebuild("my-workspace", "job-1")
+        assert result.status == "cancelled"
+
+    async def test_cancel_rebuild_calls_correct_path(self) -> None:
+        """cancel_rebuild DELETEs /api/v1/workspaces/:slug/rebuilds/:id."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._JOB_DATA)
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        await client.cancel_rebuild("my-workspace", "job-1")
+        call_args = str(client._http_client.delete.call_args)
+        assert "/api/v1/workspaces/my-workspace/rebuilds/job-1" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-19: requeue_rebuild sends POST to /requeue and returns RebuildJob
+# ---------------------------------------------------------------------------
+
+
+class TestRequeueRebuild:
+    """TS-01-19 — requeue_rebuild sends POST /api/v1/workspaces/:slug/rebuilds/:id/requeue
+    and returns a RebuildJob on HTTP 200.
+
+    Requirements: 01-REQ-3.5
+    """
+
+    _JOB_DATA = {
+        "id": "job-1",
+        "status": "pending",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+
+    async def test_requeue_rebuild_returns_rebuild_job_instance(self) -> None:
+        """requeue_rebuild returns a RebuildJob instance on HTTP 200."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._JOB_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.requeue_rebuild("my-workspace", "job-1")
+        assert isinstance(result, RebuildJob)
+
+    async def test_requeue_rebuild_calls_correct_path(self) -> None:
+        """requeue_rebuild POSTs to /api/v1/workspaces/:slug/rebuilds/:id/requeue."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._JOB_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.requeue_rebuild("my-workspace", "job-1")
+        call_args = str(client._http_client.post.call_args)
+        assert "/api/v1/workspaces/my-workspace/rebuilds/job-1/requeue" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-20: rollback_rebuild extracts previous_integration_head_sha as str
+# ---------------------------------------------------------------------------
+
+
+class TestRollbackRebuild:
+    """TS-01-20 — rollback_rebuild sends POST /api/v1/workspaces/:slug/rebuilds/:id/rollback
+    and extracts the 'previous_integration_head_sha' value as a plain string on
+    HTTP 200.
+
+    Requirements: 01-REQ-3.6
+    """
+
+    async def test_rollback_rebuild_returns_string(self) -> None:
+        """rollback_rebuild returns a str (not a dict or RebuildJob)."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200,
+            json=lambda: {"previous_integration_head_sha": "abc123"},
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.rollback_rebuild("my-workspace", "job-1")
+        assert isinstance(result, str)
+
+    async def test_rollback_rebuild_returns_sha_value(self) -> None:
+        """rollback_rebuild returns the extracted previous_integration_head_sha."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200,
+            json=lambda: {"previous_integration_head_sha": "abc123"},
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.rollback_rebuild("my-workspace", "job-1")
+        assert result == "abc123"
+
+    async def test_rollback_rebuild_does_not_return_full_dict(self) -> None:
+        """rollback_rebuild returns the sha string, not the raw response dict."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200,
+            json=lambda: {"previous_integration_head_sha": "abc123", "other": "ignored"},
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.rollback_rebuild("my-workspace", "job-1")
+        assert result != {"previous_integration_head_sha": "abc123", "other": "ignored"}
+
+    async def test_rollback_rebuild_calls_correct_path(self) -> None:
+        """rollback_rebuild POSTs to /api/v1/workspaces/:slug/rebuilds/:id/rollback."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200,
+            json=lambda: {"previous_integration_head_sha": "abc123"},
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.rollback_rebuild("my-workspace", "job-1")
+        call_args = str(client._http_client.post.call_args)
+        assert "/api/v1/workspaces/my-workspace/rebuilds/job-1/rollback" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-21: get_rebuild_preview returns RebuildPreview
+# ---------------------------------------------------------------------------
+
+
+class TestGetRebuildPreview:
+    """TS-01-21 — get_rebuild_preview sends GET /api/v1/workspaces/:slug/rebuild-preview
+    and returns a RebuildPreview on HTTP 200.
+
+    Requirements: 01-REQ-3.7
+    """
+
+    _PREVIEW_DATA = {
+        "patch_results": [
+            {
+                "patch_id": "p1",
+                "branch_name": "feat/x",
+                "position": 1,
+                "status": "would_succeed",
+                "tree_sha": None,
+                "conflict_files": None,
+            }
+        ]
+    }
+
+    async def test_get_rebuild_preview_returns_rebuild_preview_instance(self) -> None:
+        """get_rebuild_preview returns a RebuildPreview instance on HTTP 200."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PREVIEW_DATA)
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.get_rebuild_preview("my-workspace")
+        assert isinstance(result, RebuildPreview)
+
+    async def test_get_rebuild_preview_patch_results_has_items(self) -> None:
+        """get_rebuild_preview result has patch_results list with one entry."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PREVIEW_DATA)
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.get_rebuild_preview("my-workspace")
+        assert len(result.patch_results) == 1
+
+    async def test_get_rebuild_preview_returns_empty_patch_results_when_none(self) -> None:
+        """get_rebuild_preview returns RebuildPreview with empty patch_results list."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: {"patch_results": []})
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.get_rebuild_preview("my-workspace")
+        assert result.patch_results == []
+
+    async def test_get_rebuild_preview_calls_correct_path(self) -> None:
+        """get_rebuild_preview GETs /api/v1/workspaces/:slug/rebuild-preview."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: {"patch_results": []})
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        await client.get_rebuild_preview("my-workspace")
+        call_args = str(client._http_client.get.call_args)
+        assert "/api/v1/workspaces/my-workspace/rebuild-preview" in call_args

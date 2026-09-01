@@ -98,3 +98,44 @@ class RebuildJob(BaseModel):
     completed_at: str | None = None
     strategy: str | None = None
     patch_results: list[PatchResult] = []
+
+
+class RebuildPreviewPatchResult(BaseModel):
+    """Per-patch result within a RebuildPreview."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    patch_id: str = ""
+    branch_name: str = ""
+    position: int = 0
+    status: str = ""
+    tree_sha: str | None = None
+    conflict_files: list[str] | None = None
+
+
+class RebuildPreview(BaseModel):
+    """Preview of what a rebuild would produce without executing it."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    patch_results: list[RebuildPreviewPatchResult] = []
+
+
+class RerereEntry(BaseModel):
+    """A recorded rerere resolution."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    path: str = ""
+    recorded_at: str = ""
+
+
+class PatchDetail(BaseModel):
+    """Per-patch detail row within a PatchStatusDashboard."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = ""
+    branch_name: str = ""
+    position: int = 0
+    status: str = ""
