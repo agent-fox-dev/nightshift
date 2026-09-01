@@ -23,8 +23,10 @@ nightshift
 
 ## Installation
 
+Install the CLI:
+
 ```bash
-pip install nightshift
+curl -fsSL https://raw.githubusercontent.com/agent-fox-dev/nightshift/refs/heads/main/install.sh | sh
 ```
 
 Or install from source:
