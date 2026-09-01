@@ -110,8 +110,8 @@ hub_client = HubClient(endpoint_url=resolved_hub_url, pat=resolved_pat)
 
 ### `HubClient.get_workspace(slug: str) -> Workspace`
 
-Returns a `Workspace` model. Raises `HubAuthError` (401/403) or
-`HubNotFoundError` (404) on failure.
+Returns a `Workspace` model. Raises `HubAuthError` (401), `HubForbiddenError`
+(403), or `HubNotFoundError` (404) on failure.
 
 ### `HubClient.set_variable(slug: str, key: str, value: str) -> None`
 
@@ -128,6 +128,24 @@ then `config_url`. The caller passes all three sources in a single call:
 
 ```python
 resolved_hub_url = resolve_hub_url(hub_url_flag=hub_url_flag, config_url=config.hub.endpoint_url)
+```
+
+Both helpers return `str | None` — the caller must check for `None` before
+using the result. Full signatures (keyword-only parameters):
+
+```python
+def resolve_hub_url(
+    *,
+    hub_url_flag: str | None = None,
+    config_url: str = "",
+    env_var: str = "AF_HUB_URL",
+) -> str | None: ...
+
+def resolve_hub_pat(
+    *,
+    token_flag: str | None = None,
+    env_var: str = "AF_HUB_TOKEN",
+) -> str | None: ...
 ```
 
 `resolve_hub_pat()` reads `AF_HUB_TOKEN` from the environment; the caller
@@ -157,7 +175,7 @@ class CarryPatchConfig(BaseModel):
     workspace: str = Field(default="", description="Hub workspace slug")
     check_interval: Annotated[int, Clamped(ge=60)] = Field(default=300)
     auto_resolve: bool = Field(default=True)
-    rebuild_timeout: int = Field(default=600)
+    rebuild_timeout: Annotated[int, Clamped(ge=1)] = Field(default=600)
     rebuild_poll_interval: Annotated[int, Clamped(ge=2)] = Field(default=5)
     max_resolve_retries: Annotated[int, Clamped(ge=0, le=10)] = Field(default=2)
 ```
@@ -194,11 +212,17 @@ In `packages/nightshift/nightshift/app.py`, add three CLI options to `main`:
 - A resolved `--hub-url` alone (without `--workspace` and `--token`) is
   silently ignored — it does **not** activate carry-patch mode and nightshift
   runs normally.
+- If `--token` resolves to a non-empty value but `--workspace` resolves to
+  empty from all sources, carry-patch mode is **not** activated and nightshift
+  runs normally without error. The resolved token is discarded.
 - If `--workspace` is resolved but `--token` is absent (from any source),
   nightshift exits with an error explaining the PAT is required.
 - If `--hub-url` cannot be resolved from any source when carry-patch mode is
   active, nightshift exits with an error explaining the hub URL is required on
   first start.
+- The `--workspace`, `--hub-url`, and `--token` Click options are declared with
+  `default=None` so that an absent flag is falsy and distinguishable from an
+  empty string in the resolution expression.
 
 ### REQ-3: CWD validation sequence
 
@@ -207,16 +231,21 @@ starting the daemon, execute the following steps inside an async helper function
 invoked via `asyncio.run()` (see REQ-5 for context on async execution):
 
 1. Call `hub_client.get_workspace(slug)`. If the call raises `HubAuthError`
-   or `HubNotFoundError`, exit with a diagnostic error (invalid PAT or slug).
+   (401), `HubForbiddenError` (403), or `HubNotFoundError` (404), exit with a
+   diagnostic error (invalid PAT, insufficient permissions, or unknown slug).
 2. Verify `workspace.workspace_mode == "carry_patch"`. If not, exit with error.
 3. Verify `workspace.clone_status == "ready"`. If not (`"pending"`,
    `"cloning"`, or `"failed"`), exit with error indicating the workspace clone
    is not ready.
-4. Read the local origin URL via **blocking `subprocess.run()`** in CWD. Using
-   the blocking form is acceptable here because this is a short-lived startup
-   call and does not need to be non-blocking:
+4. Read the local origin URL via **blocking `subprocess.run()`**. The CWD
+   (`Path.cwd()`) is resolved before the async call and passed explicitly as
+   `cwd=Path.cwd()`. Using the blocking form is acceptable here because this is
+   a short-lived startup call:
    - Command: `["git", "remote", "get-url", "origin"]`
-   - Capture: `stdout=PIPE`, `stderr=PIPE`, `timeout=10` seconds
+   - Capture: `stdout=PIPE`, `stderr=PIPE`, `timeout=10` seconds, `cwd=Path.cwd()`
+   - Decode stdout and stderr with `encoding='utf-8', errors='replace'` (or
+     equivalent: `result.stdout.decode('utf-8', errors='replace')`). All
+     comparisons and error messages use the decoded `str` values.
    - If the subprocess raises `FileNotFoundError` (git not installed or not in
      PATH), emit the exact message `'git is not installed or not in PATH;
      nightshift requires git'` and `sys.exit(1)`.
@@ -304,15 +333,36 @@ merge_strategy = "direct"
 ### REQ-5: Workspace variable initialization
 
 The CWD validation sequence (REQ-3) and workspace variable initialization are
-extracted into an async helper function. The naming and exact signature of this
-function are left to the implementer; the PRD describes its behavior and
-responsibilities. A single `HubClient` instance — constructed as
+extracted into an async helper function that lives in
+`packages/nightshift/nightshift/_carry_patch_startup.py`. The naming and exact
+signature of this function are left to the implementer; the PRD describes its
+behavior and responsibilities.
+
+**Module placement:** The async helper and the `subprocess.run()` call must
+live in `_carry_patch_startup.py`, not in `app.py`. The test
+`test_delegation.py` enforces that `app.py` does not contain blocking calls;
+`_carry_patch_startup.py` is exempt from that constraint. `app.py` imports the
+helper and calls it via `asyncio.run()`.
+
+**HubClient lifecycle:** A single `HubClient` instance — constructed as
 `HubClient(endpoint_url=resolved_hub_url, pat=resolved_pat)` — is created once
-inside this helper and reused for all API calls in REQ-3 and REQ-5. This
-function is invoked via `asyncio.run()` at startup, before the synchronous
-daemon loop (`DaemonRunner.run()`) begins. This is consistent with the existing
-pattern in `app.py`, which already uses `asyncio.run(runner.run())` for the
-daemon.
+inside this helper and reused for all API calls in REQ-3 and REQ-5. The helper
+**returns the HubClient instance** after completing all startup work. `main()`
+receives the client from `asyncio.run(startup_helper(...))` and is responsible
+for:
+1. Passing the client to daemon components (`build_streams`, `FixPipeline`,
+   `CarryPatchMonitor`) that need it.
+2. Closing the client in a `finally` block on daemon exit:
+   ```python
+   hub_client = asyncio.run(startup_helper(...))
+   try:
+       DaemonRunner.run()
+   finally:
+       asyncio.run(hub_client.aclose())
+   ```
+
+`CarryPatchMonitor` does **not** own the `HubClient` lifecycle and must not
+call `aclose()`. This is `main()`'s responsibility.
 
 After CWD validation passes, call:
 
@@ -334,7 +384,8 @@ these variables because it handles concurrent rebuild (409) gracefully.
 |------|--------|
 | `packages/agentfox/agentfox/core/config.py` | Add HubConfig, CarryPatchConfig, extend AgentFoxConfig |
 | `packages/agentfox/agentfox/core/config_gen.py` | Add `[hub]` and `[carry_patch]` sections to the global default AgentFoxConfig comment-annotated TOML template (shown when no config file exists at all). This is separate from and complementary to the workspace-level `.nightshift/config.toml` written in REQ-4. |
-| `packages/nightshift/nightshift/app.py` | Add --hub-url, --workspace, --token flags and startup validation |
+| `packages/nightshift/nightshift/app.py` | Add --hub-url, --workspace, --token flags; import and invoke startup helper; close HubClient in finally block |
+| `packages/nightshift/nightshift/_carry_patch_startup.py` | New: async startup helper containing the CWD validation sequence, HubClient creation, and subprocess.run() call; returns HubClient instance; exempt from test_delegation.py constraint |
 | `packages/nightshift/pyproject.toml` | Add afhub as dependency |
 | `packages/agentfox/pyproject.toml` | Add afhub as optional dependency |
 

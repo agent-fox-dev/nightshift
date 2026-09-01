@@ -82,12 +82,14 @@ the fix pipeline's integration phase (after the coder-reviewer loop) replaces
 the local harvest/squash-merge with:
 
 1. Push the fix branch to the hub git server using the existing `push_to_remote()`.
-2. Call `hub_client.add_patch(slug, branch_name, description=..., skip_branch_check=True, if_not_exists=True)`.
+2. Call `hub_client.add_patch(slug, branch_name, description=issue.title, skip_branch_check=True, if_not_exists=True)`. The issue title is used as the patch description.
 3. Call `hub_client.submit_rebuild(slug)` (returns 202 + queued `RebuildJob`).
    If `HubConflictError` is raised (concurrent rebuild), retrieve the active
    rebuild via `hub_client.list_rebuilds(slug)` and poll that one instead.
    If `HubNoActivePatchesError` is raised, log a warning and skip the rebuild.
-4. Poll to terminal status via `poll_rebuild(hub_client, slug, job.id, timeout=..., interval=...)`.
+4. Poll to terminal status via `poll_rebuild(hub_client, slug, rebuild_id=job.id, timeout=config.carry_patch.rebuild_timeout, interval=config.carry_patch.rebuild_poll_interval)`.
+5. On `completed` status: proceed with normal issue closure.
+6. On `failed`, `dead_letter`, or `cancelled` status: log the error and mark the issue for retry.
 5. On `completed` status: proceed with normal issue closure.
 6. On `failed`/`dead_letter`: log the error and mark the issue for retry
    (same behavior as a failed local harvest).
@@ -104,7 +106,12 @@ class CarryPatchMonitor:
         workspace_slug: str,
         config: AgentFoxConfig,
         engine: NightShiftEngine,
+        sink: SinkDispatcher | SessionSink | None = None,
+        run_id: str = "",
     ) -> None: ...
+    # CarryPatchMonitor does NOT own the HubClient lifecycle.
+    # It must not call hub_client.aclose(). The client is closed by main()
+    # in a finally block on daemon shutdown.
 
     async def run_cycle(self) -> MonitorCycleResult: ...
 ```
@@ -141,12 +148,11 @@ class CarryPatchMonitor:
 
 When invoking the coder session for conflict resolution, pass a context dict
 containing:
-- `patch_description`: from `PatchDetail` (if available from the dashboard)
-- `conflict_files`: list of conflicting file paths from `PatchDetail.conflict_files`
+- `patch_description`: set to `patch_detail.description` (the `description` field on `PatchDetail`, added in Spec 01; empty string if None)
+- `conflict_files`: list of conflicting file paths from `PatchDetail.conflict_files` (empty list if None)
 - `upstream_context`: diff of changes since last successful rebuild (obtained
   via local `git diff` between the integration branch and upstream HEAD)
-- `rerere_resolutions`: list of paths from `hub_client.list_rerere(slug)` for
-  context (does not modify rerere state)
+- `rerere_resolutions`: list of path strings extracted from `RerereEntry` objects: `[e.path for e in hub_client.list_rerere(slug)]` (empty list if the call fails or returns empty; does not modify rerere state)
 
 ### REQ-5: Carry-patch archetype mode
 
@@ -174,9 +180,13 @@ The profile instructs the agent to:
 ### REQ-7: Stream registration
 
 In `packages/agentfox/agentfox/nightshift/streams.py`, `build_streams()`
-adds a `CarryPatchStream` (wrapping `CarryPatchMonitor.run_cycle`) when:
+gains a new optional parameter: `hub_client: HubClient | None = None`. Updated
+signature: `build_streams(config: AgentFoxConfig, hub_client: HubClient | None = None, **existing_params)`.
+All existing callers in `engine.py` and `daemon.py` must be updated to pass the
+`hub_client` argument. `build_streams()` adds a `CarryPatchStream` (wrapping
+`CarryPatchMonitor.run_cycle`) when:
 - `config.carry_patch.enabled` is `True`, AND
-- A `HubClient` instance is available (passed from app.py)
+- A `HubClient` instance is available (passed from app.py via the new parameter)
 
 The stream has:
 - `name = "carry-patch"`
@@ -188,7 +198,9 @@ In `packages/agentfox/agentfox/nightshift/daemon.py`, add `"carry-patch"` to
 
 In `packages/agentfox/agentfox/nightshift/engine.py`, add
 `_run_carry_patch_monitor(self, slug: str) -> MonitorCycleResult` that
-delegates to `CarryPatchMonitor`.
+delegates to a single `CarryPatchMonitor` instance stored on the engine (e.g.,
+`self._carry_patch_monitor`). The instance must be reused across all calls to
+preserve the in-memory session retry counter (PROP-3).
 
 ### REQ-8: Audit event types
 

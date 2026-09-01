@@ -38,7 +38,7 @@
     "get_patch_status": "A method on `HubClient` that returns a `PatchStatusDashboard` for a given workspace slug.",
     "integration branch": "The hub's main integration branch against which patches are applied during a rebuild.",
     "list_rebuilds": "A method on `HubClient` that returns the list of active or recent `RebuildJob` objects for a given workspace slug.",
-    "list_rerere": "A method on `HubClient` that returns a list of file paths with recorded rerere resolutions for a given workspace slug.",
+    "list_rerere": "A method on `HubClient` that returns a list of `RerereEntry` objects (each with a `.path` field) representing recorded rerere resolutions for a given workspace slug. Callers must extract `.path` from each entry: `[e.path for e in hub_client.list_rerere(slug)]`.",
     "max_resolve_retries": "The maximum number of times the monitor will attempt to resolve a given conflicting patch per session, sourced from `CarryPatchConfig`.",
     "merged_upstream": "A patch status indicating the patch has been successfully merged into the upstream integration branch.",
     "model_tier": "A string field in `ModeConfig` specifying which AI model tier to use (e.g., STANDARD, PREMIUM).",
@@ -48,6 +48,30 @@
     "run_git": "An existing helper that executes a git subprocess command and returns its output.",
     "session retry counter": "An in-memory per-slug, per-patch-id counter tracking how many resolution attempts have been made for a patch within the current daemon session.",
     "slug": "The workspace slug identifier used to address a specific hub workspace in all hub API calls.",
+    "AuditEventType.CARRY_PATCH_CONFLICT_DETECTED": "Audit event constant emitted when a patch with status 'conflict' is detected during a monitor cycle.",
+    "AuditEventType.CARRY_PATCH_REBUILD_FAILED": "Audit event constant emitted when a hub rebuild terminates with a failure status (failed, dead_letter, or cancelled).",
+    "AuditSeverity": "An enum in `afaudit/events.py` representing the severity level of an audit event (e.g., INFO, WARNING, ERROR).",
+    "KeyError": "Python built-in exception raised when a dictionary key or registry lookup key is not found.",
+    "RerereEntry": "Pydantic model returned by hub_client.list_rerere(); has a .path field (str) and a recorded_at field (str).",
+    "cancelled": "A terminal RebuildJob status indicating the rebuild was cancelled before completing successfully.",
+    "failed": "A terminal RebuildJob status indicating the rebuild completed with a failure.",
+    "git diff": "A git command used to produce a textual diff of changes between two git refs (e.g., integration branch and upstream HEAD).",
+    "hub_client": "A HubClient instance passed to CarryPatchMonitor, FixPipeline, and build_streams(); owned by main() which calls aclose() on shutdown.",
+    "patch_description": "A key in the conflict resolution context dict holding the patch's human-readable description, sourced from patch_detail.description.",
+    "run_id": "A string identifying the current daemon session, stored as an instance attribute on CarryPatchMonitor for use in emit_audit_event() calls.",
+    "sink": "Short for the SinkDispatcher or SessionSink instance, stored as an instance attribute on CarryPatchMonitor for use in emit_audit_event() calls.",
+    "upstream_context": "A key in the conflict resolution context dict holding the git diff output between the integration branch and upstream HEAD.",
+    "SinkDispatcher": "A class in `afaudit/sink.py` that dispatches audit events to multiple registered sinks.",
+    "SessionSink": "A class in `afaudit/sink.py` representing a single-session audit event sink.",
+    "rebuild_id": "The string ID of a RebuildJob, used as the rebuild_id argument in poll_rebuild() calls. Corresponds to the RebuildJob.id field.",
+    "patch_detail.description": "The description field on a PatchDetail object (added in Spec 01), holding the patch's human-readable description as a str or None.",
+    "resolve_effective_config": "An existing function in agentfox/archetypes.py that resolves the effective ModeConfig for a given archetype and mode string.",
+    "self.sink": "Instance attribute on CarryPatchMonitor holding the SinkDispatcher or SessionSink for audit event emission.",
+    "self.run_id": "Instance attribute on CarryPatchMonitor holding the session run_id string for audit event emission.",
+    "self._carry_patch_monitor": "Instance attribute on NightShiftEngine holding the single reused CarryPatchMonitor instance.",
+    "issue.title": "The title string of the nightshift issue being processed, used as the patch description when calling hub_client.add_patch().",
+    "config.carry_patch.rebuild_timeout": "The rebuild timeout in seconds from CarryPatchConfig, passed to poll_rebuild() as the timeout argument.",
+    "config.carry_patch.rebuild_poll_interval": "The rebuild poll interval in seconds from CarryPatchConfig, passed to poll_rebuild() as the interval argument.",
     "submit_rebuild": "A method on `HubClient` that submits a rebuild request for a given workspace slug and returns a `RebuildJob`.",
     "thinking_mode": "A string field in `ModeConfig` controlling the AI agent's reasoning strategy (e.g., adaptive)."
   },
@@ -65,7 +89,7 @@
           "id": "03-REQ-1.1",
           "ears_pattern": "complex_event",
           "system": "fix pipeline",
-          "action": "call `push_to_remote()` to push the fix branch to the hub git server, then call `hub_client.add_patch(slug, branch_name, description=..., skip_branch_check=True, if_not_exists=True)` to register the patch, then call `hub_client.submit_rebuild(slug)` and poll the returned `RebuildJob` via `poll_rebuild()` until a terminal status is reached",
+          "action": "call `push_to_remote()` to push the fix branch to the hub git server, then call `hub_client.add_patch(slug, branch_name, description=issue.title, skip_branch_check=True, if_not_exists=True)` to register the patch (using the issue title as the patch description), then call `hub_client.submit_rebuild(slug)` and poll the returned `RebuildJob` via `poll_rebuild(hub_client, slug, rebuild_id=job.id, timeout=config.carry_patch.rebuild_timeout, interval=config.carry_patch.rebuild_poll_interval)` until a terminal status is reached",
           "return_contract": "returns normally on success; raises or propagates exceptions on unrecoverable failure",
           "trigger": "the coder-reviewer loop completes successfully",
           "condition": "`config.carry_patch.enabled` is True and a `HubClient` instance is provided"
@@ -76,7 +100,7 @@
           "system": "fix pipeline",
           "action": "proceed with normal issue closure as if a local harvest had succeeded",
           "return_contract": "returns normally; issue is marked closed",
-          "trigger": "`hub_client.submit_rebuild(slug)` returns a `RebuildJob` with status completed"
+          "trigger": "`poll_rebuild()` returns a `RebuildJob` with status `completed`"
         },
         {
           "id": "03-REQ-1.3",
@@ -85,6 +109,14 @@
           "action": "log the failure details and mark the issue for retry using the same retry mechanism as a failed local harvest",
           "return_contract": "returns without raising; issue retry state is set",
           "error_condition": "`poll_rebuild()` resolves to a `RebuildJob` with status failed or dead_letter, indicating the hub rebuild reached a terminal failure status"
+        },
+        {
+          "id": "03-REQ-1.3b",
+          "ears_pattern": "unwanted",
+          "system": "fix pipeline",
+          "action": "treat `cancelled` status the same as `failed`: log the cancellation, emit `AuditEventType.CARRY_PATCH_REBUILD_FAILED`, and mark the issue for retry",
+          "return_contract": "returns without raising; issue retry state is set",
+          "error_condition": "`poll_rebuild()` resolves to a `RebuildJob` with status `cancelled`, indicating the hub rebuild was cancelled before reaching a terminal success state"
         },
         {
           "id": "03-REQ-1.4",
@@ -106,7 +138,7 @@
           "id": "03-REQ-1.6",
           "ears_pattern": "event_driven",
           "system": "fix pipeline",
-          "action": "emit `AuditEventType.CARRY_PATCH_PATCH_REGISTERED`, `AuditEventType.CARRY_PATCH_REBUILD_REQUESTED`, and `AuditEventType.CARRY_PATCH_REBUILD_COMPLETED` audit events via `emit_audit_event()` at the appropriate steps",
+          "action": "emit audit events via `emit_audit_event(sink, run_id, event_type, payload=...)` at the appropriate steps: `CARRY_PATCH_PATCH_REGISTERED` after `add_patch()` succeeds, `CARRY_PATCH_REBUILD_REQUESTED` after `submit_rebuild()` or after identifying the active rebuild from `list_rebuilds()`, and `CARRY_PATCH_REBUILD_COMPLETED` when `poll_rebuild()` returns a job with status `completed`. The fix pipeline obtains `sink` and `run_id` from the existing session context.",
           "return_contract": "audit events are emitted; no return value",
           "trigger": "patch registration and rebuild polling complete successfully"
         }
@@ -116,8 +148,8 @@
           "id": "03-REQ-1.E1",
           "ears_pattern": "unwanted",
           "system": "fix pipeline",
-          "action": "propagate the exception to the caller without calling `hub_client.add_patch()` or `hub_client.submit_rebuild()`; mark the issue for retry",
-          "return_contract": "raises the original exception; issue retry state is set",
+          "action": "(1) catch the exception, (2) mark the issue for retry (set retry state), (3) re-raise the original exception without calling `hub_client.add_patch()` or `hub_client.submit_rebuild()`",
+          "return_contract": "marks issue for retry before re-raising the original exception; no hub API calls are made after the failure",
           "error_condition": "`push_to_remote()` raises an exception because the fix branch cannot be pushed to the hub git server"
         },
         {
@@ -167,7 +199,7 @@
           "id": "03-REQ-2.1",
           "ears_pattern": "ubiquitous",
           "system": "CarryPatchMonitor",
-          "action": "expose a constructor `__init__(self, hub_client: HubClient, workspace_slug: str, config: AgentFoxConfig, engine: NightShiftEngine) -> None` and an async method `run_cycle(self) -> MonitorCycleResult` in `agentfox/nightshift/carry_patch_monitor.py`",
+          "action": "expose a constructor `__init__(self, hub_client: HubClient, workspace_slug: str, config: AgentFoxConfig, engine: NightShiftEngine, sink: SinkDispatcher | SessionSink | None = None, run_id: str = '') -> None` and an async method `run_cycle(self) -> MonitorCycleResult` in `agentfox/nightshift/carry_patch_monitor.py`. The constructor stores `sink` and `run_id` as instance attributes for use in `emit_audit_event()` calls. `CarryPatchMonitor` does not own the HubClient lifecycle and must not call `hub_client.aclose()`; the client is closed by `main()` in a `finally` block on daemon shutdown.",
           "return_contract": "constructor returns None; `run_cycle()` returns a `MonitorCycleResult` instance"
         },
         {
@@ -230,7 +262,7 @@
           "action": "check out the patch branch via `fetch_remote()` and `checkout_branch()`, invoke the coder via `engine._run_coder_session()` with `archetype=\"coder\"`, `mode=\"carry-patch\"`, and conflict context, then on success commit, push the branch, call `hub_client.submit_rebuild(slug)`, and poll via `poll_rebuild()`",
           "return_contract": "on success: `conflicts_resolved` incremented, `rebuild_triggered=True`; on failure: `conflicts_failed` incremented",
           "trigger": "`run_cycle()` encounters a `PatchDetail` with `status == \"conflict\"`",
-          "condition": "`auto_resolve` is True and the patch has not exceeded `max_resolve_retries` in the `session retry counter`"
+          "condition": "`auto_resolve` is True and the patch's `session retry counter` is strictly less than `max_resolve_retries` (counter < max_resolve_retries)"
         },
         {
           "id": "03-REQ-3.4",
@@ -239,13 +271,13 @@
           "action": "skip the patch, log a warning identifying the patch by its ID and branch name, and increment `conflicts_failed`",
           "return_contract": "returns with `conflicts_failed` incremented for the skipped patch; no coder session is started",
           "trigger": "`run_cycle()` encounters a `PatchDetail` with `status == \"conflict\"`",
-          "condition": "the patch's `session retry counter` has reached `max_resolve_retries`"
+          "condition": "the patch's `session retry counter` has reached or exceeded `max_resolve_retries` (counter >= max_resolve_retries)"
         },
         {
           "id": "03-REQ-3.5",
           "ears_pattern": "event_driven",
           "system": "CarryPatchMonitor",
-          "action": "emit `AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED` via `emit_audit_event()`",
+          "action": "emit `AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED` via `emit_audit_event(self.sink, self.run_id, AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED, payload={'patch_id': patch_detail.id})`",
           "return_contract": "audit event emitted; no return value",
           "trigger": "a conflict resolution attempt succeeds"
         },
@@ -253,9 +285,17 @@
           "id": "03-REQ-3.6",
           "ears_pattern": "event_driven",
           "system": "CarryPatchMonitor",
-          "action": "increment the `session retry counter` for the patch, emit `AuditEventType.CARRY_PATCH_CONFLICT_FAILED` via `emit_audit_event()`",
+          "action": "increment the `session retry counter` for the patch, emit `AuditEventType.CARRY_PATCH_CONFLICT_FAILED` via `emit_audit_event(self.sink, self.run_id, AuditEventType.CARRY_PATCH_CONFLICT_FAILED, payload={'patch_id': patch_detail.id})`",
           "return_contract": "audit event emitted; retry counter incremented",
           "trigger": "a conflict resolution attempt fails"
+        },
+        {
+          "id": "03-REQ-3.7",
+          "ears_pattern": "event_driven",
+          "system": "CarryPatchMonitor",
+          "action": "emit `AuditEventType.CARRY_PATCH_CONFLICT_DETECTED` via `emit_audit_event(self.sink, self.run_id, AuditEventType.CARRY_PATCH_CONFLICT_DETECTED, payload={'patch_id': patch_detail.id, 'branch_name': patch_detail.branch_name})` before the retry counter check",
+          "return_contract": "audit event emitted for each conflicting patch; no return value",
+          "trigger": "`run_cycle()` encounters a `PatchDetail` with `status == 'conflict'` during iteration over the dashboard"
         }
       ],
       "edge_cases": [
@@ -322,7 +362,7 @@
           "id": "03-REQ-4.1",
           "ears_pattern": "event_driven",
           "system": "CarryPatchMonitor",
-          "action": "build a context dict containing: `patch_description` from `PatchDetail` (empty string if absent), `conflict_files` from `PatchDetail.conflict_files` (empty list if absent), `upstream_context` from a local `git diff` between the integration branch and upstream HEAD, and `rerere_resolutions` from `hub_client.list_rerere(slug)` (empty list if the call fails)",
+          "action": "build a context dict containing: `patch_description` set to `patch_detail.description` (empty string if `patch_detail.description` is None or absent), `conflict_files` from `PatchDetail.conflict_files` (empty list if absent), `upstream_context` from a local `git diff` between the integration branch and upstream HEAD, and `rerere_resolutions` as `[e.path for e in hub_client.list_rerere(slug)]` (extracting the `.path` field from each `RerereEntry` object; empty list if the call fails or the list is empty)",
           "return_contract": "context dict is passed to `engine._run_coder_session()`; no return value from context assembly",
           "trigger": "a coder session is about to be invoked for a conflicting patch"
         },
@@ -357,7 +397,7 @@
           "system": "CarryPatchMonitor",
           "action": "substitute an empty string for `patch_description` and log a debug message",
           "return_contract": "coder session proceeds with `patch_description=\"\"`",
-          "error_condition": "`PatchDetail.patch_description` is None or absent, meaning the patch description is missing from the dashboard response"
+          "error_condition": "`PatchDetail.description` is None or absent, meaning the patch description is missing from the dashboard response"
         }
       ]
     },
@@ -383,9 +423,9 @@
           "id": "03-REQ-5.E1",
           "ears_pattern": "unwanted",
           "system": "coder archetype registry",
-          "action": "raise a `KeyError` or equivalent registry lookup error; do not fall back silently to a default mode",
-          "return_contract": "raises `KeyError` with the unrecognised mode name",
-          "error_condition": "a caller requests the `coder` archetype with an unrecognised mode string that does not exist in the registry"
+          "action": "raise a `KeyError`; do not fall back silently to a default mode. This applies only to the carry-patch mode lookup path: a carry-patch-specific wrapper calls `resolve_effective_config('coder', 'carry-patch')` and then validates the result — if the returned `ModeConfig` does not correspond to 'carry-patch', it raises `KeyError`. The existing `resolve_effective_config` behavior for other archetypes and modes is unchanged.",
+          "return_contract": "raises `KeyError` with the unrecognised mode name; the general `resolve_effective_config` function is not modified",
+          "error_condition": "the carry-patch mode lookup wrapper is called with an unrecognised mode string that does not exist in the `coder` archetype registry"
         }
       ]
     },
@@ -430,7 +470,7 @@
           "id": "03-REQ-7.1",
           "ears_pattern": "complex_event",
           "system": "build_streams()",
-          "action": "instantiate a `CarryPatchStream` wrapping `CarryPatchMonitor.run_cycle()` with `name=\"carry-patch\"`, `check_interval=config.carry_patch.check_interval`, and `enabled=True`, and include it in the returned stream list",
+          "action": "accept an optional `hub_client: HubClient | None = None` parameter alongside existing parameters (new signature: `build_streams(config: AgentFoxConfig, hub_client: HubClient | None = None, **existing_params)`). When `config.carry_patch.enabled` is True and `hub_client` is not None, instantiate a `CarryPatchStream` wrapping `CarryPatchMonitor.run_cycle()` with `name=\"carry-patch\"`, `check_interval=config.carry_patch.check_interval`, and `enabled=True`, and include it in the returned stream list. All existing callers of `build_streams()` in `engine.py` and `daemon.py` must be updated to pass the `hub_client` argument.",
           "return_contract": "returns a stream list containing the `CarryPatchStream` instance",
           "trigger": "`build_streams()` is called",
           "condition": "`config.carry_patch.enabled` is True and a `HubClient` instance is available"
@@ -455,8 +495,8 @@
           "id": "03-REQ-7.4",
           "ears_pattern": "ubiquitous",
           "system": "NightShiftEngine",
-          "action": "add `_run_carry_patch_monitor(self, slug: str) -> MonitorCycleResult` to `NightShiftEngine` in `agentfox/nightshift/engine.py` that instantiates or delegates to `CarryPatchMonitor` and returns its `run_cycle()` result",
-          "return_contract": "returns a `MonitorCycleResult` instance"
+          "action": "add `_run_carry_patch_monitor(self, slug: str) -> MonitorCycleResult` to `NightShiftEngine` in `agentfox/nightshift/engine.py` that delegates to a single `CarryPatchMonitor` instance stored on the engine (e.g., as `self._carry_patch_monitor`). This method must reuse the same `CarryPatchMonitor` instance across all calls; creating a new instance per call resets the in-memory session retry counter, violating PROP-3.",
+          "return_contract": "returns a `MonitorCycleResult` instance; the same `CarryPatchMonitor` instance is reused on every call"
         }
       ],
       "edge_cases": [
@@ -867,8 +907,8 @@
         {
           "name": "poll_rebuild",
           "import_path": "afhub",
-          "signature": "async def poll_rebuild(hub_client: HubClient, slug: str, job_id: str, timeout: float, interval: float) -> RebuildJob",
-          "notes": "Polls a RebuildJob until it reaches a terminal status (completed, failed, dead_letter). Raises on timeout."
+          "signature": "async def poll_rebuild(hub_client: HubClient, slug: str, rebuild_id: str, *, timeout: float = 600.0, interval: float = 5.0) -> RebuildJob",
+          "notes": "Polls a RebuildJob until it reaches a terminal status (completed, failed, dead_letter, cancelled). Raises TimeoutError on timeout. The parameter is `rebuild_id` (not `job_id`). Pass `timeout=config.carry_patch.rebuild_timeout` and `interval=config.carry_patch.rebuild_poll_interval`."
         },
         {
           "name": "HubConflictError",
@@ -892,7 +932,13 @@
           "name": "RebuildJob",
           "import_path": "afhub",
           "signature": "class RebuildJob",
-          "notes": "Model representing a queued or active hub rebuild. Has fields: id (str), status (str)."
+          "notes": "Model representing a queued or active hub rebuild. Has fields: id (str), status (str). Terminal statuses: completed, failed, dead_letter, cancelled."
+        },
+        {
+          "name": "RerereEntry",
+          "import_path": "afhub",
+          "signature": "class RerereEntry",
+          "notes": "Pydantic model with fields: path (str), recorded_at (str). list_rerere() returns list[RerereEntry]; callers must extract .path: [e.path for e in hub_client.list_rerere(slug)]."
         }
       ]
     },
@@ -909,8 +955,8 @@
         {
           "name": "emit_audit_event",
           "import_path": "afaudit",
-          "signature": "def emit_audit_event(event_type: AuditEventType, **kwargs) -> None",
-          "notes": "Existing helper used throughout nightshift to emit structured audit events. Exact signature should be verified against the installed package."
+          "signature": "def emit_audit_event(sink: SinkDispatcher | SessionSink | None, run_id: str, event_type: AuditEventType, *, node_id: str = '', session_id: str = '', archetype: str = '', severity: AuditSeverity | None = None, payload: dict | None = None) -> None",
+          "notes": "If sink is None or run_id is empty, the call is a no-op (best-effort). The CarryPatchMonitor must store sink and run_id as instance attributes (passed in __init__) and supply them at every emit_audit_event call site. The fix pipeline obtains sink and run_id from the existing session context."
         }
       ]
     }

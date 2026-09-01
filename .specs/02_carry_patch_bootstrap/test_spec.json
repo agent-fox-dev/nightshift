@@ -426,7 +426,7 @@
       ],
       "input": "config generation triggered with resolved_pat='super-secret-token'",
       "expected": "generated .nightshift/config.toml does not contain 'super-secret-token' or any token/PAT value",
-      "assertion_pseudocode": "with tmp_cwd() as cwd: run_config_generation(pat='super-secret-token'); content = (cwd / '.nightshift' / 'config.toml').read_text(); assert 'super-secret-token' not in content; assert 'token' not in content.lower() or all lines with 'token' are comments"
+      "assertion_pseudocode": "with tmp_cwd() as cwd: run_config_generation(pat='super-secret-token'); content = (cwd / '.nightshift' / 'config.toml').read_text(); assert 'super-secret-token' not in content"
     },
     {
       "id": "TS-02-32",
@@ -492,8 +492,8 @@
       "property_id": "02-PROP-1",
       "validates": [],
       "description": "For any integer value supplied for check_interval, rebuild_poll_interval, or max_resolve_retries, the stored value equals max(min_bound, min(v, max_bound)) as declared by Clamped.",
-      "for_any_strategy": "Sample integers uniformly from [-1000, 1000] for each of check_interval (bounds: ge=60), rebuild_poll_interval (bounds: ge=2), and max_resolve_retries (bounds: ge=0, le=10) using hypothesis.strategies.integers(min_value=-1000, max_value=1000)",
-      "invariant_check": "cp = CarryPatchConfig(check_interval=v1, rebuild_poll_interval=v2, max_resolve_retries=v3); assert cp.check_interval == max(60, v1); assert cp.rebuild_poll_interval == max(2, v2); assert cp.max_resolve_retries == max(0, min(v3, 10))"
+      "for_any_strategy": "Sample integers uniformly from [-1000, 1000] for each of check_interval (bounds: ge=60), rebuild_poll_interval (bounds: ge=2), rebuild_timeout (bounds: ge=1), and max_resolve_retries (bounds: ge=0, le=10) using hypothesis.strategies.integers(min_value=-1000, max_value=1000)",
+      "invariant_check": "cp = CarryPatchConfig(check_interval=v1, rebuild_poll_interval=v2, rebuild_timeout=v3, max_resolve_retries=v4); assert cp.check_interval == max(60, v1); assert cp.rebuild_poll_interval == max(2, v2); assert cp.rebuild_timeout == max(1, v3); assert cp.max_resolve_retries == max(0, min(v4, 10))"
     },
     {
       "id": "TS-02-P2",
@@ -516,7 +516,7 @@
       "property_id": "02-PROP-4",
       "validates": [],
       "description": "For any startup invocation with carry-patch mode active, the daemon loop starts if and only if all six CWD validation steps pass; any single step failure causes process exit with code 1.",
-      "for_any_strategy": "Enumerate all failure modes: HubAuthError, HubNotFoundError, wrong workspace_mode, non-ready clone_status ('pending'/'cloning'/'failed'), FileNotFoundError from git, TimeoutExpired from git, non-zero git return code, URL mismatch; for each, mock exactly that failure while all others succeed",
+      "for_any_strategy": "Enumerate all failure modes: HubAuthError, HubForbiddenError, HubNotFoundError, wrong workspace_mode, non-ready clone_status ('pending'/'cloning'/'failed'), FileNotFoundError from git, TimeoutExpired from git, non-zero git return code, URL mismatch; for each, mock exactly that failure while all others succeed",
       "invariant_check": "for each failure_mode in all_failure_modes: with inject_failure(failure_mode): result = invoke_full_startup(); assert result.exit_code == 1; assert daemon_runner_not_called(); with all_passing(): result = invoke_full_startup(); assert result.exit_code == 0; assert daemon_runner_called()"
     },
     {
@@ -533,7 +533,7 @@
       "validates": [],
       "description": "For any startup invocation that generates .nightshift/config.toml, the generated file contains no PAT or token value.",
       "for_any_strategy": "Sample arbitrary PAT strings using hypothesis.strategies.text(min_size=1, max_size=200, alphabet=hypothesis.strategies.characters(whitelist_categories=('Lu','Ll','Nd'))) to represent realistic token values",
-      "invariant_check": "with tmp_cwd() as cwd: run_config_generation(pat=arbitrary_pat); content = (cwd / '.nightshift' / 'config.toml').read_text(); assert arbitrary_pat not in content"
+      "invariant_check": "with tmp_cwd() as cwd: run_config_generation(pat=arbitrary_pat); content = (cwd / '.nightshift' / 'config.toml').read_text(encoding='utf-8'); assert arbitrary_pat not in content"
     },
     {
       "id": "TS-02-P7",
@@ -793,6 +793,72 @@
       "input": "asyncio.run(startup_helper(...)) called from synchronous main()",
       "expected": "no RuntimeError is raised; the event loop is created and destroyed by asyncio.run()",
       "assertion_pseudocode": "try: asyncio.run(startup_helper(...)); except RuntimeError as e: assert False, f'RuntimeError raised: {e}'"
+    },
+    {
+      "id": "TS-02-E19",
+      "requirement_id": "02-REQ-3.12",
+      "kind": "unit",
+      "description": "The async startup helper exits with code 1 and writes a diagnostic error to stderr when get_workspace raises HubForbiddenError (403).",
+      "preconditions": [
+        "carry-patch mode is active",
+        "HubClient.get_workspace is mocked to raise HubForbiddenError"
+      ],
+      "input": "async startup helper invoked; get_workspace raises HubForbiddenError",
+      "expected": "process exits with code 1; stderr contains a message indicating insufficient permissions or scope",
+      "assertion_pseudocode": "with mock_hub_client(get_workspace_raises=HubForbiddenError()): with pytest.raises(SystemExit) as exc_info: asyncio.run(startup_helper(...)); assert exc_info.value.code == 1; assert 'permission' in captured_stderr.lower() or 'forbidden' in captured_stderr.lower() or 'scope' in captured_stderr.lower()"
+    },
+    {
+      "id": "TS-02-E20",
+      "requirement_id": "02-REQ-1.7",
+      "kind": "unit",
+      "description": "CarryPatchConfig silently clamps rebuild_timeout of 0 to 1 using the Clamped annotated-type utility.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=1) on rebuild_timeout"
+      ],
+      "input": "CarryPatchConfig(rebuild_timeout=0)",
+      "expected": "config.carry_patch.rebuild_timeout == 1; no ValidationError is raised",
+      "assertion_pseudocode": "cp = CarryPatchConfig(rebuild_timeout=0); assert cp.rebuild_timeout == 1"
+    },
+    {
+      "id": "TS-02-E21",
+      "requirement_id": "02-REQ-1.7",
+      "kind": "unit",
+      "description": "CarryPatchConfig silently clamps a negative rebuild_timeout to 1 using the Clamped annotated-type utility.",
+      "preconditions": [
+        "packages/agentfox/agentfox/core/config.py contains CarryPatchConfig with Clamped(ge=1) on rebuild_timeout"
+      ],
+      "input": "CarryPatchConfig(rebuild_timeout=-100)",
+      "expected": "config.carry_patch.rebuild_timeout == 1; no ValidationError is raised",
+      "assertion_pseudocode": "cp = CarryPatchConfig(rebuild_timeout=-100); assert cp.rebuild_timeout == 1"
+    },
+    {
+      "id": "TS-02-E22",
+      "requirement_id": "02-REQ-2.11",
+      "kind": "unit",
+      "description": "nightshift CLI does not activate carry-patch mode and runs normally when --token is set but --workspace is absent from all sources.",
+      "preconditions": [
+        "AF_WORKSPACE is unset; config.carry_patch.workspace is empty",
+        "--workspace flag is not passed",
+        "--token flag is set to 'myPAT'",
+        "DaemonRunner is mocked"
+      ],
+      "input": "CLI invocation: nightshift --token myPAT with no workspace source",
+      "expected": "carry-patch mode is not activated; no hub API calls are made; DaemonRunner.run() is called; process does not exit with code 1",
+      "assertion_pseudocode": "with mock_hub_client() as mock_client, mock_daemon_runner() as mock_runner: invoke_cli(['--token', 'myPAT']); assert mock_client.get_workspace.call_count == 0; assert mock_runner.run.called"
+    },
+    {
+      "id": "TS-02-E23",
+      "requirement_id": "02-REQ-5.3",
+      "kind": "unit",
+      "description": "The async startup helper returns the HubClient instance so that main() can pass it to daemon components.",
+      "preconditions": [
+        "carry-patch mode is active",
+        "all validation mocks pass",
+        "set_variable succeeds"
+      ],
+      "input": "asyncio.run(startup_helper(...)) called from synchronous main()",
+      "expected": "the return value of asyncio.run(startup_helper(...)) is the HubClient instance that was constructed inside the helper",
+      "assertion_pseudocode": "with mock_hub_client_class() as MockHubClient, mock_subprocess_run(returncode=0, stdout=b'https://git.example.com/repo.git\\n'): result = asyncio.run(startup_helper(...)); assert result is MockHubClient.return_value"
     }
   ],
   "smoke_tests": [

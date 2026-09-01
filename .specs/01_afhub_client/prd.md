@@ -293,7 +293,7 @@ default (omitempty in hub response).
 - **`PatchStatusDashboard`**: `patches: list[PatchDetail]`, `summary: PatchSummary`
 - **`PatchDetail`**: `id: str`, `branch_name: str`, `position: int`, `status: str`,
   `last_rebuild_result: str | None` (values: `success`, `conflict`, `skipped`, or `null`),
-  `conflict_files: list[str] | None`
+  `conflict_files: list[str] | None`, `description: str | None` (the patch description from the hub API; default `None`)
 - **`PatchSummary`**: `total_patches: int`, `active: int`, `merged_upstream: int`,
   `conflict: int`, `disabled: int`, `total_rerere_resolutions: int` (default `0`)
 

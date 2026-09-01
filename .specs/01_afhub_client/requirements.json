@@ -20,7 +20,7 @@
     "HubNotFoundError": "Exception raised when the hub returns HTTP 404 Not Found",
     "PAT": "Personal Access Token — a bearer credential used to authenticate requests to the af-hub REST API",
     "Patch": "Pydantic model representing a carry-patch entry within a workspace",
-    "PatchDetail": "Pydantic model representing the status of a single patch within a PatchStatusDashboard",
+    "PatchDetail": "Pydantic model representing the status of a single patch within a PatchStatusDashboard; fields: id (str), branch_name (str), position (int), status (str), last_rebuild_result (str|None), conflict_files (list[str]|None), description (str|None, default None)",
     "PatchResult": "Pydantic model representing the outcome of applying a single patch during a rebuild",
     "PatchStatusDashboard": "Pydantic model representing the full patch status view for a workspace, including per-patch details and a summary",
     "PatchSummary": "Pydantic model representing aggregate counts of patches by status within a PatchStatusDashboard",
@@ -73,8 +73,8 @@
           "id": "01-REQ-1.1",
           "ears_pattern": "event_driven",
           "system": "HubClient",
-          "action": "create a single shared httpx.AsyncClient instance configured with a base URL of endpoint_url and an Authorization: Bearer <pat> header applied to every request",
-          "return_contract": "returns a HubClient instance ready to issue authenticated requests",
+          "action": "create a single shared httpx.AsyncClient instance configured with a base URL of endpoint_url and an Authorization: Bearer <pat> header applied to every request; the AsyncClient must be configured with a default per-request timeout using httpx.Timeout (e.g., connect=10.0, read=30.0, write=10.0, pool=5.0) defined in a named constant in afhub._http; if endpoint_url or pat is an empty string, raise ValueError with a descriptive message before constructing the httpx.AsyncClient",
+          "return_contract": "returns a HubClient instance ready to issue authenticated requests; raises ValueError if endpoint_url or pat is an empty string",
           "trigger": "a caller instantiates HubClient(endpoint_url, pat)"
         },
         {
@@ -160,6 +160,14 @@
           "error_condition": "aclose() is called and then a workspace method is subsequently invoked on the same HubClient instance"
         },
         {
+          "id": "01-REQ-1.E6",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise ValueError with a descriptive message identifying which argument is empty; no httpx.AsyncClient is created",
+          "return_contract": "raises ValueError",
+          "error_condition": "endpoint_url is an empty string or pat is an empty string"
+        },
+        {
           "id": "01-REQ-1.E5",
           "ears_pattern": "unwanted",
           "system": "HubClient",
@@ -190,8 +198,8 @@
           "id": "01-REQ-2.2",
           "ears_pattern": "event_driven",
           "system": "HubClient",
-          "action": "send POST /api/v1/workspaces/:slug/patches with a single-object JSON body containing the provided fields and parse the 201 response into a Patch model",
-          "return_contract": "returns a Patch instance on HTTP 201",
+          "action": "send POST /api/v1/workspaces/:slug/patches with a single-object JSON body containing the provided fields; None values among optional parameters (position, upstream_pr_url, description) are omitted from the JSON body rather than serialized as JSON null; parse the 201 response into a Patch model",
+          "return_contract": "returns a Patch instance on HTTP 201; the request body never contains null for position, upstream_pr_url, or description when those arguments are None",
           "trigger": "a caller invokes add_patch(slug, branch_name, position=None, upstream_pr_url=None, description=None, skip_branch_check=False, if_not_exists=False)"
         },
         {
@@ -373,8 +381,8 @@
           "id": "01-REQ-3.E4",
           "ears_pattern": "unwanted",
           "system": "HubClient",
-          "action": "raise a KeyError or HubError indicating the expected field is absent; do not return None silently",
-          "return_contract": "raises an exception indicating the missing field",
+          "action": "raise HubError(status_code=200, error_type='missing_field', message='Response missing expected key: previous_integration_head_sha'); do not return None silently",
+          "return_contract": "raises HubError(status_code=200, error_type='missing_field', message='Response missing expected key: previous_integration_head_sha')",
           "error_condition": "the hub returns HTTP 200 for rollback_rebuild but the response body is missing the 'previous_integration_head_sha' key"
         },
         {
@@ -384,6 +392,14 @@
           "action": "raise HubForbiddenError",
           "return_contract": "raises HubForbiddenError(status_code=403)",
           "error_condition": "the hub returns HTTP 403 for submit_rebuild"
+        },
+        {
+          "id": "01-REQ-3.E6",
+          "ears_pattern": "unwanted",
+          "system": "HubClient",
+          "action": "raise HubConflictError with the error_type from the response envelope stored on the exception",
+          "return_contract": "raises HubConflictError(status_code=409, error_type=<hub error_type>)",
+          "error_condition": "the hub returns HTTP 409 for submit_rebuild (concurrent rebuild already in progress)"
         }
       ]
     },
@@ -440,8 +456,8 @@
           "id": "01-REQ-4.6",
           "ears_pattern": "complex_event",
           "system": "HubClient",
-          "action": "fall back to POST /api/v1/workspaces/:slug/vars with a JSON body containing key and value, and return None",
-          "return_contract": "returns None on HTTP 201 from the fallback POST",
+          "action": "fall back to POST /api/v1/workspaces/:slug/vars with a JSON body identical in structure to create_variable — {'key': <key>, 'value': <value>} — and return None",
+          "return_contract": "returns None on HTTP 201 from the fallback POST; the POST body contains exactly the keys 'key' and 'value'",
           "trigger": "a caller invokes set_variable(slug, key, value)",
           "condition": "the hub returns HTTP 404 for PATCH /vars/:key"
         },
@@ -688,8 +704,8 @@
           "id": "01-REQ-6.E1",
           "ears_pattern": "unwanted",
           "system": "HubClient error handling",
-          "action": "raise HubError with the raw status code and a best-effort message; do not crash with an unhandled JSON parse error",
-          "return_contract": "raises HubError with status_code set to the HTTP status code",
+          "action": "raise HubError with the raw status code and set HubError.message to response.text[:200] (first 200 characters of the raw response body, or an empty string if the body is unreadable); do not crash with an unhandled JSON parse error",
+          "return_contract": "raises HubError with status_code set to the HTTP status code and message set to the first 200 characters of the raw response body",
           "error_condition": "the hub returns an error status code but the response body is not valid JSON or does not match the error envelope schema"
         },
         {
@@ -798,8 +814,8 @@
           "id": "01-REQ-8.1",
           "ears_pattern": "event_driven",
           "system": "poll_rebuild",
-          "action": "repeatedly call client.get_rebuild(slug, rebuild_id) sleeping interval seconds between polls via asyncio.sleep, until the RebuildJob status is one of 'completed', 'failed', 'dead_letter', or 'cancelled'",
-          "return_contract": "returns the terminal RebuildJob instance",
+          "action": "call client.get_rebuild(slug, rebuild_id) immediately on entry (without a preceding sleep); after each non-terminal result, sleep interval seconds via asyncio.sleep before the next poll; repeat until the RebuildJob status is one of 'completed', 'failed', 'dead_letter', or 'cancelled'",
+          "return_contract": "returns the terminal RebuildJob instance; the first get_rebuild call is always made without a preceding sleep",
           "trigger": "a caller invokes poll_rebuild(client, slug, rebuild_id, timeout=600.0, interval=5.0)"
         },
         {
@@ -865,8 +881,8 @@
           "id": "01-REQ-8.E6",
           "ears_pattern": "unwanted",
           "system": "poll_rebuild",
-          "action": "raise TimeoutError immediately after the first non-terminal poll",
-          "return_contract": "raises TimeoutError",
+          "action": "raise TimeoutError immediately when the first poll returns a non-terminal status; if the first poll returns a terminal status (completed, failed, dead_letter, or cancelled), return the terminal RebuildJob immediately without raising TimeoutError — timeout is checked after each poll and before each sleep",
+          "return_contract": "raises TimeoutError if the first poll is non-terminal; returns the terminal RebuildJob immediately if the first poll is terminal",
           "error_condition": "timeout is set to 0.0 and the first poll returns a non-terminal status"
         }
       ]
@@ -892,7 +908,7 @@
           "id": "01-REQ-9.2",
           "ears_pattern": "ubiquitous",
           "system": "HubClient HTTP layer",
-          "action": "only retry on ConnectTimeout, ReadTimeout, and ConnectError — not on other httpx exceptions or HTTP error status codes",
+          "action": "only retry on ConnectTimeout, ReadTimeout, and ConnectError (the specific named subclasses) — not on other httpx exceptions or HTTP error status codes; httpx.WriteTimeout, httpx.PoolTimeout, and any other httpx exception not in this whitelist propagate immediately without retrying",
           "return_contract": "non-retryable errors are raised immediately without any retry delay"
         }
       ],
@@ -924,9 +940,9 @@
           "id": "01-REQ-9.E4",
           "ears_pattern": "unwanted",
           "system": "HubClient HTTP layer",
-          "action": "propagate the exception immediately without retrying",
-          "return_contract": "the original httpx exception propagates to the caller",
-          "error_condition": "httpx raises a base TimeoutException that is not one of ConnectTimeout, ReadTimeout, or ConnectError"
+          "action": "propagate the exception immediately without retrying and without any retry sleep",
+          "return_contract": "the original httpx exception propagates to the caller; asyncio.sleep is never called for this exception",
+          "error_condition": "httpx raises WriteTimeout, PoolTimeout, base TimeoutException, or any other httpx exception that is not ConnectTimeout, ReadTimeout, or ConnectError"
         }
       ]
     },
@@ -1380,7 +1396,7 @@
     {
       "id": "01-ERR-16",
       "condition": "rollback_rebuild response body is missing the 'previous_integration_head_sha' key",
-      "behavior": "Raise an exception (KeyError or HubError) indicating the expected field is absent; do not return None silently",
+      "behavior": "Raise HubError(status_code=200, error_type='missing_field', message='Response missing expected key: previous_integration_head_sha'); do not return None silently",
       "requirement_id": "01-REQ-3.E4"
     }
   ],
