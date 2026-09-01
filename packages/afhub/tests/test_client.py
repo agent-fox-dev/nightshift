@@ -1,7 +1,7 @@
-"""Tests for HubClient workspace, patch, and rebuild operations.
+"""Tests for HubClient workspace, patch, rebuild, rerere, variable, and secret operations.
 
-Covers: TS-01-1 through TS-01-21 (spec 01, groups 1–3).
-Requirements: 01-REQ-1 through 01-REQ-3.
+Covers: TS-01-1 through TS-01-30 (spec 01, groups 1–4).
+Requirements: 01-REQ-1 through 01-REQ-4.
 
 These tests are written against the stub implementation and will FAIL until
 groups 13–14 provide the real implementation.
@@ -19,6 +19,7 @@ from afhub.models import (
     PatchSummary,
     RebuildJob,
     RebuildPreview,
+    RerereEntry,
     SyncResult,
     Workspace,
 )
@@ -1172,3 +1173,441 @@ class TestGetRebuildPreview:
         await client.get_rebuild_preview("my-workspace")
         call_args = str(client._http_client.get.call_args)
         assert "/api/v1/workspaces/my-workspace/rebuild-preview" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-22: list_rerere unwraps 'resolutions' envelope and returns list[RerereEntry]
+# ---------------------------------------------------------------------------
+
+
+class TestListRerere:
+    """TS-01-22 — list_rerere sends GET /api/v1/workspaces/:slug/rerere,
+    unwraps the 'resolutions' array, and returns list[RerereEntry] on HTTP 200.
+
+    Requirements: 01-REQ-4.1
+    """
+
+    _ENTRY_DATA = {
+        "path": "src/foo.py",
+        "recorded_at": "2026-01-01T00:00:00Z",
+    }
+
+    async def test_list_rerere_returns_list_of_rerere_entry_instances(self) -> None:
+        """list_rerere returns a list where every element is a RerereEntry."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200, json=lambda: {"resolutions": [self._ENTRY_DATA]}
+        )
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.list_rerere("my-workspace")
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert isinstance(result[0], RerereEntry)
+        assert result[0].path == "src/foo.py"
+
+    async def test_list_rerere_unwraps_resolutions_envelope(self) -> None:
+        """list_rerere unwraps {'resolutions': [...]} and does not return the wrapper dict."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200, json=lambda: {"resolutions": [self._ENTRY_DATA]}
+        )
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.list_rerere("my-workspace")
+        assert not isinstance(result, dict)
+
+    async def test_list_rerere_returns_empty_list_when_resolutions_empty(self) -> None:
+        """list_rerere returns [] when the 'resolutions' array is empty."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: {"resolutions": []})
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.list_rerere("my-workspace")
+        assert result == []
+
+    async def test_list_rerere_calls_correct_path(self) -> None:
+        """list_rerere GETs /api/v1/workspaces/:slug/rerere."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: {"resolutions": []})
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        await client.list_rerere("my-workspace")
+        call_args = str(client._http_client.get.call_args)
+        assert "/api/v1/workspaces/my-workspace/rerere" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-23: forget_rerere sends DELETE to /rerere/*pathspec and returns None (204)
+# ---------------------------------------------------------------------------
+
+
+class TestForgetRerere:
+    """TS-01-23 — forget_rerere sends DELETE /api/v1/workspaces/:slug/rerere/*pathspec
+    and returns None on HTTP 204 without parsing the response body.
+
+    Requirements: 01-REQ-4.2
+    """
+
+    async def test_forget_rerere_returns_none(self) -> None:
+        """forget_rerere returns None on HTTP 204."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=204)
+        mock_response.json = MagicMock(side_effect=Exception("should not be called"))
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        result = await client.forget_rerere("my-workspace", "src/foo.py")
+        assert result is None
+
+    async def test_forget_rerere_does_not_parse_response_body(self) -> None:
+        """forget_rerere does not call response.json() on a 204 response."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=204)
+        mock_response.json = MagicMock(side_effect=Exception("should not be called"))
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        await client.forget_rerere("my-workspace", "src/foo.py")
+        mock_response.json.assert_not_called()
+
+    async def test_forget_rerere_calls_correct_path(self) -> None:
+        """forget_rerere DELETEs a URL containing the workspace slug and pathspec."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=204)
+        mock_response.json = MagicMock(side_effect=Exception("should not be called"))
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        await client.forget_rerere("my-workspace", "src/foo.py")
+        call_args = str(client._http_client.delete.call_args)
+        assert "/api/v1/workspaces/my-workspace/rerere" in call_args
+        assert "src/foo.py" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-24: create_variable sends POST /vars with key/value and returns None (201)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateVariable:
+    """TS-01-24 — create_variable sends POST /api/v1/workspaces/:slug/vars
+    with key and value in the JSON body and returns None on HTTP 201.
+
+    Requirements: 01-REQ-4.3
+    """
+
+    async def test_create_variable_returns_none(self) -> None:
+        """create_variable returns None on HTTP 201."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.create_variable("my-workspace", "MY_KEY", "my_value")
+        assert result is None
+
+    async def test_create_variable_sends_key_in_body(self) -> None:
+        """create_variable includes key in the POST body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.create_variable("my-workspace", "MY_KEY", "my_value")
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert sent_body["key"] == "MY_KEY"
+
+    async def test_create_variable_sends_value_in_body(self) -> None:
+        """create_variable includes value in the POST body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.create_variable("my-workspace", "MY_KEY", "my_value")
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert sent_body["value"] == "my_value"
+
+    async def test_create_variable_posts_to_correct_path(self) -> None:
+        """create_variable POSTs to /api/v1/workspaces/:slug/vars."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.create_variable("my-workspace", "MY_KEY", "my_value")
+        call_args = str(client._http_client.post.call_args)
+        assert "/api/v1/workspaces/my-workspace/vars" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-25: update_variable sends PATCH /vars/:key with value and returns None
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateVariable:
+    """TS-01-25 — update_variable sends PATCH /api/v1/workspaces/:slug/vars/:key
+    with the new value in the JSON body and returns None on HTTP 200.
+
+    Requirements: 01-REQ-4.4
+    """
+
+    async def test_update_variable_returns_none(self) -> None:
+        """update_variable returns None on HTTP 200."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200)
+        client._http_client.patch = AsyncMock(return_value=mock_response)
+        result = await client.update_variable("my-workspace", "MY_KEY", "new_value")
+        assert result is None
+
+    async def test_update_variable_sends_value_in_body(self) -> None:
+        """update_variable includes value in the PATCH body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200)
+        client._http_client.patch = AsyncMock(return_value=mock_response)
+        await client.update_variable("my-workspace", "MY_KEY", "new_value")
+        sent_body = client._http_client.patch.call_args.kwargs["json"]
+        assert sent_body["value"] == "new_value"
+
+    async def test_update_variable_calls_correct_path(self) -> None:
+        """update_variable PATCHes /api/v1/workspaces/:slug/vars/:key."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200)
+        client._http_client.patch = AsyncMock(return_value=mock_response)
+        await client.update_variable("my-workspace", "MY_KEY", "new_value")
+        call_args = str(client._http_client.patch.call_args)
+        assert "/api/v1/workspaces/my-workspace/vars/MY_KEY" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-26: set_variable issues PATCH only and returns None when PATCH succeeds
+# ---------------------------------------------------------------------------
+
+
+class TestSetVariablePatchSuccess:
+    """TS-01-26 — set_variable sends PATCH /api/v1/workspaces/:slug/vars/:key first;
+    on HTTP 200 returns None without issuing a GET or POST.
+
+    Requirements: 01-REQ-4.5
+    """
+
+    async def test_set_variable_returns_none_on_patch_success(self) -> None:
+        """set_variable returns None when PATCH succeeds with HTTP 200."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200)
+        client._http_client.patch = AsyncMock(return_value=mock_response)
+        client._http_client.get = AsyncMock()
+        result = await client.set_variable("my-workspace", "EXISTING_KEY", "val")
+        assert result is None
+
+    async def test_set_variable_issues_only_patch_on_success(self) -> None:
+        """set_variable issues exactly one PATCH and no GET when PATCH succeeds."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200)
+        client._http_client.patch = AsyncMock(return_value=mock_response)
+        client._http_client.get = AsyncMock()
+        await client.set_variable("my-workspace", "EXISTING_KEY", "val")
+        client._http_client.patch.assert_called_once()
+        client._http_client.get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TS-01-27: set_variable falls back to POST when PATCH returns 404
+# ---------------------------------------------------------------------------
+
+
+class TestSetVariablePatchFallback:
+    """TS-01-27 — set_variable falls back to POST /api/v1/workspaces/:slug/vars
+    when PATCH returns HTTP 404, and returns None on HTTP 201 from the fallback POST.
+
+    Requirements: 01-REQ-4.6
+    """
+
+    _PATCH_404 = {
+        "error": {"code": 404, "message": "not found", "error_type": "not_found"}
+    }
+
+    async def test_set_variable_falls_back_to_post_on_404(self) -> None:
+        """set_variable returns None when PATCH returns 404 and POST returns 201."""
+        client = HubClient("https://hub.example.com", "pat")
+        patch_404 = MagicMock(status_code=404, json=lambda: self._PATCH_404)
+        post_201 = MagicMock(status_code=201)
+        client._http_client.patch = AsyncMock(return_value=patch_404)
+        client._http_client.post = AsyncMock(return_value=post_201)
+        result = await client.set_variable("my-workspace", "NEW_KEY", "val")
+        assert result is None
+
+    async def test_set_variable_calls_patch_then_post_on_404(self) -> None:
+        """set_variable calls PATCH exactly once then POST exactly once on 404."""
+        client = HubClient("https://hub.example.com", "pat")
+        patch_404 = MagicMock(status_code=404, json=lambda: self._PATCH_404)
+        post_201 = MagicMock(status_code=201)
+        client._http_client.patch = AsyncMock(return_value=patch_404)
+        client._http_client.post = AsyncMock(return_value=post_201)
+        await client.set_variable("my-workspace", "NEW_KEY", "val")
+        client._http_client.patch.assert_called_once()
+        client._http_client.post.assert_called_once()
+
+    async def test_set_variable_fallback_post_sends_key_and_value(self) -> None:
+        """set_variable fallback POST body contains key and value."""
+        client = HubClient("https://hub.example.com", "pat")
+        patch_404 = MagicMock(status_code=404, json=lambda: self._PATCH_404)
+        post_201 = MagicMock(status_code=201)
+        client._http_client.patch = AsyncMock(return_value=patch_404)
+        client._http_client.post = AsyncMock(return_value=post_201)
+        await client.set_variable("my-workspace", "NEW_KEY", "val")
+        post_body = client._http_client.post.call_args.kwargs["json"]
+        assert post_body["key"] == "NEW_KEY"
+        assert post_body["value"] == "val"
+
+    async def test_set_variable_no_get_issued_on_fallback_path(self) -> None:
+        """set_variable does not issue a GET even when falling back from PATCH to POST."""
+        client = HubClient("https://hub.example.com", "pat")
+        patch_404 = MagicMock(status_code=404, json=lambda: self._PATCH_404)
+        post_201 = MagicMock(status_code=201)
+        client._http_client.patch = AsyncMock(return_value=patch_404)
+        client._http_client.post = AsyncMock(return_value=post_201)
+        client._http_client.get = AsyncMock()
+        await client.set_variable("my-workspace", "NEW_KEY", "val")
+        client._http_client.get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TS-01-28: delete_variable sends DELETE /vars/:key and returns None (204)
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteVariable:
+    """TS-01-28 — delete_variable sends DELETE /api/v1/workspaces/:slug/vars/:key
+    and returns None on HTTP 204 without parsing the response body.
+
+    Requirements: 01-REQ-4.7
+    """
+
+    async def test_delete_variable_returns_none(self) -> None:
+        """delete_variable returns None on HTTP 204."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=204)
+        mock_response.json = MagicMock(side_effect=Exception("should not be called"))
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        result = await client.delete_variable("my-workspace", "MY_KEY")
+        assert result is None
+
+    async def test_delete_variable_does_not_parse_response_body(self) -> None:
+        """delete_variable does not call response.json() on a 204 response."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=204)
+        mock_response.json = MagicMock(side_effect=Exception("should not be called"))
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        await client.delete_variable("my-workspace", "MY_KEY")
+        mock_response.json.assert_not_called()
+
+    async def test_delete_variable_calls_correct_path(self) -> None:
+        """delete_variable DELETEs /api/v1/workspaces/:slug/vars/:key."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=204)
+        mock_response.json = MagicMock(side_effect=Exception("should not be called"))
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        await client.delete_variable("my-workspace", "MY_KEY")
+        call_args = str(client._http_client.delete.call_args)
+        assert "/api/v1/workspaces/my-workspace/vars/MY_KEY" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-29: get_resolved_variables returns dict[str, str]
+# ---------------------------------------------------------------------------
+
+
+class TestGetResolvedVariables:
+    """TS-01-29 — get_resolved_variables sends GET /api/v1/workspaces/:slug/vars/resolved
+    and returns dict[str, str] on HTTP 200; returns {} for empty response.
+
+    Requirements: 01-REQ-4.8
+    """
+
+    async def test_get_resolved_variables_returns_dict(self) -> None:
+        """get_resolved_variables returns a dict."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200, json=lambda: {"KEY1": "val1", "KEY2": "val2"}
+        )
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.get_resolved_variables("my-workspace")
+        assert isinstance(result, dict)
+
+    async def test_get_resolved_variables_returns_correct_values(self) -> None:
+        """get_resolved_variables returns the key-value pairs from the response."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200, json=lambda: {"KEY1": "val1", "KEY2": "val2"}
+        )
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.get_resolved_variables("my-workspace")
+        assert result == {"KEY1": "val1", "KEY2": "val2"}
+
+    async def test_get_resolved_variables_returns_empty_dict_when_no_vars(self) -> None:
+        """get_resolved_variables returns {} when the hub returns an empty object."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: {})
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.get_resolved_variables("my-workspace")
+        assert result == {}
+
+    async def test_get_resolved_variables_calls_correct_path(self) -> None:
+        """get_resolved_variables GETs /api/v1/workspaces/:slug/vars/resolved."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: {})
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        await client.get_resolved_variables("my-workspace")
+        call_args = str(client._http_client.get.call_args)
+        assert "/api/v1/workspaces/my-workspace/vars/resolved" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-30: create_secret sends POST /secrets with key/value and returns None (201)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSecret:
+    """TS-01-30 — create_secret sends POST /api/v1/workspaces/:slug/secrets
+    with key and value in the JSON body and returns None on HTTP 201.
+
+    Requirements: 01-REQ-4.9
+    """
+
+    async def test_create_secret_returns_none(self) -> None:
+        """create_secret returns None on HTTP 201."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.create_secret("my-workspace", "MY_SECRET", "s3cr3t")
+        assert result is None
+
+    async def test_create_secret_sends_key_in_body(self) -> None:
+        """create_secret includes key in the POST body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.create_secret("my-workspace", "MY_SECRET", "s3cr3t")
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert sent_body["key"] == "MY_SECRET"
+
+    async def test_create_secret_sends_value_in_body(self) -> None:
+        """create_secret includes value in the POST body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.create_secret("my-workspace", "MY_SECRET", "s3cr3t")
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert sent_body["value"] == "s3cr3t"
+
+    async def test_create_secret_posts_to_correct_path(self) -> None:
+        """create_secret POSTs to /api/v1/workspaces/:slug/secrets."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.create_secret("my-workspace", "MY_SECRET", "s3cr3t")
+        call_args = str(client._http_client.post.call_args)
+        assert "/api/v1/workspaces/my-workspace/secrets" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-30 (design note): no list_variables method on HubClient
+# ---------------------------------------------------------------------------
+
+
+class TestNoListVariables:
+    """Design constraint — HubClient deliberately omits list_variables.
+
+    Variable responses are intentionally opaque; only get_resolved_variables
+    (GET /vars/resolved) is provided for reading variable state.
+
+    Requirements: 01-REQ-4 (design note)
+    """
+
+    def test_no_list_variables_method_on_hub_client(self) -> None:
+        """HubClient has no list_variables method — intentionally omitted by design."""
+        assert not hasattr(HubClient, "list_variables")
