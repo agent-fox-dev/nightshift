@@ -527,7 +527,6 @@ class TestHubNoActivePatchesError:
 
         Requirements: 03-REQ-1.5
         Test ID: TS-03-5
-        Fails: carry-patch integration not yet implemented (add_patch not called)
         """
         import logging
 
@@ -542,18 +541,21 @@ class TestHubNoActivePatchesError:
         with caplog.at_level(logging.WARNING):
             await _call_integrate_fix(pipeline)
 
-        # FAILS: add_patch never called (no implementation)
         hub_client.add_patch.assert_called_once()
-        # After implementation:
-        # assert any("no active patches" in r.message.lower() or "warning" in r.levelname.lower()
-        #            for r in caplog.records)
+        # Verify that a warning about skipped rebuild was logged.
+        assert any(
+            "no active patches" in r.message.lower()
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        ), (
+            "Expected a WARNING-level log message mentioning 'no active patches'"
+        )
 
     async def test_hub_no_active_patches_skips_poll_rebuild(self) -> None:
         """poll_rebuild is NOT called when submit_rebuild raises HubNoActivePatchesError.
 
         Requirements: 03-REQ-1.5
         Test ID: TS-03-5
-        Fails: carry-patch integration not yet implemented
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
@@ -563,13 +565,28 @@ class TestHubNoActivePatchesError:
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
-        mock_poll = AsyncMock()
+        issue = _make_mock_issue()
+        spec = _make_mock_spec()
+        workspace = _make_mock_workspace()
 
-        await _call_integrate_fix(pipeline)
+        with (
+            patch.object(pipeline, "_auto_commit_pending_changes", AsyncMock()),
+            patch.object(pipeline, "_harvest_and_push", AsyncMock(return_value=[])),
+            patch(
+                "agentfox.workspace.git.push_to_remote",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agentfox.nightshift.fix_pipeline.poll_rebuild",
+                new_callable=AsyncMock,
+            ) as mock_poll,
+        ):
+            pipeline._platform.add_issue_comment = AsyncMock()
+            await pipeline._integrate_fix(issue, spec, workspace)
 
-        # FAILS: add_patch never called (no implementation)
         hub_client.add_patch.assert_called_once()
-        # After implementation, poll should NOT have been called:
+        # poll_rebuild must NOT be called when there are no active patches.
         mock_poll.assert_not_called()
 
     async def test_hub_no_active_patches_does_not_mark_issue_for_retry(self) -> None:
@@ -577,7 +594,6 @@ class TestHubNoActivePatchesError:
 
         Requirements: 03-REQ-1.5
         Test ID: TS-03-5
-        Fails: carry-patch integration not yet implemented
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
@@ -587,11 +603,13 @@ class TestHubNoActivePatchesError:
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
-        await _call_integrate_fix(pipeline)
+        result = await _call_integrate_fix(pipeline)
 
-        # FAILS: add_patch never called (no implementation).
-        # After implementation, result should indicate success (not retry):
         hub_client.add_patch.assert_called_once()
+        # "merged" status means success — no retry needed.
+        assert result[0] == "merged", (
+            f"Expected 'merged' (no retry) on HubNoActivePatchesError, got {result[0]!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +629,6 @@ class TestRebuildTerminalStatus:
 
         Requirements: 03-REQ-1.2
         Test ID: TS-03-2
-        Fails: carry-patch integration not yet implemented (add_patch not called)
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
@@ -619,19 +636,23 @@ class TestRebuildTerminalStatus:
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
-        await _call_integrate_fix(pipeline)
+        result = await _call_integrate_fix(
+            pipeline, poll_return=_RebuildJob("job-1", "completed"),
+        )
 
-        # FAILS: carry-patch integration not yet implemented.
-        # When implemented, add_patch should be called and the pipeline
-        # should proceed to close the issue normally on completed status.
+        # Verify carry-patch path was entered and completed successfully.
         hub_client.add_patch.assert_called_once()
+        # "merged" status indicates success — issue will be closed normally,
+        # not marked for retry.
+        assert result[0] == "merged", (
+            f"Expected 'merged' (normal closure) on completed rebuild, got {result[0]!r}"
+        )
 
     async def test_failed_rebuild_marks_issue_for_retry(self) -> None:
         """When poll_rebuild returns 'failed', the fix pipeline marks issue for retry.
 
         Requirements: 03-REQ-1.3b
         Test ID: TS-03-3
-        Fails: carry-patch integration not yet implemented
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
@@ -639,19 +660,21 @@ class TestRebuildTerminalStatus:
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
-        await _call_integrate_fix(pipeline)
+        result = await _call_integrate_fix(
+            pipeline, poll_return=_RebuildJob("job-1", "failed"),
+        )
 
-        # FAILS: carry-patch integration not yet implemented.
-        # When implemented with poll_rebuild returning 'failed', the issue
-        # should be marked for retry (e.g., left open or requeued).
         hub_client.add_patch.assert_called_once()
+        # "error" status signals the issue should be retried.
+        assert result[0] == "error", (
+            f"Expected 'error' (retry) on failed rebuild, got {result[0]!r}"
+        )
 
     async def test_dead_letter_rebuild_marks_issue_for_retry(self) -> None:
         """When poll_rebuild returns 'dead_letter', the fix pipeline marks issue for retry.
 
         Requirements: 03-REQ-1.3b
         Test ID: TS-03-3
-        Fails: carry-patch integration not yet implemented
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
@@ -659,12 +682,15 @@ class TestRebuildTerminalStatus:
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
-        await _call_integrate_fix(pipeline)
+        result = await _call_integrate_fix(
+            pipeline, poll_return=_RebuildJob("job-1", "dead_letter"),
+        )
 
-        # FAILS: carry-patch integration not yet implemented.
-        # When implemented with poll_rebuild returning 'dead_letter', the issue
-        # should be marked for retry.
         hub_client.add_patch.assert_called_once()
+        # "error" status signals the issue should be retried.
+        assert result[0] == "error", (
+            f"Expected 'error' (retry) on dead_letter rebuild, got {result[0]!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

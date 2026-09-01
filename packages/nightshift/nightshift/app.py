@@ -125,6 +125,7 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
         sink_dispatcher=sink,
         conn=(kdb.connection if kdb else None),
         knowledge_provider=kprov,
+        hub_client=hub_client,
     )
     budget = SharedBudget(
         max_cost=getattr(getattr(config, "orchestrator", None), "max_cost", None),

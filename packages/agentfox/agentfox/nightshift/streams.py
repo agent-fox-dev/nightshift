@@ -257,6 +257,10 @@ def build_streams(
             config=config,
             engine=engine,
         )
+        # Wire the monitor to the engine so _run_carry_patch_monitor()
+        # can delegate to it (03-REQ-7.4, 11.2 wiring verification).
+        if engine is not None:
+            engine._carry_patch_monitor = monitor
         streams.append(
             CarryPatchStream(
                 monitor=monitor,

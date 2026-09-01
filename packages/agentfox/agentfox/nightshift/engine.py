@@ -132,6 +132,7 @@ class NightShiftEngine:
         sink_dispatcher: SinkDispatcher | None = None,
         conn: duckdb.DuckDBPyConnection | None = None,
         knowledge_provider: KnowledgeProvider | None = None,
+        hub_client: object | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -142,6 +143,7 @@ class NightShiftEngine:
         self._sink = sink_dispatcher
         self._conn = conn
         self._knowledge_provider = knowledge_provider
+        self._hub_client = hub_client
         self.state = NightShiftState()
         # Track issue numbers processed in this run to guard against
         # re-processing issues that were closed/fixed but still returned
@@ -153,9 +155,8 @@ class NightShiftEngine:
         self._in_flight: set[int] = set()
         self._in_flight_lock = asyncio.Lock()
         # Single CarryPatchMonitor instance reused across all calls to
-        # _run_carry_patch_monitor().  Set externally (e.g. by
-        # build_streams or the daemon wiring) — not created here because
-        # the engine __init__ does not receive hub_client or slug.
+        # _run_carry_patch_monitor().  Set by build_streams() when
+        # carry-patch is enabled (see streams.py).
         # Requirements: 03-REQ-7.4
         self._carry_patch_monitor: object | None = None
 
@@ -551,6 +552,11 @@ class NightShiftEngine:
             payload={"issue_number": issue.number, "title": issue.title},
         )
 
+        # Derive workspace_slug from config for carry-patch wiring
+        # (03-REQ-1.1, 11.1 wiring verification).
+        _cp_cfg = getattr(self._config, "carry_patch", None)
+        _ws_slug = getattr(_cp_cfg, "workspace", "") if _cp_cfg else ""
+
         pipeline = FixPipeline(
             config=self._config,
             platform=self._platform,
@@ -560,6 +566,8 @@ class NightShiftEngine:
             spinner_callback=self._spinner_callback,
             conn=self._conn,
             knowledge_provider=self._knowledge_provider,
+            hub_client=self._hub_client,
+            workspace_slug=_ws_slug,
         )
 
         effective_body = issue_body if issue_body else getattr(issue, "body", "")
