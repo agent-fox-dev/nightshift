@@ -2,10 +2,8 @@
 
 Covers: TS-01-1 through TS-01-30 (spec 01, groups 1-4),
         TS-01-52 through TS-01-57 (spec 01, group 7).
+Edge cases: 01-REQ-2.E1 through E5, 01-REQ-3.E1 through E6.
 Requirements: 01-REQ-1 through 01-REQ-4, 01-REQ-9, 01-REQ-10.
-
-These tests are written against the stub implementation and will FAIL until
-groups 12-14 provide the real implementation.
 """
 
 from __future__ import annotations
@@ -18,7 +16,14 @@ import httpx
 import pytest
 
 from afhub.client import HubClient
-from afhub.errors import HubConnectionError, HubError
+from afhub.errors import (
+    HubConflictError,
+    HubConnectionError,
+    HubError,
+    HubForbiddenError,
+    HubNoActivePatchesError,
+    HubNotFoundError,
+)
 from afhub.models import (
     PatchStatusDashboard,
     PatchSummary,
@@ -1345,6 +1350,210 @@ class TestGetRebuildPreview:
         await client.get_rebuild_preview("my-workspace")
         call_args = str(client._http_client.get.call_args)
         assert "/api/v1/workspaces/my-workspace/rebuild-preview" in call_args
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-3.E1: get_rebuild raises HubNotFoundError on HTTP 404
+# ---------------------------------------------------------------------------
+
+
+class TestGetRebuildNotFound:
+    """01-REQ-3.E1 — get_rebuild raises HubNotFoundError when the hub
+    returns HTTP 404.
+
+    Requirements: 01-REQ-3.E1
+    """
+
+    async def test_get_rebuild_raises_hub_not_found_error_on_404(self) -> None:
+        """get_rebuild raises HubNotFoundError with status_code=404."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=404,
+            json=lambda: {
+                "error": {"code": 404, "message": "not found", "error_type": "not_found"}
+            },
+        )
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubNotFoundError) as exc_info:
+            await client.get_rebuild("my-workspace", "nonexistent-job")
+        assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-3.E2: submit_rebuild raises HubNoActivePatchesError on 400/no_active_patches
+# ---------------------------------------------------------------------------
+
+
+class TestSubmitRebuildNoActivePatches:
+    """01-REQ-3.E2 — submit_rebuild raises HubNoActivePatchesError when the
+    hub returns HTTP 400 with error_type='no_active_patches'.
+
+    Requirements: 01-REQ-3.E2
+    """
+
+    async def test_submit_rebuild_raises_no_active_patches_on_400(self) -> None:
+        """submit_rebuild raises HubNoActivePatchesError with status_code=400
+        and error_type='no_active_patches'.
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=400,
+            json=lambda: {
+                "error": {
+                    "code": 400,
+                    "message": "no active patches",
+                    "error_type": "no_active_patches",
+                }
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubNoActivePatchesError) as exc_info:
+            await client.submit_rebuild("my-workspace")
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.error_type == "no_active_patches"
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-3.E3: requeue_rebuild raises HubConflictError on HTTP 409
+# ---------------------------------------------------------------------------
+
+
+class TestRequeueRebuildConflict:
+    """01-REQ-3.E3 — requeue_rebuild raises HubConflictError with the error_type
+    from the response envelope when the hub returns HTTP 409.
+
+    Requirements: 01-REQ-3.E3
+    """
+
+    async def test_requeue_rebuild_raises_hub_conflict_error_on_409(self) -> None:
+        """requeue_rebuild raises HubConflictError with status_code=409 and
+        error_type stored on the exception.
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=409,
+            json=lambda: {
+                "error": {
+                    "code": 409,
+                    "message": "job already completed",
+                    "error_type": "job_already_terminal",
+                }
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubConflictError) as exc_info:
+            await client.requeue_rebuild("my-workspace", "job-1")
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.error_type == "job_already_terminal"
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-3.E4: rollback_rebuild raises HubError when key is missing
+# ---------------------------------------------------------------------------
+
+
+class TestRollbackRebuildMissingKey:
+    """01-REQ-3.E4 — rollback_rebuild raises HubError when the HTTP 200
+    response body is missing the 'previous_integration_head_sha' key;
+    does not return None silently.
+
+    Requirements: 01-REQ-3.E4
+    """
+
+    async def test_rollback_rebuild_raises_hub_error_on_missing_key(self) -> None:
+        """rollback_rebuild raises HubError(status_code=200, error_type='missing_field')
+        when the response lacks 'previous_integration_head_sha'.
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200,
+            json=lambda: {"some_other_key": "value"},
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubError) as exc_info:
+            await client.rollback_rebuild("my-workspace", "job-1")
+        assert exc_info.value.status_code == 200
+        assert exc_info.value.error_type == "missing_field"
+        assert "previous_integration_head_sha" in exc_info.value.message
+
+    async def test_rollback_rebuild_does_not_return_none_on_missing_key(self) -> None:
+        """rollback_rebuild does not silently return None when the expected
+        key is absent — it must raise.
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=200,
+            json=lambda: {},
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubError):
+            await client.rollback_rebuild("my-workspace", "job-1")
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-3.E5: submit_rebuild raises HubForbiddenError on HTTP 403
+# ---------------------------------------------------------------------------
+
+
+class TestSubmitRebuildForbidden:
+    """01-REQ-3.E5 — submit_rebuild raises HubForbiddenError when the hub
+    returns HTTP 403 Forbidden.
+
+    Requirements: 01-REQ-3.E5
+    """
+
+    async def test_submit_rebuild_raises_hub_forbidden_error_on_403(self) -> None:
+        """submit_rebuild raises HubForbiddenError with status_code=403."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=403,
+            json=lambda: {
+                "error": {
+                    "code": 403,
+                    "message": "insufficient permissions",
+                    "error_type": "forbidden",
+                }
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubForbiddenError) as exc_info:
+            await client.submit_rebuild("my-workspace")
+        assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# 01-REQ-3.E6: submit_rebuild raises HubConflictError on HTTP 409
+# ---------------------------------------------------------------------------
+
+
+class TestSubmitRebuildConflict:
+    """01-REQ-3.E6 — submit_rebuild raises HubConflictError with the error_type
+    from the response envelope when the hub returns HTTP 409 (concurrent rebuild
+    already in progress).
+
+    Requirements: 01-REQ-3.E6
+    """
+
+    async def test_submit_rebuild_raises_hub_conflict_error_on_409(self) -> None:
+        """submit_rebuild raises HubConflictError with status_code=409 and
+        error_type from the hub response.
+        """
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(
+            status_code=409,
+            json=lambda: {
+                "error": {
+                    "code": 409,
+                    "message": "rebuild already in progress",
+                    "error_type": "rebuild_in_progress",
+                }
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        with pytest.raises(HubConflictError) as exc_info:
+            await client.submit_rebuild("my-workspace", strategy="merge")
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.error_type == "rebuild_in_progress"
 
 
 # ---------------------------------------------------------------------------
