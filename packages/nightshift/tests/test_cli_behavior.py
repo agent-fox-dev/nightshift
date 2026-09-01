@@ -276,7 +276,7 @@ import signal, sys, time
 from unittest.mock import MagicMock, patch
 import click
 
-def _fake_daemon(ctx, om, config):
+def _fake_daemon(ctx, om, config, *, hub_client=None):
     click.echo("Nightshift daemon starting. Press Ctrl-C to stop gracefully.")
     # Signal handling is wired by nightshift.app._run_daemon, so we
     # replicate the wiring here to test the signal contract.
@@ -306,8 +306,12 @@ def _fake_daemon(ctx, om, config):
 _mock_config = MagicMock()
 _mock_config.theme = None
 _mock_config.orchestrator.max_cost = 10.0
+_mock_config.hub.endpoint_url = ""
+_mock_config.carry_patch.workspace = ""
 with patch("nightshift.app._run_daemon", side_effect=_fake_daemon), \
-     patch("nightshift.app.load_config", return_value=_mock_config):
+     patch("nightshift.app.load_config", return_value=_mock_config), \
+     patch("nightshift.app.resolve_hub_url", return_value=""), \
+     patch("nightshift.app.resolve_hub_pat", return_value=""):
     from nightshift.app import main
     main(standalone_mode=True)
 """

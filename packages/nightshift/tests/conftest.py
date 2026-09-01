@@ -92,7 +92,7 @@ def _mock_daemon():
     (startup message, summary stats, JSONL events) without starting the daemon.
     """
 
-    def _fake_run_daemon(ctx, om, config):  # noqa: ARG001
+    def _fake_run_daemon(ctx, om, config, *, hub_client=None):  # noqa: ARG001
         click.echo("Nightshift daemon starting. Press Ctrl-C to stop gracefully.")
         if om.json_mode:
             # Emit JSONL: one JSON object per line (not pretty-printed).

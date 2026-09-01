@@ -56,6 +56,7 @@ def main(ctx: click.Context, json_flag=None, hub_url=None, workspace=None, token
         r_url = resolve_hub_url(hub_url_flag=hub_url, config_url=config.hub.endpoint_url) or ""
         r_slug = workspace or os.environ.get("AF_WORKSPACE", "") or config.carry_patch.workspace
         r_pat = token if token else (resolve_hub_pat() or "")
+        hub_client = None
         if r_slug and not r_pat:
             click.echo("Error: PAT is required for carry-patch mode (--token / AF_HUB_TOKEN)", err=True)
             sys.exit(1)
@@ -63,11 +64,15 @@ def main(ctx: click.Context, json_flag=None, hub_url=None, workspace=None, token
             if not r_url:
                 click.echo("Error: hub URL required for carry-patch mode (--hub-url / AF_HUB_URL)", err=True)
                 sys.exit(1)
-            asyncio.run(_carry_patch_startup(hub_url=r_url, pat=r_pat, slug=r_slug, config=config))
-        _run_daemon(ctx, om, config)
+            hub_client = asyncio.run(_carry_patch_startup(hub_url=r_url, pat=r_pat, slug=r_slug, config=config))
+        try:
+            _run_daemon(ctx, om, config, hub_client=hub_client)
+        finally:
+            if hub_client is not None:
+                asyncio.run(hub_client.aclose())
 
 
-def _run_daemon(ctx, om, config):  # noqa: C901
+def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     """Assemble and run the daemon from agentfox.nightshift modules."""
     from afissues.errors import IntegrationError
     from agentfox.nightshift.daemon import DaemonRunner, SharedBudget
