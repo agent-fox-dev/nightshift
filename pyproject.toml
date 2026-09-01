@@ -39,6 +39,7 @@ members = ["packages/*"]
 afaudit = { workspace = true }
 afissues = { workspace = true }
 agentfox = { workspace = true }
+afhub = { workspace = true }
 nightshift = { workspace = true }
 
 [tool.ruff]

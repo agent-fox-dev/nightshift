@@ -10,6 +10,7 @@ resolution-markers = [
 [manifest]
 members = [
     "afaudit",
+    "afhub",
     "afissues",
     "agentfox",
     "nightshift",
@@ -20,6 +21,21 @@ members = [
 name = "afaudit"
 version = "4.3.6"
 source = { editable = "packages/afaudit" }
+
+[[package]]
+name = "afhub"
+version = "0.1.0"
+source = { editable = "packages/afhub" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
 
 [[package]]
 name = "afissues"
