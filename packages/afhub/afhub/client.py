@@ -1,7 +1,8 @@
 """HubClient -- async client for the af-hub carry-patch REST API.
 
-Implements retry logic (group 12) and error handling (group 9).
-Full response parsing pending (groups 13-14).
+Implements retry logic (group 12), error handling (group 9), and
+workspace/patch response parsing (group 13).
+Rebuild, rerere, variable, and secret response parsing pending (group 14).
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import httpx
 
 from afhub._http import DEFAULT_TIMEOUT, request_with_retry
 from afhub.errors import _raise_for_status
-from afhub.models import Workspace
+from afhub.models import Patch, PatchStatusDashboard, SyncResult, Workspace
 
 
 class HubClient:
@@ -55,7 +56,7 @@ class HubClient:
         _raise_for_status(resp)
         return Workspace(**resp.json())
 
-    async def sync_workspace(self, slug: str, *, reset_to_upstream: bool = False) -> Any:
+    async def sync_workspace(self, slug: str, *, reset_to_upstream: bool = False) -> SyncResult:
         body: dict[str, Any] = {"reset_to_upstream": reset_to_upstream}
         resp = await request_with_retry(
             self._http_client.post,
@@ -63,30 +64,30 @@ class HubClient:
             json=body,
         )
         _raise_for_status(resp)
-        return resp.json()
+        return SyncResult(**resp.json())
 
-    async def get_patch_status(self, slug: str) -> Any:
+    async def get_patch_status(self, slug: str) -> PatchStatusDashboard:
         resp = await request_with_retry(
             self._http_client.get, f"/api/v1/workspaces/{slug}/patch-status"
         )
         _raise_for_status(resp)
-        return resp.json()
+        return PatchStatusDashboard(**resp.json())
 
-    async def reclone_workspace(self, slug: str) -> Any:
+    async def reclone_workspace(self, slug: str) -> Workspace:
         resp = await request_with_retry(
             self._http_client.post, f"/api/v1/workspaces/{slug}/reclone"
         )
         _raise_for_status(resp)
-        return resp.json()
+        return Workspace(**resp.json())
 
     # -- Patch operations ----------------------------------------------------
 
-    async def list_patches(self, slug: str) -> Any:
+    async def list_patches(self, slug: str) -> list[Patch]:
         resp = await request_with_retry(
             self._http_client.get, f"/api/v1/workspaces/{slug}/patches"
         )
         _raise_for_status(resp)
-        return resp.json()
+        return [Patch(**p) for p in resp.json()]
 
     async def add_patch(
         self,
@@ -98,7 +99,7 @@ class HubClient:
         upstream_pr_url: str | None = None,
         if_not_exists: bool = False,
         skip_branch_check: bool = False,
-    ) -> Any:
+    ) -> Patch:
         body: dict[str, Any] = {"branch_name": branch_name}
         if position is not None:
             body["position"] = position
@@ -116,25 +117,25 @@ class HubClient:
             json=body,
         )
         _raise_for_status(resp)
-        return resp.json()
+        return Patch(**resp.json())
 
-    async def add_patches_batch(self, slug: str, patches: list[dict[str, Any]]) -> Any:
+    async def add_patches_batch(self, slug: str, patches: list[dict[str, Any]]) -> list[Patch]:
         resp = await request_with_retry(
             self._http_client.post,
             f"/api/v1/workspaces/{slug}/patches",
             json=patches,
         )
         _raise_for_status(resp)
-        return resp.json()
+        return [Patch(**p) for p in resp.json()]
 
-    async def update_patch(self, slug: str, patch_id: str, **kwargs: Any) -> Any:
+    async def update_patch(self, slug: str, patch_id: str, **kwargs: Any) -> Patch:
         resp = await request_with_retry(
             self._http_client.patch,
             f"/api/v1/workspaces/{slug}/patches/{patch_id}",
             json=kwargs,
         )
         _raise_for_status(resp)
-        return resp.json()
+        return Patch(**resp.json())
 
     async def remove_patch(self, slug: str, patch_id: str) -> None:
         resp = await request_with_retry(
@@ -143,22 +144,22 @@ class HubClient:
         )
         _raise_for_status(resp)
 
-    async def restore_patch(self, slug: str, patch_id: str) -> Any:
+    async def restore_patch(self, slug: str, patch_id: str) -> Patch:
         resp = await request_with_retry(
             self._http_client.post,
             f"/api/v1/workspaces/{slug}/patches/{patch_id}/restore",
         )
         _raise_for_status(resp)
-        return resp.json()
+        return Patch(**resp.json())
 
-    async def reorder_patches(self, slug: str, ordered_ids: list[str]) -> Any:
+    async def reorder_patches(self, slug: str, ordered_ids: list[str]) -> list[Patch]:
         resp = await request_with_retry(
             self._http_client.post,
             f"/api/v1/workspaces/{slug}/patches/reorder",
             json={"patch_ids": ordered_ids},
         )
         _raise_for_status(resp)
-        return resp.json()
+        return [Patch(**p) for p in resp.json()]
 
     # -- Rebuild operations --------------------------------------------------
 
