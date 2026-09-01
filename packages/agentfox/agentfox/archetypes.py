@@ -86,6 +86,12 @@ ARCHETYPE_REGISTRY: dict[str, ArchetypeEntry] = {
                 max_turns=300,
                 thinking_mode="adaptive",
             ),
+            "carry-patch": ModeConfig(  # 03-REQ-5.1
+                model_tier="STANDARD",
+                max_turns=200,
+                thinking_mode="adaptive",
+                effort="high",
+            ),
         },
     ),
     "reviewer": ArchetypeEntry(

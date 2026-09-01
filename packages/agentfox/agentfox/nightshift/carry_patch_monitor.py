@@ -19,6 +19,7 @@ from afaudit.events import AuditEventType
 from afhub.errors import HubConflictError as _HubConflictError
 from afhub.polling import poll_rebuild as _poll_rebuild
 
+from agentfox.archetypes import ARCHETYPE_REGISTRY, resolve_effective_config
 from agentfox.workspace import git as _workspace_git
 
 if TYPE_CHECKING:
@@ -55,6 +56,34 @@ def _safe_emit(
             event_type,
             exc_info=True,
         )
+
+
+def resolve_carry_patch_mode(mode: str) -> object:
+    """Resolve a carry-patch mode from the coder archetype registry.
+
+    This is a carry-patch-specific wrapper around ``resolve_effective_config``
+    that validates the result and raises ``KeyError`` when the requested mode
+    does not exist in the coder archetype's mode registry.
+
+    The general ``resolve_effective_config`` function is *not* modified — it
+    still logs a warning and returns the base entry for unknown modes.  This
+    wrapper detects that fallback and raises ``KeyError`` explicitly.
+
+    Requirements: 03-REQ-5.E1
+
+    Args:
+        mode: The mode name to resolve (e.g. ``'carry-patch'``).
+
+    Returns:
+        The resolved ``ArchetypeEntry`` with mode overrides applied.
+
+    Raises:
+        KeyError: If *mode* is not registered in the coder archetype's modes.
+    """
+    coder_entry = ARCHETYPE_REGISTRY["coder"]
+    if mode not in coder_entry.modes:
+        raise KeyError(mode)
+    return resolve_effective_config(coder_entry, mode=mode)
 
 
 # ---------------------------------------------------------------------------
