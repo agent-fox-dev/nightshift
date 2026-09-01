@@ -407,3 +407,392 @@ class TestAsyncContextManager:
             async with client:
                 raise RuntimeError("simulated error")
         client._http_client.aclose.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TS-01-8: list_patches returns list[Patch]
+# ---------------------------------------------------------------------------
+
+
+class TestListPatches:
+    """TS-01-8 — list_patches sends GET /api/v1/workspaces/:slug/patches and
+    returns a list of Patch models on HTTP 200.
+
+    Requirements: 01-REQ-2.1
+    """
+
+    _PATCH_DATA = {
+        "id": "p1",
+        "workspace_slug": "my-workspace",
+        "branch_name": "feat/x",
+        "position": 1,
+        "status": "active",
+        "added_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    async def test_list_patches_returns_list_of_patch_instances(self) -> None:
+        """list_patches returns a list containing Patch instances."""
+        from afhub.models import Patch
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: [self._PATCH_DATA])
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.list_patches("my-workspace")
+        assert len(result) == 1
+        assert isinstance(result[0], Patch)
+        assert result[0].id == "p1"
+
+    async def test_list_patches_returns_empty_list_when_no_patches(self) -> None:
+        """list_patches returns [] when the hub returns an empty array."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: [])
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        result = await client.list_patches("my-workspace")
+        assert result == []
+
+    async def test_list_patches_calls_correct_path(self) -> None:
+        """list_patches GETs /api/v1/workspaces/:slug/patches."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: [])
+        client._http_client.get = AsyncMock(return_value=mock_response)
+        await client.list_patches("my-workspace")
+        call_args = str(client._http_client.get.call_args)
+        assert "/api/v1/workspaces/my-workspace/patches" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-9: add_patch sends single-object JSON body and returns Patch (201)
+# ---------------------------------------------------------------------------
+
+
+class TestAddPatch:
+    """TS-01-9 — add_patch sends POST /api/v1/workspaces/:slug/patches with a
+    single-object JSON body and returns a Patch on HTTP 201.
+
+    Requirements: 01-REQ-2.2
+    """
+
+    _PATCH_DATA = {
+        "id": "p1",
+        "workspace_slug": "my-workspace",
+        "branch_name": "feat/my-branch",
+        "position": 1,
+        "status": "active",
+        "added_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    async def test_add_patch_returns_patch_instance(self) -> None:
+        """add_patch returns a Patch instance on HTTP 201."""
+        from afhub.models import Patch
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.add_patch("my-workspace", "feat/my-branch", position=1)
+        assert isinstance(result, Patch)
+
+    async def test_add_patch_sends_single_object_body(self) -> None:
+        """add_patch sends a single JSON object (not an array) in the POST body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.add_patch("my-workspace", "feat/my-branch", position=1)
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert isinstance(sent_body, dict)
+
+    async def test_add_patch_sends_branch_name_in_body(self) -> None:
+        """add_patch includes branch_name in the request body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.add_patch("my-workspace", "feat/my-branch", position=1)
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert sent_body["branch_name"] == "feat/my-branch"
+
+    async def test_add_patch_omits_none_optional_fields(self) -> None:
+        """add_patch omits upstream_pr_url and description from the body when None."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.add_patch("my-workspace", "feat/my-branch", position=1)
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert "upstream_pr_url" not in sent_body
+        assert "description" not in sent_body
+
+    async def test_add_patch_posts_to_correct_path(self) -> None:
+        """add_patch POSTs to /api/v1/workspaces/:slug/patches."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.add_patch("my-workspace", "feat/my-branch", position=1)
+        call_args = str(client._http_client.post.call_args)
+        assert "/api/v1/workspaces/my-workspace/patches" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-10: add_patches_batch sends JSON array body and returns list[Patch]
+# ---------------------------------------------------------------------------
+
+
+class TestAddPatchesBatch:
+    """TS-01-10 — add_patches_batch sends POST /api/v1/workspaces/:slug/patches
+    with a JSON array body and returns list[Patch] on HTTP 201.
+
+    Requirements: 01-REQ-2.3
+
+    Note: add_patches_batch is a distinct method from add_patch — it is NOT
+    achieved through runtime dispatch on the argument type.
+    """
+
+    _PATCH_DATA = [
+        {
+            "id": "p1",
+            "workspace_slug": "my-workspace",
+            "branch_name": "feat/a",
+            "position": 1,
+            "status": "active",
+            "added_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "id": "p2",
+            "workspace_slug": "my-workspace",
+            "branch_name": "feat/b",
+            "position": 2,
+            "status": "active",
+            "added_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    ]
+
+    async def test_add_patches_batch_returns_list_of_patch_instances(self) -> None:
+        """add_patches_batch returns a list where every element is a Patch."""
+        from afhub.models import Patch
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.add_patches_batch(
+            "my-workspace",
+            [{"branch_name": "feat/a", "position": 1}, {"branch_name": "feat/b", "position": 2}],
+        )
+        assert isinstance(result, list)
+        assert all(isinstance(p, Patch) for p in result)
+        assert len(result) == 2
+
+    async def test_add_patches_batch_sends_array_body(self) -> None:
+        """add_patches_batch sends a JSON array (not a dict) in the POST body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=201, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.add_patches_batch(
+            "my-workspace",
+            [{"branch_name": "feat/a", "position": 1}],
+        )
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert isinstance(sent_body, list)
+
+    async def test_add_patch_and_add_patches_batch_are_distinct_methods(self) -> None:
+        """add_patch and add_patches_batch are separate methods on HubClient."""
+        assert hasattr(HubClient, "add_patch")
+        assert hasattr(HubClient, "add_patches_batch")
+        assert HubClient.add_patch is not HubClient.add_patches_batch
+
+
+# ---------------------------------------------------------------------------
+# TS-01-11: update_patch sends PATCH and returns Patch
+# ---------------------------------------------------------------------------
+
+
+class TestUpdatePatch:
+    """TS-01-11 — update_patch sends PATCH /api/v1/workspaces/:slug/patches/:id
+    with kwargs as JSON body and returns a Patch on HTTP 200.
+
+    Requirements: 01-REQ-2.4
+    """
+
+    _PATCH_DATA = {
+        "id": "p1",
+        "workspace_slug": "my-workspace",
+        "branch_name": "feat/x",
+        "position": 1,
+        "status": "active",
+        "added_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z",
+        "description": "updated desc",
+    }
+
+    async def test_update_patch_returns_patch_instance(self) -> None:
+        """update_patch returns a Patch instance on HTTP 200."""
+        from afhub.models import Patch
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PATCH_DATA)
+        client._http_client.patch = AsyncMock(return_value=mock_response)
+        result = await client.update_patch("my-workspace", "p1", description="updated desc")
+        assert isinstance(result, Patch)
+
+    async def test_update_patch_returns_updated_field(self) -> None:
+        """update_patch result reflects the updated description from the server."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PATCH_DATA)
+        client._http_client.patch = AsyncMock(return_value=mock_response)
+        result = await client.update_patch("my-workspace", "p1", description="updated desc")
+        assert result.description == "updated desc"
+
+    async def test_update_patch_calls_correct_path(self) -> None:
+        """update_patch PATCHes /api/v1/workspaces/:slug/patches/:id."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PATCH_DATA)
+        client._http_client.patch = AsyncMock(return_value=mock_response)
+        await client.update_patch("my-workspace", "p1", description="updated desc")
+        call_args = str(client._http_client.patch.call_args)
+        assert "/api/v1/workspaces/my-workspace/patches/p1" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-12: remove_patch sends DELETE and returns None (no body parse)
+# ---------------------------------------------------------------------------
+
+
+class TestRemovePatch:
+    """TS-01-12 — remove_patch sends DELETE /api/v1/workspaces/:slug/patches/:id
+    and returns None on HTTP 204 without parsing the response body.
+
+    Requirements: 01-REQ-2.5
+    """
+
+    async def test_remove_patch_returns_none(self) -> None:
+        """remove_patch returns None on HTTP 204."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=204)
+        mock_response.json = MagicMock(side_effect=Exception("should not be called"))
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        result = await client.remove_patch("my-workspace", "p1")
+        assert result is None
+
+    async def test_remove_patch_does_not_parse_response_body(self) -> None:
+        """remove_patch does not call response.json() on a 204 response."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=204)
+        mock_response.json = MagicMock(side_effect=Exception("should not be called"))
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        await client.remove_patch("my-workspace", "p1")
+        mock_response.json.assert_not_called()
+
+    async def test_remove_patch_calls_correct_path(self) -> None:
+        """remove_patch DELETEs /api/v1/workspaces/:slug/patches/:id."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=204)
+        mock_response.json = MagicMock(side_effect=Exception("should not be called"))
+        client._http_client.delete = AsyncMock(return_value=mock_response)
+        await client.remove_patch("my-workspace", "p1")
+        call_args = str(client._http_client.delete.call_args)
+        assert "/api/v1/workspaces/my-workspace/patches/p1" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-13: restore_patch sends POST to /restore and returns Patch
+# ---------------------------------------------------------------------------
+
+
+class TestRestorePatch:
+    """TS-01-13 — restore_patch sends POST /api/v1/workspaces/:slug/patches/:id/restore
+    and returns a Patch on HTTP 200.
+
+    Requirements: 01-REQ-2.6
+    """
+
+    _PATCH_DATA = {
+        "id": "p1",
+        "workspace_slug": "my-workspace",
+        "branch_name": "feat/x",
+        "position": 1,
+        "status": "active",
+        "added_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    async def test_restore_patch_returns_patch_instance(self) -> None:
+        """restore_patch returns a Patch instance on HTTP 200."""
+        from afhub.models import Patch
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.restore_patch("my-workspace", "p1")
+        assert isinstance(result, Patch)
+
+    async def test_restore_patch_calls_correct_path(self) -> None:
+        """restore_patch POSTs to /api/v1/workspaces/:slug/patches/:id/restore."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.restore_patch("my-workspace", "p1")
+        call_args = str(client._http_client.post.call_args)
+        assert "/api/v1/workspaces/my-workspace/patches/p1/restore" in call_args
+
+
+# ---------------------------------------------------------------------------
+# TS-01-14: reorder_patches sends POST with patch_ids and returns list[Patch]
+# ---------------------------------------------------------------------------
+
+
+class TestReorderPatches:
+    """TS-01-14 — reorder_patches sends POST /api/v1/workspaces/:slug/patches/reorder
+    with an ordered patch_ids list in the body and returns list[Patch] on HTTP 200.
+
+    Requirements: 01-REQ-2.7
+    """
+
+    _PATCH_DATA = [
+        {
+            "id": "p2",
+            "workspace_slug": "my-workspace",
+            "branch_name": "feat/b",
+            "position": 1,
+            "status": "active",
+            "added_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "id": "p1",
+            "workspace_slug": "my-workspace",
+            "branch_name": "feat/a",
+            "position": 2,
+            "status": "active",
+            "added_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    ]
+
+    async def test_reorder_patches_returns_list_of_patch_instances(self) -> None:
+        """reorder_patches returns a list of Patch instances on HTTP 200."""
+        from afhub.models import Patch
+
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        result = await client.reorder_patches("my-workspace", ["p2", "p1"])
+        assert isinstance(result, list)
+        assert all(isinstance(p, Patch) for p in result)
+
+    async def test_reorder_patches_sends_patch_ids_in_body(self) -> None:
+        """reorder_patches sends {'patch_ids': [...]} in the POST body."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.reorder_patches("my-workspace", ["p2", "p1"])
+        sent_body = client._http_client.post.call_args.kwargs["json"]
+        assert sent_body["patch_ids"] == ["p2", "p1"]
+
+    async def test_reorder_patches_calls_correct_path(self) -> None:
+        """reorder_patches POSTs to /api/v1/workspaces/:slug/patches/reorder."""
+        client = HubClient("https://hub.example.com", "pat")
+        mock_response = MagicMock(status_code=200, json=lambda: self._PATCH_DATA)
+        client._http_client.post = AsyncMock(return_value=mock_response)
+        await client.reorder_patches("my-workspace", ["p2", "p1"])
+        call_args = str(client._http_client.post.call_args)
+        assert "/api/v1/workspaces/my-workspace/patches/reorder" in call_args
