@@ -1,7 +1,8 @@
 """Carry-patch startup — CWD validation, config generation, and variable init.
 
-Implements REQ-3 (CWD validation sequence) and REQ-4 (config generation)
-from spec 02_carry_patch_bootstrap.  REQ-5 (variable init) pending group 9.
+Implements REQ-3 (CWD validation sequence), REQ-4 (config generation),
+and REQ-5 (workspace variable initialization) from spec
+02_carry_patch_bootstrap.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ async def startup_helper(
     3. Validate clone_status == 'ready'.
     4. Read local git origin URL via subprocess.
     5. Compare against workspace.git_url.
-    6. Set workspace variables (AUTO_REBUILD_AFTER_SYNC/PUSH) — pending REQ-5.
+    6. Set workspace variables (AUTO_REBUILD_AFTER_SYNC/PUSH) — REQ-5.
 
     Returns the HubClient instance for reuse by the daemon.
     """
@@ -141,6 +142,20 @@ async def startup_helper(
 
     # -- Step 7: Generate default config if absent (REQ-4) ------------------
     _maybe_generate_config(hub_url=hub_url, slug=slug, workspace=workspace)
+
+    # -- Step 8: Set workspace variables (REQ-5) ---------------------------
+    # Each call is wrapped independently so that a failure in one does not
+    # prevent the other from being attempted (02-REQ-5.E1).  Any exception
+    # is non-fatal — we log a warning and continue (02-REQ-5.2, 02-PROP-7).
+    for var_name in ("AUTO_REBUILD_AFTER_SYNC", "AUTO_REBUILD_AFTER_PUSH"):
+        try:
+            await hub_client.set_variable(slug, var_name, "false")
+        except Exception as exc:
+            logger.warning(
+                "Failed to set workspace variable %s: %s",
+                var_name,
+                exc,
+            )
 
     return hub_client
 
