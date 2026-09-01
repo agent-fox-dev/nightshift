@@ -555,7 +555,7 @@
           "requirement_refs": [
             "03-REQ-3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -573,7 +573,7 @@
           "requirement_refs": [
             "03-REQ-3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -590,7 +590,7 @@
           "requirement_refs": [
             "03-REQ-3"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
