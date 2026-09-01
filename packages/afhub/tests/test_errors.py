@@ -290,9 +290,7 @@ class TestHubModeErrorRaised:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=400,
-            json=lambda: {
-                "error": {"code": 400, "message": "mode mismatch", "error_type": "workspace_mode_mismatch"}
-            },
+            json=lambda: {"error": {"code": 400, "message": "mode mismatch", "error_type": "workspace_mode_mismatch"}},
             is_success=False,
         )
         client._http_client.post = AsyncMock(return_value=mock_response)
@@ -307,9 +305,7 @@ class TestHubModeErrorRaised:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=400,
-            json=lambda: {
-                "error": {"code": 400, "message": "mode mismatch", "error_type": "workspace_mode_mismatch"}
-            },
+            json=lambda: {"error": {"code": 400, "message": "mode mismatch", "error_type": "workspace_mode_mismatch"}},
             is_success=False,
         )
         client._http_client.post = AsyncMock(return_value=mock_response)
@@ -338,9 +334,7 @@ class TestHubNoActivePatchesErrorRaised:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=400,
-            json=lambda: {
-                "error": {"code": 400, "message": "no active patches", "error_type": "no_active_patches"}
-            },
+            json=lambda: {"error": {"code": 400, "message": "no active patches", "error_type": "no_active_patches"}},
             is_success=False,
         )
         client._http_client.post = AsyncMock(return_value=mock_response)
@@ -355,9 +349,7 @@ class TestHubNoActivePatchesErrorRaised:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=400,
-            json=lambda: {
-                "error": {"code": 400, "message": "no active patches", "error_type": "no_active_patches"}
-            },
+            json=lambda: {"error": {"code": 400, "message": "no active patches", "error_type": "no_active_patches"}},
             is_success=False,
         )
         client._http_client.post = AsyncMock(return_value=mock_response)
@@ -386,9 +378,7 @@ class TestHubErrorUnrecognized400:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=400,
-            json=lambda: {
-                "error": {"code": 400, "message": "bad request", "error_type": "some_unknown_error"}
-            },
+            json=lambda: {"error": {"code": 400, "message": "bad request", "error_type": "some_unknown_error"}},
             is_success=False,
         )
         client._http_client.post = AsyncMock(return_value=mock_response)
@@ -403,9 +393,7 @@ class TestHubErrorUnrecognized400:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=400,
-            json=lambda: {
-                "error": {"code": 400, "message": "bad request", "error_type": "some_unknown_error"}
-            },
+            json=lambda: {"error": {"code": 400, "message": "bad request", "error_type": "some_unknown_error"}},
             is_success=False,
         )
         client._http_client.post = AsyncMock(return_value=mock_response)
@@ -420,9 +408,7 @@ class TestHubErrorUnrecognized400:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=400,
-            json=lambda: {
-                "error": {"code": 400, "message": "bad request", "error_type": "some_unknown_error"}
-            },
+            json=lambda: {"error": {"code": 400, "message": "bad request", "error_type": "some_unknown_error"}},
             is_success=False,
         )
         client._http_client.post = AsyncMock(return_value=mock_response)

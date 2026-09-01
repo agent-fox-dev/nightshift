@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +43,55 @@ def normalize_finding(f: Finding) -> tuple[str, str]:
     )
 
 
+def _run_convergence[T](
+    instance_findings: list[list[T]],
+    *,
+    key_fn: Callable[[T], tuple[str, str]],
+    block_threshold: int,
+) -> tuple[list[T], bool]:
+    """Shared union/dedup/majority-vote algorithm for reviewer convergence.
+
+    1. Union all findings across instances.
+    2. Deduplicate by the key returned by *key_fn*.
+    3. Count per-instance occurrences of each unique finding.
+    4. Sort by severity then normalised description.
+    5. A critical finding counts toward blocking only if it appears in
+       >= ceil(N/2) instances.
+    6. blocked = (majority-agreed critical count > block_threshold).
+
+    Returns (sorted_representative_list, blocked).
+    """
+    n_instances = len(instance_findings)
+    if n_instances == 0:
+        return [], False
+
+    majority_threshold = math.ceil(n_instances / 2)
+    finding_instance_counts: Counter[tuple[str, str]] = Counter()
+    representative: dict[tuple[str, str], T] = {}
+
+    for instance in instance_findings:
+        seen: set[tuple[str, str]] = set()
+        for f in instance:
+            key = key_fn(f)
+            if key not in seen:
+                seen.add(key)
+                finding_instance_counts[key] += 1
+                if key not in representative:
+                    representative[key] = f
+
+    severity_order = {"critical": 0, "major": 1, "minor": 2, "observation": 3}
+    merged = sorted(
+        representative.values(),
+        key=lambda f: (severity_order.get(key_fn(f)[0], 99), key_fn(f)[1]),
+    )
+
+    majority_critical_count = sum(
+        1 for (sev, _), cnt in finding_instance_counts.items() if sev == "critical" and cnt >= majority_threshold
+    )
+    blocked = majority_critical_count > 0 and majority_critical_count >= block_threshold
+    return merged, blocked
+
+
 def converge_reviewer_pre(
     instance_findings: list[list[Finding]],
     block_threshold: int,
@@ -57,50 +107,7 @@ def converge_reviewer_pre(
 
     Requirements: 26-REQ-7.2, 26-REQ-7.3, 26-REQ-8.4
     """
-    n_instances = len(instance_findings)
-    if n_instances == 0:
-        return [], False
-
-    majority_threshold = math.ceil(n_instances / 2)
-
-    # Count how many instances contain each normalized finding
-    finding_instance_counts: Counter[tuple[str, str]] = Counter()
-    # Keep a representative Finding for each normalized key
-    representative: dict[tuple[str, str], Finding] = {}
-
-    for instance in instance_findings:
-        # Deduplicate within a single instance first
-        seen_in_instance: set[tuple[str, str]] = set()
-        for f in instance:
-            key = normalize_finding(f)
-            if key not in seen_in_instance:
-                seen_in_instance.add(key)
-                finding_instance_counts[key] += 1
-                if key not in representative:
-                    representative[key] = f
-
-    # Build merged list: all unique findings (union)
-    # Sort for determinism: by severity priority then description
-    severity_order = {"critical": 0, "major": 1, "minor": 2, "observation": 3}
-    norm_cache = {id(f): normalize_finding(f)[1] for f in representative.values()}
-    merged = sorted(
-        representative.values(),
-        key=lambda f: (
-            severity_order.get(f.severity.lower(), 99),
-            norm_cache[id(f)],
-        ),
-    )
-
-    # Count majority-agreed critical findings
-    majority_critical_count = 0
-    for key, count in finding_instance_counts.items():
-        severity = key[0]
-        if severity == "critical" and count >= majority_threshold:
-            majority_critical_count += 1
-
-    blocked = majority_critical_count > 0 and majority_critical_count >= block_threshold
-
-    return merged, blocked
+    return _run_convergence(instance_findings, key_fn=normalize_finding, block_threshold=block_threshold)
 
 
 def converge_verifier(
@@ -143,32 +150,10 @@ def converge_reviewer_pre_records(
     if n_instances == 1:
         return list(instance_findings[0]), False
 
-    majority_threshold = math.ceil(n_instances / 2)
+    def _record_key(f: ReviewFinding) -> tuple[str, str]:
+        return (f.severity.lower().strip(), " ".join(f.description.lower().split()))
 
-    finding_instance_counts: Counter[tuple[str, str]] = Counter()
-    representative: dict[tuple[str, str], ReviewFinding] = {}
-
-    for instance in instance_findings:
-        seen_in_instance: set[tuple[str, str]] = set()
-        for f in instance:
-            key = (
-                f.severity.lower().strip(),
-                " ".join(f.description.lower().split()),
-            )
-            if key not in seen_in_instance:
-                seen_in_instance.add(key)
-                finding_instance_counts[key] += 1
-                if key not in representative:
-                    representative[key] = f
-
-    severity_order = {"critical": 0, "major": 1, "minor": 2, "observation": 3}
-    merged = sorted(
-        representative.values(),
-        key=lambda f: (
-            severity_order.get(f.severity.lower(), 99),
-            " ".join(f.description.lower().split()),
-        ),
-    )
+    merged_raw, blocked = _run_convergence(instance_findings, key_fn=_record_key, block_threshold=block_threshold)
 
     # Assign new IDs to merged findings
     convergence_id = f"convergence-{uuid.uuid4()}"
@@ -183,16 +168,8 @@ def converge_reviewer_pre_records(
             session_id=convergence_id,
             category=getattr(f, "category", None),
         )
-        for f in merged
+        for f in merged_raw
     ]
-
-    majority_critical_count = 0
-    for key, count in finding_instance_counts.items():
-        severity = key[0]
-        if severity == "critical" and count >= majority_threshold:
-            majority_critical_count += 1
-
-    blocked = majority_critical_count > 0 and majority_critical_count >= block_threshold
 
     return merged, blocked
 

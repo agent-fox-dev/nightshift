@@ -67,9 +67,14 @@ logger = logging.getLogger(__name__)
 
 
 class EngineWorkStream:
-    """Wraps a NightShiftEngine method as a work stream.
+    """Wraps an engine or monitor method as a work stream.
 
-    Requirements: 85-REQ-1.1, 85-REQ-6.3
+    When ``track_cost=True`` (the default), measures the engine state's cost
+    delta after each cycle and charges it to the shared budget.  Set
+    ``track_cost=False`` for streams whose target object has no cost state
+    (e.g. CarryPatchMonitor).
+
+    Requirements: 85-REQ-1.1, 85-REQ-6.3, 03-REQ-7.1
     """
 
     def __init__(
@@ -77,10 +82,11 @@ class EngineWorkStream:
         stream_name: str,
         engine: object,
         method_name: str,
-        budget: SharedBudget,
+        budget: SharedBudget | None = None,
         *,
         enabled: bool = True,
         interval: int = 900,
+        track_cost: bool = True,
     ) -> None:
         self._name = stream_name
         self._engine = engine
@@ -88,6 +94,7 @@ class EngineWorkStream:
         self._budget = budget
         self._enabled = enabled
         self._interval = interval
+        self._track_cost = track_cost
 
     @property
     def name(self) -> str:
@@ -106,67 +113,19 @@ class EngineWorkStream:
         self._enabled = value
 
     async def run_once(self) -> None:
-        """Run one cycle via the configured engine method and report cost delta."""
-        cost_before = getattr(getattr(self._engine, "state", None), "total_cost", 0.0)
+        """Run one cycle via the configured method, optionally tracking cost delta."""
+        if self._track_cost:
+            cost_before = getattr(getattr(self._engine, "state", None), "total_cost", 0.0)
         method = getattr(self._engine, self._method_name)
         await method()
-        cost_after = getattr(getattr(self._engine, "state", None), "total_cost", 0.0)
-        delta = cost_after - cost_before
-        if delta > 0:
-            self._budget.add_cost(delta)
+        if self._track_cost and self._budget is not None:
+            cost_after = getattr(getattr(self._engine, "state", None), "total_cost", 0.0)
+            delta = cost_after - cost_before  # type: ignore[possibly-undefined]
+            if delta > 0:
+                self._budget.add_cost(delta)
 
     async def shutdown(self) -> None:
         """No resources to clean up."""
-
-
-# ---------------------------------------------------------------------------
-# CarryPatchStream — wraps CarryPatchMonitor.run_cycle()
-# ---------------------------------------------------------------------------
-
-
-class CarryPatchStream:
-    """Work stream that delegates to ``CarryPatchMonitor.run_cycle()``.
-
-    Unlike ``EngineWorkStream`` (which wraps an engine method by name),
-    this stream holds a direct reference to a ``CarryPatchMonitor`` and
-    invokes ``run_cycle()`` on each tick.
-
-    Requirements: 03-REQ-7.1
-    """
-
-    def __init__(
-        self,
-        *,
-        monitor: object,
-        check_interval: int,
-        enabled: bool = True,
-    ) -> None:
-        self._monitor = monitor
-        self._interval = check_interval
-        self._enabled = enabled
-
-    @property
-    def name(self) -> str:
-        return "carry-patch"
-
-    @property
-    def interval(self) -> int:
-        return self._interval
-
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    @enabled.setter
-    def enabled(self, value: bool) -> None:
-        self._enabled = value
-
-    async def run_once(self) -> None:
-        """Run one monitor cycle."""
-        await self._monitor.run_cycle()
-
-    async def shutdown(self) -> None:
-        """No resources to clean up — HubClient is closed by main()."""
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +204,7 @@ def build_streams(
     if carry_patch is not None and getattr(carry_patch, "enabled", False) and hub_client is not None:
         check_interval = getattr(carry_patch, "check_interval", 0)
         if check_interval <= 0:
-            raise ValueError(
-                f"check_interval must be a positive duration, got {check_interval}"
-            )
+            raise ValueError(f"check_interval must be a positive duration, got {check_interval}")
         from agentfox.nightshift.carry_patch_monitor import CarryPatchMonitor  # noqa: PLC0415
 
         # Build monitor — reuses the hub_client owned by main().
@@ -262,10 +219,14 @@ def build_streams(
         if engine is not None:
             engine._carry_patch_monitor = monitor
         streams.append(
-            CarryPatchStream(
-                monitor=monitor,
-                check_interval=check_interval,
+            EngineWorkStream(
+                stream_name="carry-patch",
+                engine=monitor,
+                method_name="run_cycle",
+                budget=None,
                 enabled=True,
+                interval=check_interval,
+                track_cost=False,
             )
         )
 

@@ -37,6 +37,7 @@ def format_tokens(count: int | None) -> str:
         return f"{count / 1000:.1f}k"
     return str(count)
 
+
 if TYPE_CHECKING:
     from agentfox.io.spinner import StatusSpinner
 

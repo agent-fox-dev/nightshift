@@ -645,7 +645,6 @@ class FoxKnowledgeProvider:
         # Cache impacts by group number to avoid redundant extraction
         # when multiple archetypes exist for the same group.
         group_impacts: dict[str, set[str]] = {}
-        spec_dir = self._spec_dir
         for r in records:
             if r.task_group in group_impacts:
                 continue

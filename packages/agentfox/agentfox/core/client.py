@@ -316,24 +316,28 @@ def retry_api_call[T](
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+def _check_extra_deps(module_name: str, install_hint: str) -> None:
+    """Fail fast if an optional platform dependency is missing."""
+    try:
+        __import__(module_name)
+    except ModuleNotFoundError:
+        raise RuntimeError(install_hint) from None
+
+
 def _check_vertex_deps() -> None:
     """Fail fast if the Vertex extras are missing."""
-    try:
-        import google.auth  # noqa: F401
-    except ModuleNotFoundError:
-        raise RuntimeError(
-            "CLAUDE_CODE_USE_VERTEX=1 is set but google-auth is not installed. Run: pip install 'anthropic[vertex]'"
-        ) from None
+    _check_extra_deps(
+        "google.auth",
+        "CLAUDE_CODE_USE_VERTEX=1 is set but google-auth is not installed. Run: pip install 'anthropic[vertex]'",
+    )
 
 
 def _check_bedrock_deps() -> None:
     """Fail fast if the Bedrock extras are missing."""
-    try:
-        import boto3  # type: ignore[import-untyped]  # noqa: F401
-    except ModuleNotFoundError:
-        raise RuntimeError(
-            "CLAUDE_CODE_USE_BEDROCK=1 is set but boto3 is not installed. Run: pip install 'anthropic[bedrock]'"
-        ) from None
+    _check_extra_deps(
+        "boto3",
+        "CLAUDE_CODE_USE_BEDROCK=1 is set but boto3 is not installed. Run: pip install 'anthropic[bedrock]'",
+    )
 
 
 def create_anthropic_client() -> anthropic.Anthropic:

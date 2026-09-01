@@ -134,15 +134,9 @@ class CarryPatchMonitor:
     ) -> None:
         # --- Validation (03-REQ-2.E1, 03-REQ-2.E2) ---
         if hub_client is None:
-            raise ValueError(
-                "hub_client is required — CarryPatchMonitor cannot "
-                "operate without a HubClient instance"
-            )
+            raise ValueError("hub_client is required — CarryPatchMonitor cannot operate without a HubClient instance")
         if not workspace_slug:
-            raise ValueError(
-                "workspace_slug must be non-empty — a workspace slug "
-                "is required to address the hub API"
-            )
+            raise ValueError("workspace_slug must be non-empty — a workspace slug is required to address the hub API")
 
         self._hub_client = hub_client
         self._workspace_slug = workspace_slug
@@ -180,8 +174,7 @@ class CarryPatchMonitor:
             )
         except Exception:
             logger.error(
-                "get_patch_status failed for workspace %s — returning "
-                "empty MonitorCycleResult (fail-open)",
+                "get_patch_status failed for workspace %s — returning empty MonitorCycleResult (fail-open)",
                 self._workspace_slug,
                 exc_info=True,
             )
@@ -208,11 +201,7 @@ class CarryPatchMonitor:
                 )
 
         # ── Step 3: Detect conflicts (03-REQ-3.7) ────────────────────
-        conflict_patches = [
-            p
-            for p in dashboard.patches
-            if getattr(p, "status", None) == "conflict"
-        ]
+        conflict_patches = [p for p in dashboard.patches if getattr(p, "status", None) == "conflict"]
         result.conflicts_detected = len(conflict_patches)
 
         # Emit CONFLICT_DETECTED before the retry counter check
@@ -231,8 +220,7 @@ class CarryPatchMonitor:
         # ── Step 4: auto_resolve guard (03-REQ-3.2) ──────────────────
         if not self._config.carry_patch.auto_resolve:
             logger.info(
-                "%d conflict(s) detected for workspace %s; "
-                "auto_resolve is disabled — skipping resolution",
+                "%d conflict(s) detected for workspace %s; auto_resolve is disabled — skipping resolution",
                 result.conflicts_detected,
                 self._workspace_slug,
             )
@@ -246,8 +234,7 @@ class CarryPatchMonitor:
             # 03-REQ-3.4: Skip if retry limit reached
             if count >= self._config.carry_patch.max_resolve_retries:
                 logger.warning(
-                    "Patch %s (branch %s) skipped — retry limit "
-                    "reached (%d/%d)",
+                    "Patch %s (branch %s) skipped — retry limit reached (%d/%d)",
                     p.id,
                     getattr(p, "branch_name", ""),
                     count,
@@ -301,17 +288,13 @@ class CarryPatchMonitor:
         # ── patch_description (03-REQ-4.E3) ─────────────────────────
         desc = getattr(patch_detail, "description", None)
         if desc is None:
-            logger.debug(
-                "PatchDetail.description is None; defaulting to ''"
-            )
+            logger.debug("PatchDetail.description is None; defaulting to ''")
         patch_description: str = desc if desc is not None else ""
 
         # ── conflict_files (03-REQ-3.E6) ────────────────────────────
         conflict_files = getattr(patch_detail, "conflict_files", None)
         if conflict_files is None:
-            logger.warning(
-                "PatchDetail.conflict_files is None; defaulting to []"
-            )
+            logger.warning("PatchDetail.conflict_files is None; defaulting to []")
             conflict_files = []
 
         # ── rerere_resolutions (03-REQ-4.1, 03-REQ-4.E1) ────────────
@@ -321,8 +304,7 @@ class CarryPatchMonitor:
             rerere_resolutions = [e.path for e in entries]
         except Exception:
             logger.warning(
-                "list_rerere failed for workspace %s; "
-                "using empty rerere_resolutions",
+                "list_rerere failed for workspace %s; using empty rerere_resolutions",
                 slug,
                 exc_info=True,
             )
@@ -345,8 +327,7 @@ class CarryPatchMonitor:
                 )
         except Exception:
             logger.warning(
-                "git diff command failed; "
-                "using empty upstream_context",
+                "git diff command failed; using empty upstream_context",
                 exc_info=True,
             )
 
@@ -370,8 +351,7 @@ class CarryPatchMonitor:
         except _HubConflictError:
             # 03-REQ-3.E5: concurrent rebuild already in progress
             logger.info(
-                "submit_rebuild raised HubConflictError for %s — "
-                "looking up active rebuild",
+                "submit_rebuild raised HubConflictError for %s — looking up active rebuild",
                 slug,
             )
             active_jobs = await self._hub_client.list_rebuilds(slug)
@@ -379,8 +359,7 @@ class CarryPatchMonitor:
                 job = active_jobs[0]
             else:
                 logger.warning(
-                    "list_rebuilds returned empty after "
-                    "HubConflictError for %s",
+                    "list_rebuilds returned empty after HubConflictError for %s",
                     slug,
                 )
 
@@ -398,8 +377,7 @@ class CarryPatchMonitor:
             )
         except Exception:
             logger.warning(
-                "poll_rebuild failed for job %s in workspace %s; "
-                "rebuild was triggered but completion status unknown",
+                "poll_rebuild failed for job %s in workspace %s; rebuild was triggered but completion status unknown",
                 getattr(job, "id", ""),
                 slug,
                 exc_info=True,
@@ -427,7 +405,9 @@ class CarryPatchMonitor:
 
         # Step 1: Assemble conflict resolution context (03-REQ-4.1)
         context = await self._build_conflict_context(
-            patch_detail, slug, repo_root,
+            patch_detail,
+            slug,
+            repo_root,
         )
 
         # Step 2: Fetch and checkout the patch branch (03-REQ-3.3)

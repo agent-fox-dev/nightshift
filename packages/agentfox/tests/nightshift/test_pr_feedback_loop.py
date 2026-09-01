@@ -144,8 +144,7 @@ def _make_tracking_comment(
         # Spec 06 not implemented yet — use a plausible fallback.
         # The real implementation will define the exact format.
         return (
-            f"<!-- nightshift:tracking pr_number={pr_number} attempt={attempt} -->\n"
-            f"PR #{pr_number} | Attempt {attempt}"
+            f"<!-- nightshift:tracking pr_number={pr_number} attempt={attempt} -->\nPR #{pr_number} | Attempt {attempt}"
         )
 
 
@@ -638,9 +637,7 @@ class TestCheckOpenPrsCap:
             new_callable=AsyncMock,
         ) as mock_process:
             await engine._check_open_prs()
-            processed_numbers = [
-                call.args[0].number for call in mock_process.call_args_list
-            ]
+            processed_numbers = [call.args[0].number for call in mock_process.call_args_list]
             assert processed_numbers == [1, 2, 3, 4, 5]
 
 
@@ -762,9 +759,7 @@ class TestProcessPrIssueNoTrackingComment:
 
         assert result is None
 
-    async def test_no_tracking_comment_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_no_tracking_comment_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """TS-07-10: WARNING logged with issue number when no tracking comment."""
         from agentfox.nightshift.pr_feedback import process_pr_issue
 
@@ -782,9 +777,7 @@ class TestProcessPrIssueNoTrackingComment:
                 pipeline=pipeline,
             )
 
-        warning_messages = [
-            r.message for r in caplog.records if r.levelno >= logging.WARNING
-        ]
+        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("10" in msg for msg in warning_messages), (
             f"Expected WARNING mentioning issue #10, got: {warning_messages}"
         )
@@ -899,9 +892,7 @@ class TestProcessPrIssueApiError:
 
         assert result is None
 
-    async def test_api_error_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_api_error_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """TS-07-E6: WARNING logged with issue number and exception on API error."""
         from agentfox.nightshift.pr_feedback import process_pr_issue
 
@@ -921,9 +912,7 @@ class TestProcessPrIssueApiError:
                 pipeline=pipeline,
             )
 
-        warning_messages = [
-            r.message for r in caplog.records if r.levelno >= logging.WARNING
-        ]
+        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("10" in msg for msg in warning_messages), (
             f"Expected WARNING mentioning issue #10, got: {warning_messages}"
         )
@@ -1000,7 +989,10 @@ class TestMergedPrTransitions:
         )
         platform.get_pr_state = AsyncMock(
             return_value=MagicMock(
-                number=42, state="closed", merged=True, head_sha="a1",
+                number=42,
+                state="closed",
+                merged=True,
+                head_sha="a1",
             ),
         )
         order: list[str] = []
@@ -1026,9 +1018,7 @@ class TestMergedPrTransitions:
         platform.assign_label.assert_awaited_once_with(10, LABEL_FIXED)
         platform.remove_label.assert_awaited_once_with(10, LABEL_PR)
         platform.close_issue.assert_awaited_once_with(10, "PR #42 merged.")
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
         assert any("merged" in m.lower() for m in info_msgs)
         assert result is None
 
@@ -1056,7 +1046,10 @@ class TestClosedPrWithoutMerge:
         )
         platform.get_pr_state = AsyncMock(
             return_value=MagicMock(
-                number=42, state="closed", merged=False, head_sha="a1",
+                number=42,
+                state="closed",
+                merged=False,
+                head_sha="a1",
             ),
         )
 
@@ -1080,9 +1073,7 @@ class TestClosedPrWithoutMerge:
         platform.close_issue.assert_not_awaited()
 
         # INFO logged
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
         assert len(info_msgs) > 0
 
         assert result is None
@@ -1107,7 +1098,10 @@ class TestOpenPrProceedsToCiCheck:
         )
         platform.get_pr_state = AsyncMock(
             return_value=MagicMock(
-                number=42, state="open", merged=False, head_sha="a1",
+                number=42,
+                state="open",
+                merged=False,
+                head_sha="a1",
             ),
         )
 
@@ -1163,11 +1157,7 @@ class TestGetPrStateApiError:
             )
 
         assert result is None
-        warn_msgs = [
-            r.message
-            for r in caplog.records
-            if r.levelno >= logging.WARNING
-        ]
+        warn_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("10" in m for m in warn_msgs)
         platform.assign_label.assert_not_awaited()
         platform.remove_label.assert_not_awaited()
@@ -1196,7 +1186,10 @@ class TestMergedPrMidSequenceFailure:
         )
         platform.get_pr_state = AsyncMock(
             return_value=MagicMock(
-                number=42, state="closed", merged=True, head_sha="a1",
+                number=42,
+                state="closed",
+                merged=True,
+                head_sha="a1",
             ),
         )
         # close_issue raises on first call, succeeds on second
@@ -1214,11 +1207,7 @@ class TestMergedPrMidSequenceFailure:
             )
 
         assert result1 is None
-        warn_msgs = [
-            r.message
-            for r in caplog.records
-            if r.levelno >= logging.WARNING
-        ]
+        warn_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("10" in m for m in warn_msgs)
 
         # Second cycle: all operations re-applied (idempotent)
@@ -1260,13 +1249,13 @@ class TestCiStatusInProgressQueued:
 
         with caplog.at_level(logging.DEBUG):
             result = await _check_ci_status(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "skip"
-        warn_or_above = [
-            r for r in caplog.records if r.levelno >= logging.WARNING
-        ]
+        warn_or_above = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert len(warn_or_above) == 0
 
     async def test_queued_returns_skip(self) -> None:
@@ -1281,7 +1270,9 @@ class TestCiStatusInProgressQueued:
         )
 
         result = await _check_ci_status(
-            pr_number=42, issue_number=10, platform=platform,
+            pr_number=42,
+            issue_number=10,
+            platform=platform,
         )
 
         assert result.action == "skip"
@@ -1318,18 +1309,15 @@ class TestCiStatusFailure:
 
         with caplog.at_level(logging.INFO):
             result = await _check_ci_status(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "re_entry"
         assert len(result.ci_failures) == 1
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
-        assert any(
-            "Re-entry triggered" in m and "CI failure" in m
-            for m in info_msgs
-        )
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert any("Re-entry triggered" in m and "CI failure" in m for m in info_msgs)
 
     async def test_timed_out_triggers_reentry(
         self,
@@ -1342,21 +1330,22 @@ class TestCiStatusFailure:
         platform.get_pr_checks = AsyncMock(
             return_value=[
                 _make_check_result(
-                    status="completed", conclusion="timed_out",
+                    status="completed",
+                    conclusion="timed_out",
                 ),
             ],
         )
 
         with caplog.at_level(logging.INFO):
             result = await _check_ci_status(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "re_entry"
         assert len(result.ci_failures) == 1
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
         assert any("Re-entry triggered" in m for m in info_msgs)
 
 
@@ -1380,25 +1369,25 @@ class TestCiStatusAmbiguous:
         platform.get_pr_checks = AsyncMock(
             return_value=[
                 _make_check_result(
-                    status="completed", conclusion="cancelled",
+                    status="completed",
+                    conclusion="cancelled",
                 ),
                 _make_check_result(
-                    status="completed", conclusion="stale",
+                    status="completed",
+                    conclusion="stale",
                 ),
             ],
         )
 
         with caplog.at_level(logging.WARNING):
             result = await _check_ci_status(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "skip"
-        warn_msgs = [
-            r.message
-            for r in caplog.records
-            if r.levelno == logging.WARNING
-        ]
+        warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any("ambiguous" in m.lower() for m in warn_msgs)
 
 
@@ -1419,13 +1408,16 @@ class TestCiStatusAllSuccess:
         platform.get_pr_checks = AsyncMock(
             return_value=[
                 _make_check_result(
-                    status="completed", conclusion="success",
+                    status="completed",
+                    conclusion="success",
                 ),
             ],
         )
 
         result = await _check_ci_status(
-            pr_number=42, issue_number=10, platform=platform,
+            pr_number=42,
+            issue_number=10,
+            platform=platform,
         )
 
         assert result.action == "pass_through"
@@ -1452,13 +1444,13 @@ class TestCiStatusEmptyChecks:
 
         with caplog.at_level(logging.WARNING):
             result = await _check_ci_status(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "pass_through"
-        warn_msgs = [
-            r for r in caplog.records if r.levelno >= logging.WARNING
-        ]
+        warn_msgs = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert len(warn_msgs) == 0
 
 
@@ -1488,13 +1480,13 @@ class TestCiStatusMixedConclusions:
 
         with caplog.at_level(logging.INFO):
             result = await _check_ci_status(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "re_entry"
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
         assert any("Re-entry triggered" in m for m in info_msgs)
 
 
@@ -1521,15 +1513,13 @@ class TestCiStatusGetPrChecksError:
 
         with caplog.at_level(logging.WARNING):
             result = await _check_ci_status(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "skip"
-        warn_msgs = [
-            r.message
-            for r in caplog.records
-            if r.levelno == logging.WARNING
-        ]
+        warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any("rate limit" in m or "42" in m for m in warn_msgs)
         platform.remove_label.assert_not_awaited()
 
@@ -1559,16 +1549,14 @@ class TestCiStatusNullConclusion:
 
         with caplog.at_level(logging.WARNING):
             result = await _check_ci_status(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action != "re_entry"
         # All null conclusions → ambiguous → WARNING logged
-        warn_msgs = [
-            r.message
-            for r in caplog.records
-            if r.levelno == logging.WARNING
-        ]
+        warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any("ambiguous" in m.lower() for m in warn_msgs)
 
 
@@ -1601,16 +1589,14 @@ class TestReviewChangesRequested:
 
         with caplog.at_level(logging.INFO):
             result = await _check_reviews(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "re_entry"
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
-        assert any(
-            "reviewer requested changes" in m.lower() for m in info_msgs
-        )
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert any("reviewer requested changes" in m.lower() for m in info_msgs)
 
 
 # ===========================================================================
@@ -1632,7 +1618,9 @@ class TestReviewApprovedOrCommented:
         )
 
         result = await _check_reviews(
-            pr_number=42, issue_number=10, platform=platform,
+            pr_number=42,
+            issue_number=10,
+            platform=platform,
         )
 
         assert result.action == "skip"
@@ -1647,7 +1635,9 @@ class TestReviewApprovedOrCommented:
         )
 
         result = await _check_reviews(
-            pr_number=42, issue_number=10, platform=platform,
+            pr_number=42,
+            issue_number=10,
+            platform=platform,
         )
 
         assert result.action == "skip"
@@ -1660,7 +1650,9 @@ class TestReviewApprovedOrCommented:
         platform.get_pr_reviews = AsyncMock(return_value=[])
 
         result = await _check_reviews(
-            pr_number=42, issue_number=10, platform=platform,
+            pr_number=42,
+            issue_number=10,
+            platform=platform,
         )
 
         assert result.action == "skip"
@@ -1693,7 +1685,9 @@ class TestReviewDismissedFiltering:
         )
 
         result = await _check_reviews(
-            pr_number=42, issue_number=10, platform=platform,
+            pr_number=42,
+            issue_number=10,
+            platform=platform,
         )
 
         assert result.action == "re_entry"
@@ -1722,15 +1716,13 @@ class TestReviewGetPrReviewsError:
 
         with caplog.at_level(logging.WARNING):
             result = await _check_reviews(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "skip"
-        warn_msgs = [
-            r.message
-            for r in caplog.records
-            if r.levelno == logging.WARNING
-        ]
+        warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any("10" in m or "42" in m for m in warn_msgs)
         platform.remove_label.assert_not_awaited()
 
@@ -1761,13 +1753,13 @@ class TestReviewAllDismissed:
 
         with caplog.at_level(logging.INFO):
             result = await _check_reviews(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "skip"
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
         assert not any("Re-entry triggered" in m for m in info_msgs)
 
 
@@ -1791,20 +1783,22 @@ class TestReviewNullState:
         platform.get_pr_reviews = AsyncMock(
             return_value=[
                 _make_review_comment(
-                    user="alice", state=None, body="comment",
+                    user="alice",
+                    state=None,
+                    body="comment",
                 ),
             ],
         )
 
         with caplog.at_level(logging.DEBUG):
             result = await _check_reviews(
-                pr_number=42, issue_number=10, platform=platform,
+                pr_number=42,
+                issue_number=10,
+                platform=platform,
             )
 
         assert result.action == "skip"
-        assert not any(
-            "Re-entry triggered" in r.message for r in caplog.records
-        )
+        assert not any("Re-entry triggered" in r.message for r in caplog.records)
 
 
 # ===========================================================================
@@ -1898,7 +1892,10 @@ class TestMutuallyExclusiveCiReviewPaths:
         )
         platform.get_pr_state = AsyncMock(
             return_value=MagicMock(
-                number=42, state="open", merged=False, head_sha="a1",
+                number=42,
+                state="open",
+                merged=False,
+                head_sha="a1",
             ),
         )
         platform.get_pr_checks = AsyncMock(
@@ -1930,7 +1927,10 @@ class TestMutuallyExclusiveCiReviewPaths:
         )
         platform.get_pr_state = AsyncMock(
             return_value=MagicMock(
-                number=42, state="open", merged=False, head_sha="a1",
+                number=42,
+                state="open",
+                merged=False,
+                head_sha="a1",
             ),
         )
         platform.get_pr_checks = AsyncMock(
@@ -2011,9 +2011,7 @@ class TestRetryLimitExceeded:
                 pipeline=MagicMock(),
             )
 
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
         assert any("Retry limit reached" in m for m in info_msgs), (
             f"Expected INFO with 'Retry limit reached', got: {info_msgs}"
         )
@@ -2135,7 +2133,8 @@ class TestRetryLimitNotExceeded:
             # Mock subprocess for git diff and git push
             mock_diff = AsyncMock(
                 return_value=MagicMock(
-                    stdout="file1.py\nfile2.py\n", returncode=0,
+                    stdout="file1.py\nfile2.py\n",
+                    returncode=0,
                 ),
             )
             mock_push = AsyncMock(return_value=MagicMock(returncode=0))
@@ -2244,9 +2243,7 @@ class TestRetryLimitZero:
                 pipeline=MagicMock(),
             )
 
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
         assert any("Retry limit reached" in m for m in info_msgs)
 
 
@@ -2288,7 +2285,8 @@ class TestRetryLimitBoundary:
                     "agentfox.nightshift.pr_feedback.asyncio.create_subprocess_exec",
                     new_callable=AsyncMock,
                     return_value=MagicMock(
-                        stdout="file.py\n", returncode=0,
+                        stdout="file.py\n",
+                        returncode=0,
                     ),
                 ),
             ):
@@ -2360,7 +2358,8 @@ class TestSetupFeedbackWorktree:
             side_effect=_mock_subprocess,
         ):
             worktree_path = await _setup_feedback_worktree(
-                issue=issue, config=config,
+                issue=issue,
+                config=config,
             )
 
         # First call: git fetch origin <branch>
@@ -2402,7 +2401,8 @@ class TestSetupFeedbackWorktree:
             side_effect=_mock_subprocess,
         ):
             worktree_path = await _setup_feedback_worktree(
-                issue=issue, config=config,
+                issue=issue,
+                config=config,
             )
 
         assert isinstance(worktree_path, str)
@@ -2424,7 +2424,8 @@ class TestCleanupFeedbackWorktreeNoOp:
 
         # Use tmp_path as base so we know feedback-10 doesn't exist
         result = _cleanup_feedback_worktree(
-            issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+            issue_number=10,
+            worktree_base=str(tmp_path / "worktrees"),
         )
 
         assert result is None
@@ -2435,7 +2436,8 @@ class TestCleanupFeedbackWorktreeNoOp:
 
         # Should not raise
         _cleanup_feedback_worktree(
-            issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+            issue_number=10,
+            worktree_base=str(tmp_path / "worktrees"),
         )
 
     def test_nonexistent_dir_logs_debug(
@@ -2448,16 +2450,14 @@ class TestCleanupFeedbackWorktreeNoOp:
 
         with caplog.at_level(logging.DEBUG):
             _cleanup_feedback_worktree(
-                issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+                issue_number=10,
+                worktree_base=str(tmp_path / "worktrees"),
             )
 
-        debug_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.DEBUG
-        ]
-        assert any(
-            "Feedback worktree not found" in m and "10" in m
-            for m in debug_msgs
-        ), f"Expected DEBUG 'Feedback worktree not found...#10', got: {debug_msgs}"
+        debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+        assert any("Feedback worktree not found" in m and "10" in m for m in debug_msgs), (
+            f"Expected DEBUG 'Feedback worktree not found...#10', got: {debug_msgs}"
+        )
 
 
 # ===========================================================================
@@ -2725,7 +2725,8 @@ class TestFeedbackIterationCleanupGuarantee:
                 "agentfox.nightshift.pr_feedback.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
                 return_value=MagicMock(
-                    stdout="file.py\n", returncode=0,
+                    stdout="file.py\n",
+                    returncode=0,
                 ),
             ),
         ):
@@ -2777,7 +2778,8 @@ class TestFeedbackIterationCleanupGuarantee:
                 "agentfox.nightshift.pr_feedback.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
                 return_value=MagicMock(
-                    stdout="file.py\n", returncode=0,
+                    stdout="file.py\n",
+                    returncode=0,
                 ),
             ),
         ):
@@ -2848,7 +2850,8 @@ class TestCleanupFeedbackWorktreeNeverRaises:
         from agentfox.nightshift.pr_feedback import _cleanup_feedback_worktree
 
         result = _cleanup_feedback_worktree(
-            issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+            issue_number=10,
+            worktree_base=str(tmp_path / "worktrees"),
         )
         assert result is None
 
@@ -2858,7 +2861,8 @@ class TestCleanupFeedbackWorktreeNeverRaises:
 
         # Should not raise — asserting no exception
         _cleanup_feedback_worktree(
-            issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+            issue_number=10,
+            worktree_base=str(tmp_path / "worktrees"),
         )
 
     def test_debug_log_for_missing_dir(
@@ -2871,12 +2875,11 @@ class TestCleanupFeedbackWorktreeNeverRaises:
 
         with caplog.at_level(logging.DEBUG):
             _cleanup_feedback_worktree(
-                issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+                issue_number=10,
+                worktree_base=str(tmp_path / "worktrees"),
             )
 
-        debug_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.DEBUG
-        ]
+        debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
         assert any("skipping cleanup" in m.lower() for m in debug_msgs), (
             f"Expected DEBUG with 'skipping cleanup', got: {debug_msgs}"
         )
@@ -2959,9 +2962,7 @@ class TestSetupWorktreeFetchFailure:
 
         # Only the fetch call should be present, not worktree add
         worktree_calls = [c for c in calls if "worktree" in c]
-        assert len(worktree_calls) == 0, (
-            f"Expected no worktree add calls after fetch failure, got: {worktree_calls}"
-        )
+        assert len(worktree_calls) == 0, f"Expected no worktree add calls after fetch failure, got: {worktree_calls}"
 
     async def test_fetch_failure_logs_error(
         self,
@@ -2994,9 +2995,7 @@ class TestSetupWorktreeFetchFailure:
 
         # Check for fetch-related error logging (may be in the caller)
         # The error should mention git fetch failure
-        all_errors = [
-            r.message for r in caplog.records if r.levelno >= logging.ERROR
-        ]
+        all_errors = [r.message for r in caplog.records if r.levelno >= logging.ERROR]
         # Either logged in _setup_feedback_worktree or in _run_feedback_iteration
         assert len(all_errors) > 0 or True  # Logged at caller level too
 
@@ -3083,9 +3082,7 @@ class TestSetupWorktreeAddFailure:
                 pass
 
         # May log at this level or propagate to caller for logging
-        all_errors = [
-            r.message for r in caplog.records if r.levelno >= logging.ERROR
-        ]
+        all_errors = [r.message for r in caplog.records if r.levelno >= logging.ERROR]
         assert len(all_errors) > 0 or True  # Logged at caller level too
 
 
@@ -3173,7 +3170,8 @@ class TestCleanupWorktreeRemovalFailure:
             side_effect=PermissionError("denied"),
         ):
             result = _cleanup_feedback_worktree(
-                issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+                issue_number=10,
+                worktree_base=str(tmp_path / "worktrees"),
             )
 
         assert result is None
@@ -3191,7 +3189,8 @@ class TestCleanupWorktreeRemovalFailure:
         ):
             # Should NOT raise
             _cleanup_feedback_worktree(
-                issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+                issue_number=10,
+                worktree_base=str(tmp_path / "worktrees"),
             )
 
     def test_removal_failure_logs_warning(
@@ -3213,16 +3212,14 @@ class TestCleanupWorktreeRemovalFailure:
             ),
         ):
             _cleanup_feedback_worktree(
-                issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+                issue_number=10,
+                worktree_base=str(tmp_path / "worktrees"),
             )
 
-        warn_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.WARNING
-        ]
-        assert any(
-            "denied" in m.lower() or "permission" in m.lower()
-            for m in warn_msgs
-        ), f"Expected WARNING about PermissionError, got: {warn_msgs}"
+        warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("denied" in m.lower() or "permission" in m.lower() for m in warn_msgs), (
+            f"Expected WARNING about PermissionError, got: {warn_msgs}"
+        )
 
     def test_original_exception_propagates_normally(
         self,
@@ -3242,7 +3239,8 @@ class TestCleanupWorktreeRemovalFailure:
         ):
             # Cleanup should not mask the original exception
             _cleanup_feedback_worktree(
-                issue_number=10, worktree_base=str(tmp_path / "worktrees"),
+                issue_number=10,
+                worktree_base=str(tmp_path / "worktrees"),
             )
 
         # Verify the original error can be raised after cleanup runs
@@ -3389,10 +3387,7 @@ class TestCoderSessionSyntheticTriageResult:
         mock_pipeline._build_coder_prompt.assert_called_once()
         call_args = mock_pipeline._build_coder_prompt.call_args
         # triage is positional arg [1] or keyword 'triage'
-        triage = (
-            call_args.kwargs.get("triage")
-            or call_args[0][1]
-        )
+        triage = call_args.kwargs.get("triage") or call_args[0][1]
         assert triage.summary == "Fix bug"
 
     async def test_triage_result_has_affected_files_from_diff(self) -> None:
@@ -3711,13 +3706,10 @@ class TestGitDiffFailure:
                     pipeline=mock_pipeline,
                 )
 
-        warn_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.WARNING
-        ]
-        assert any(
-            "git diff" in m and "defaulting" in m.lower()
-            for m in warn_msgs
-        ), f"Expected WARNING about git diff failure, got: {warn_msgs}"
+        warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("git diff" in m and "defaulting" in m.lower() for m in warn_msgs), (
+            f"Expected WARNING about git diff failure, got: {warn_msgs}"
+        )
 
     async def test_empty_diff_output_defaults_affected_files_empty(self) -> None:
         """TS-07-31: affected_files=[] when git diff returns empty output."""
@@ -3809,9 +3801,7 @@ class TestCoderSessionRaisesError:
                     pipeline=mock_pipeline,
                 )
 
-        error_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.ERROR
-        ]
+        error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
         assert any("coder session raised" in m for m in error_msgs), (
             f"Expected ERROR with 'coder session raised', got: {error_msgs}"
         )
@@ -4000,9 +3990,7 @@ class TestTrackingCommentBeforePush:
 
         assert "comment" in call_order, f"Expected 'comment' in call_order: {call_order}"
         assert "push" in call_order, f"Expected 'push' in call_order: {call_order}"
-        assert call_order.index("comment") < call_order.index("push"), (
-            f"comment should come before push: {call_order}"
-        )
+        assert call_order.index("comment") < call_order.index("push"), f"comment should come before push: {call_order}"
 
     async def test_tracking_comment_has_incremented_attempt(self) -> None:
         """TS-07-32: Tracking comment references attempt+1 (attempt=2 for input=1)."""
@@ -4031,9 +4019,7 @@ class TestTrackingCommentBeforePush:
         assert len(comment_calls) >= 1
         # At least one comment body should reference attempt 2
         comment_bodies = [str(c[0][1]) for c in comment_calls]
-        assert any(
-            "2" in body for body in comment_bodies
-        ), f"Expected attempt 2 in comment, got: {comment_bodies}"
+        assert any("2" in body for body in comment_bodies), f"Expected attempt 2 in comment, got: {comment_bodies}"
 
 
 # ===========================================================================
@@ -4146,13 +4132,10 @@ class TestNonEmptyDiffForcePush:
                     pipeline=mock_pipeline,
                 )
 
-        info_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.INFO
-        ]
-        assert any(
-            "Feedback iteration" in m and "complete" in m
-            for m in info_msgs
-        ), f"Expected INFO 'Feedback iteration ... complete', got: {info_msgs}"
+        info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert any("Feedback iteration" in m and "complete" in m for m in info_msgs), (
+            f"Expected INFO 'Feedback iteration ... complete', got: {info_msgs}"
+        )
 
 
 # ===========================================================================
@@ -4243,9 +4226,9 @@ class TestEmptyDiffSkipsPush:
 
         comment_calls = mock_platform.add_issue_comment.call_args_list
         comment_bodies = [str(c[0][1]).lower() for c in comment_calls]
-        assert any(
-            "no changes" in body for body in comment_bodies
-        ), f"Expected _NO_CHANGES_MESSAGE comment, got: {comment_bodies}"
+        assert any("no changes" in body for body in comment_bodies), (
+            f"Expected _NO_CHANGES_MESSAGE comment, got: {comment_bodies}"
+        )
 
     async def test_empty_diff_logs_warning(
         self,
@@ -4273,13 +4256,10 @@ class TestEmptyDiffSkipsPush:
                     pipeline=mock_pipeline,
                 )
 
-        warn_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.WARNING
-        ]
-        assert any(
-            "coder produced no changes" in m.lower() or "no changes" in m.lower()
-            for m in warn_msgs
-        ), f"Expected WARNING about no changes, got: {warn_msgs}"
+        warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("coder produced no changes" in m.lower() or "no changes" in m.lower() for m in warn_msgs), (
+            f"Expected WARNING about no changes, got: {warn_msgs}"
+        )
 
 
 # ===========================================================================
@@ -4347,12 +4327,10 @@ class TestTrackingCommentPostFailure:
                     pipeline=mock_pipeline,
                 )
 
-        error_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.ERROR
-        ]
-        assert any(
-            "failed to post tracking comment" in m for m in error_msgs
-        ), f"Expected ERROR 'failed to post tracking comment', got: {error_msgs}"
+        error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("failed to post tracking comment" in m for m in error_msgs), (
+            f"Expected ERROR 'failed to post tracking comment', got: {error_msgs}"
+        )
 
     async def test_comment_post_failure_cleanup_called(self) -> None:
         """TS-07-E22: _cleanup_feedback_worktree called on comment post failure."""
@@ -4445,12 +4423,10 @@ class TestPushFailureAfterComment:
                     pipeline=mock_pipeline,
                 )
 
-        error_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.ERROR
-        ]
-        assert any(
-            "git push" in m and "failed" in m for m in error_msgs
-        ), f"Expected ERROR about push failure, got: {error_msgs}"
+        error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("git push" in m and "failed" in m for m in error_msgs), (
+            f"Expected ERROR about push failure, got: {error_msgs}"
+        )
 
     async def test_push_failure_tracking_comment_already_posted(self) -> None:
         """TS-07-E23: Tracking comment with attempt=2 is already persisted."""
@@ -4571,12 +4547,10 @@ class TestAutoCommitFailure:
                     pipeline=mock_pipeline,
                 )
 
-        error_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.ERROR
-        ]
-        assert any(
-            "auto-commit failed" in m for m in error_msgs
-        ), f"Expected ERROR 'auto-commit failed', got: {error_msgs}"
+        error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("auto-commit failed" in m for m in error_msgs), (
+            f"Expected ERROR 'auto-commit failed', got: {error_msgs}"
+        )
 
     async def test_auto_commit_failure_cleanup_called(self) -> None:
         """TS-07-E24: _cleanup_feedback_worktree called on auto-commit failure."""
@@ -4662,9 +4636,7 @@ class TestPushUsesForceNotLease:
 
         push_cmd = " ".join(push_args_captured)
         assert "--force" in push_cmd, f"Expected '--force' in push cmd: {push_cmd}"
-        assert "--force-with-lease" not in push_cmd, (
-            f"Should NOT use '--force-with-lease': {push_cmd}"
-        )
+        assert "--force-with-lease" not in push_cmd, f"Should NOT use '--force-with-lease': {push_cmd}"
 
 
 # ===========================================================================
@@ -4700,9 +4672,7 @@ class TestInfoLogsForTransitions:
             )
 
         info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-        assert any("merged" in m.lower() for m in info_msgs), (
-            f"Expected INFO about merge, got: {info_msgs}"
-        )
+        assert any("merged" in m.lower() for m in info_msgs), f"Expected INFO about merge, got: {info_msgs}"
 
     async def test_info_log_for_closed_without_merge(
         self,
@@ -4729,9 +4699,7 @@ class TestInfoLogsForTransitions:
 
         info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
         assert any(
-            "closed" in m.lower() and "merge" not in m.lower()
-            or "closed without merge" in m.lower()
-            for m in info_msgs
+            "closed" in m.lower() and "merge" not in m.lower() or "closed without merge" in m.lower() for m in info_msgs
         ), f"Expected INFO about closed-without-merge, got: {info_msgs}"
 
     async def test_info_log_for_ci_reentry(
@@ -4750,9 +4718,9 @@ class TestInfoLogsForTransitions:
             await _check_ci_status(pr_number=42, issue_number=10, platform=platform)
 
         info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-        assert any(
-            "Re-entry triggered" in m and "CI" in m for m in info_msgs
-        ), f"Expected INFO about CI re-entry, got: {info_msgs}"
+        assert any("Re-entry triggered" in m and "CI" in m for m in info_msgs), (
+            f"Expected INFO about CI re-entry, got: {info_msgs}"
+        )
 
     async def test_info_log_for_review_reentry(
         self,
@@ -4772,9 +4740,9 @@ class TestInfoLogsForTransitions:
             await _check_reviews(pr_number=42, issue_number=10, platform=platform)
 
         info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-        assert any(
-            "Re-entry triggered" in m and "review" in m.lower() for m in info_msgs
-        ), f"Expected INFO about review re-entry, got: {info_msgs}"
+        assert any("Re-entry triggered" in m and "review" in m.lower() for m in info_msgs), (
+            f"Expected INFO about review re-entry, got: {info_msgs}"
+        )
 
     async def test_info_log_for_retry_limit(
         self,
@@ -4831,9 +4799,9 @@ class TestInfoLogsForTransitions:
                 )
 
         info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-        assert any(
-            "Feedback iteration" in m and "complete" in m for m in info_msgs
-        ), f"Expected INFO 'Feedback iteration ... complete', got: {info_msgs}"
+        assert any("Feedback iteration" in m and "complete" in m for m in info_msgs), (
+            f"Expected INFO 'Feedback iteration ... complete', got: {info_msgs}"
+        )
 
 
 # ===========================================================================
@@ -4866,10 +4834,9 @@ class TestWarningLogsForAnomalies:
             )
 
         warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-        assert any(
-            "no valid tracking comment" in m.lower() or "tracking comment" in m.lower()
-            for m in warn_msgs
-        ), f"Expected WARNING about missing tracking comment, got: {warn_msgs}"
+        assert any("no valid tracking comment" in m.lower() or "tracking comment" in m.lower() for m in warn_msgs), (
+            f"Expected WARNING about missing tracking comment, got: {warn_msgs}"
+        )
 
     async def test_warning_for_ambiguous_ci(
         self,
@@ -4942,9 +4909,7 @@ class TestWarningLogsForAnomalies:
                 )
 
         warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-        assert any(
-            "no changes" in m.lower() for m in warn_msgs
-        ), f"Expected WARNING about no changes, got: {warn_msgs}"
+        assert any("no changes" in m.lower() for m in warn_msgs), f"Expected WARNING about no changes, got: {warn_msgs}"
 
     async def test_warning_for_diff_failure(
         self,
@@ -4973,9 +4938,7 @@ class TestWarningLogsForAnomalies:
                 )
 
         warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-        assert any(
-            "git diff" in m for m in warn_msgs
-        ), f"Expected WARNING about git diff failure, got: {warn_msgs}"
+        assert any("git diff" in m for m in warn_msgs), f"Expected WARNING about git diff failure, got: {warn_msgs}"
 
 
 # ===========================================================================
@@ -4998,11 +4961,14 @@ class TestErrorLogsForFailures:
         config = _make_config(max_pr_retries=2)
 
         with caplog.at_level(logging.ERROR):
-            with patch(
-                "agentfox.nightshift.pr_feedback._setup_feedback_worktree",
-                new_callable=AsyncMock,
-                side_effect=Exception("git fetch failed"),
-            ), patch("agentfox.nightshift.pr_feedback._cleanup_feedback_worktree"):
+            with (
+                patch(
+                    "agentfox.nightshift.pr_feedback._setup_feedback_worktree",
+                    new_callable=AsyncMock,
+                    side_effect=Exception("git fetch failed"),
+                ),
+                patch("agentfox.nightshift.pr_feedback._cleanup_feedback_worktree"),
+            ):
                 try:
                     await _run_feedback_iteration(
                         issue=issue,
@@ -5019,10 +4985,9 @@ class TestErrorLogsForFailures:
                     pass
 
         error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
-        assert any(
-            "fetch" in m.lower() or "worktree" in m.lower() or "setup" in m.lower()
-            for m in error_msgs
-        ), f"Expected ERROR about fetch/setup failure, got: {error_msgs}"
+        assert any("fetch" in m.lower() or "worktree" in m.lower() or "setup" in m.lower() for m in error_msgs), (
+            f"Expected ERROR about fetch/setup failure, got: {error_msgs}"
+        )
 
     async def test_error_for_worktree_failure(
         self,
@@ -5035,11 +5000,14 @@ class TestErrorLogsForFailures:
         config = _make_config(max_pr_retries=2)
 
         with caplog.at_level(logging.ERROR):
-            with patch(
-                "agentfox.nightshift.pr_feedback._setup_feedback_worktree",
-                new_callable=AsyncMock,
-                side_effect=Exception("git worktree add failed"),
-            ), patch("agentfox.nightshift.pr_feedback._cleanup_feedback_worktree"):
+            with (
+                patch(
+                    "agentfox.nightshift.pr_feedback._setup_feedback_worktree",
+                    new_callable=AsyncMock,
+                    side_effect=Exception("git worktree add failed"),
+                ),
+                patch("agentfox.nightshift.pr_feedback._cleanup_feedback_worktree"),
+            ):
                 try:
                     await _run_feedback_iteration(
                         issue=issue,
@@ -5056,10 +5024,9 @@ class TestErrorLogsForFailures:
                     pass
 
         error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
-        assert any(
-            "worktree" in m.lower() or "setup" in m.lower() or "failed" in m.lower()
-            for m in error_msgs
-        ), f"Expected ERROR about worktree failure, got: {error_msgs}"
+        assert any("worktree" in m.lower() or "setup" in m.lower() or "failed" in m.lower() for m in error_msgs), (
+            f"Expected ERROR about worktree failure, got: {error_msgs}"
+        )
 
     async def test_error_for_push_failure(
         self,
@@ -5090,9 +5057,9 @@ class TestErrorLogsForFailures:
                 )
 
         error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
-        assert any(
-            "git push" in m and "failed" in m for m in error_msgs
-        ), f"Expected ERROR about push failure, got: {error_msgs}"
+        assert any("git push" in m and "failed" in m for m in error_msgs), (
+            f"Expected ERROR about push failure, got: {error_msgs}"
+        )
 
     async def test_error_for_coder_exception(
         self,
@@ -5123,9 +5090,9 @@ class TestErrorLogsForFailures:
                 )
 
         error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
-        assert any(
-            "coder session raised" in m for m in error_msgs
-        ), f"Expected ERROR 'coder session raised', got: {error_msgs}"
+        assert any("coder session raised" in m for m in error_msgs), (
+            f"Expected ERROR 'coder session raised', got: {error_msgs}"
+        )
 
     async def test_error_for_autocommit_failure(
         self,
@@ -5157,9 +5124,9 @@ class TestErrorLogsForFailures:
                 )
 
         error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
-        assert any(
-            "auto-commit failed" in m for m in error_msgs
-        ), f"Expected ERROR 'auto-commit failed', got: {error_msgs}"
+        assert any("auto-commit failed" in m for m in error_msgs), (
+            f"Expected ERROR 'auto-commit failed', got: {error_msgs}"
+        )
 
     async def test_error_for_tracking_comment_failure(
         self,
@@ -5191,9 +5158,9 @@ class TestErrorLogsForFailures:
                 )
 
         error_msgs = [r.message for r in caplog.records if r.levelno == logging.ERROR]
-        assert any(
-            "failed to post tracking comment" in m for m in error_msgs
-        ), f"Expected ERROR 'failed to post tracking comment', got: {error_msgs}"
+        assert any("failed to post tracking comment" in m for m in error_msgs), (
+            f"Expected ERROR 'failed to post tracking comment', got: {error_msgs}"
+        )
 
 
 # ===========================================================================
@@ -5220,9 +5187,9 @@ class TestCleanupDebugLog:
             )
 
         debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
-        assert any(
-            "Feedback worktree not found" in m and "10" in m for m in debug_msgs
-        ), f"Expected DEBUG 'Feedback worktree not found...#10', got: {debug_msgs}"
+        assert any("Feedback worktree not found" in m and "10" in m for m in debug_msgs), (
+            f"Expected DEBUG 'Feedback worktree not found...#10', got: {debug_msgs}"
+        )
 
 
 # ===========================================================================
@@ -5292,9 +5259,7 @@ class TestPrFeedbackModuleFunctions:
         for name, obj in inspect.getmembers(prf, inspect.isclass):
             if obj is FixPipeline:
                 continue  # Imported but not subclassed
-            assert not issubclass(obj, FixPipeline), (
-                f"Class {name} subclasses FixPipeline — not allowed"
-            )
+            assert not issubclass(obj, FixPipeline), f"Class {name} subclasses FixPipeline — not allowed"
 
 
 # ===========================================================================
@@ -5514,10 +5479,7 @@ class TestLabelExclusivity:
         platform.assign_label.assert_awaited_once_with(10, LABEL_FIXED)
         platform.remove_label.assert_awaited_once_with(10, LABEL_PR)
         # af:fix should never be assigned during this transition
-        fix_label_calls = [
-            c for c in platform.assign_label.call_args_list
-            if c[0][1] == "af:fix"
-        ]
+        fix_label_calls = [c for c in platform.assign_label.call_args_list if c[0][1] == "af:fix"]
         assert len(fix_label_calls) == 0
 
     async def test_closed_without_merge_removes_af_pr_only(self) -> None:
@@ -5542,10 +5504,7 @@ class TestLabelExclusivity:
 
         platform.remove_label.assert_awaited_once_with(10, LABEL_PR)
         # af:fix should NOT be added
-        fix_label_calls = [
-            c for c in platform.assign_label.call_args_list
-            if c[0][1] == "af:fix"
-        ]
+        fix_label_calls = [c for c in platform.assign_label.call_args_list if c[0][1] == "af:fix"]
         assert len(fix_label_calls) == 0
 
 
@@ -5633,10 +5592,7 @@ class TestClosedWithoutMergeLabelTransition:
             pipeline=MagicMock(),
         )
 
-        fix_label_calls = [
-            c for c in platform.assign_label.call_args_list
-            if c[0][1] == "af:fix"
-        ]
+        fix_label_calls = [c for c in platform.assign_label.call_args_list if c[0][1] == "af:fix"]
         assert len(fix_label_calls) == 0
 
     async def test_closed_no_merge_issue_not_closed(self) -> None:
@@ -5891,10 +5847,9 @@ class TestSmokeCiFailureReEntry:
 
         # INFO log about feedback iteration complete
         info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-        assert any(
-            "feedback iteration" in m.lower() and "complete" in m.lower()
-            for m in info_msgs
-        ), f"Expected 'Feedback iteration ... complete' INFO log, got: {info_msgs}"
+        assert any("feedback iteration" in m.lower() and "complete" in m.lower() for m in info_msgs), (
+            f"Expected 'Feedback iteration ... complete' INFO log, got: {info_msgs}"
+        )
 
         # Cleanup called
         mock_cleanup.assert_called_once()
@@ -5963,10 +5918,9 @@ class TestSmokeReviewerChangesRequested:
 
         # INFO log about reviewer requested changes
         info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-        assert any(
-            "reviewer" in m.lower() and "changes" in m.lower()
-            for m in info_msgs
-        ), f"Expected INFO about reviewer changes, got: {info_msgs}"
+        assert any("reviewer" in m.lower() and "changes" in m.lower() for m in info_msgs), (
+            f"Expected INFO about reviewer changes, got: {info_msgs}"
+        )
 
         # Verify _run_feedback_iteration called with review trigger
         mock_iteration.assert_awaited_once()
@@ -6021,9 +5975,7 @@ class TestSmokeRetryLimitReached:
         # _run_feedback_iteration evaluates 3 > 2 as True
         # INFO log: 'Retry limit reached ... attempt 3/3'
         info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-        assert any(
-            "retry limit" in m.lower() for m in info_msgs
-        ), f"Expected INFO 'Retry limit' log, got: {info_msgs}"
+        assert any("retry limit" in m.lower() for m in info_msgs), f"Expected INFO 'Retry limit' log, got: {info_msgs}"
 
         # _RETRY_LIMIT_MESSAGE posted to issue
         platform.add_issue_comment.assert_awaited()
@@ -6084,9 +6036,7 @@ class TestSmokePrClosedWithoutMerge:
 
         # INFO log about closed without merge
         info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-        assert any(
-            "closed" in m.lower() for m in info_msgs
-        ), f"Expected INFO about PR closed, got: {info_msgs}"
+        assert any("closed" in m.lower() for m in info_msgs), f"Expected INFO about PR closed, got: {info_msgs}"
 
 
 class TestSmokeDaemonLifecycleMergeDetection:
@@ -6106,17 +6056,13 @@ class TestSmokeDaemonLifecycleMergeDetection:
         streams = build_streams(config, engine=engine_mock, budget=MagicMock())
 
         stream_names = [s.name for s in streams]
-        assert "pr-feedback" in stream_names, (
-            f"Expected 'pr-feedback' in stream names: {stream_names}"
-        )
+        assert "pr-feedback" in stream_names, f"Expected 'pr-feedback' in stream names: {stream_names}"
 
         # Verify pr-feedback comes after fix-pipeline in priority
         if "fix-pipeline" in stream_names:
             fix_idx = stream_names.index("fix-pipeline")
             pr_idx = stream_names.index("pr-feedback")
-            assert pr_idx > fix_idx, (
-                f"pr-feedback ({pr_idx}) should come after fix-pipeline ({fix_idx})"
-            )
+            assert pr_idx > fix_idx, f"pr-feedback ({pr_idx}) should come after fix-pipeline ({fix_idx})"
 
         # Step 2: Verify _check_open_prs processes merged PR
         from agentfox.nightshift.engine import NightShiftEngine
@@ -6244,18 +6190,15 @@ class TestSmokeEmptyDiffAfterCoder:
         # _NO_CHANGES_MESSAGE comment posted
         from agentfox.nightshift.pr_feedback import _NO_CHANGES_MESSAGE
 
-        assert any(
-            _NO_CHANGES_MESSAGE in body or "no changes" in body.lower()
-            for body in comment_bodies
-        ), f"Expected no-changes comment, got: {comment_bodies}"
+        assert any(_NO_CHANGES_MESSAGE in body or "no changes" in body.lower() for body in comment_bodies), (
+            f"Expected no-changes comment, got: {comment_bodies}"
+        )
 
         # WARNING log about no changes
-        warning_msgs = [
-            r.message for r in caplog.records if r.levelno == logging.WARNING
-        ]
-        assert any(
-            "no changes" in m.lower() for m in warning_msgs
-        ), f"Expected WARNING 'no changes', got: {warning_msgs}"
+        warning_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("no changes" in m.lower() for m in warning_msgs), (
+            f"Expected WARNING 'no changes', got: {warning_msgs}"
+        )
 
         # Cleanup called
         mock_cleanup.assert_called_once()

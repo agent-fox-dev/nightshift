@@ -76,7 +76,6 @@ class TestNightshiftNoAfissuesDep:
         assert not any("afissues" in dep for dep in deps), f"afissues should not be in nightshift deps: {deps}"
 
 
-
 # ── TS-03-P1: Property — afissues modules have zero workspace imports
 
 

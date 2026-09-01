@@ -335,7 +335,7 @@ class TestAgentFoxConfigBackwardCompatibility:
         Requirements: 02-REQ-1.6
         Test ID: TS-02-E3
         """
-        toml_str = '[night_shift]\nissue_check_interval = 900\n'
+        toml_str = "[night_shift]\nissue_check_interval = 900\n"
         data = tomllib.loads(toml_str)
         config = AgentFoxConfig.model_validate(data)
         assert config.carry_patch.enabled is False

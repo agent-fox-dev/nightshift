@@ -188,21 +188,25 @@ class TestSessionSummaryValidationDiagnostics:
 
     def test_string_rejected_approaches_accepted(self) -> None:
         """String items in rejected_approaches are accepted for backward compat."""
-        model = SessionSummary.model_validate({
-            "summary": "ok",
-            "rejected_approaches": ["just a string"],
-        })
+        model = SessionSummary.model_validate(
+            {
+                "summary": "ok",
+                "rejected_approaches": ["just a string"],
+            }
+        )
         assert model.rejected_approaches == ["just a string"]
 
     def test_mixed_rejected_approaches_accepted(self) -> None:
         """A mix of dicts and strings in rejected_approaches is accepted."""
-        model = SessionSummary.model_validate({
-            "summary": "ok",
-            "rejected_approaches": [
-                {"approach": "A", "reason": "B"},
-                "bare string",
-            ],
-        })
+        model = SessionSummary.model_validate(
+            {
+                "summary": "ok",
+                "rejected_approaches": [
+                    {"approach": "A", "reason": "B"},
+                    "bare string",
+                ],
+            }
+        )
         assert len(model.rejected_approaches) == 2
         assert isinstance(model.rejected_approaches[0], RejectedApproach)
         assert model.rejected_approaches[1] == "bare string"
@@ -250,4 +254,3 @@ class TestTestsAddedOrModifiedAccessible:
         )
         assert len(model.tests_added_or_modified) == 1
         assert model.tests_added_or_modified[0].path == "tests/test_a.py"
-

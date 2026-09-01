@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 
 from afhub._http import DEFAULT_TIMEOUT, request_with_retry
-from afhub.errors import HubError, _raise_for_status
+from afhub.errors import HubError, HubNotFoundError, _raise_for_status
 from afhub.models import (
     Patch,
     PatchStatusDashboard,
@@ -58,9 +58,7 @@ class HubClient:
     # -- Workspace operations ------------------------------------------------
 
     async def get_workspace(self, slug: str) -> Workspace:
-        resp = await request_with_retry(
-            self._http_client.get, f"/api/v1/workspaces/{slug}"
-        )
+        resp = await request_with_retry(self._http_client.get, f"/api/v1/workspaces/{slug}")
         _raise_for_status(resp)
         return Workspace(**resp.json())
 
@@ -75,25 +73,19 @@ class HubClient:
         return SyncResult(**resp.json())
 
     async def get_patch_status(self, slug: str) -> PatchStatusDashboard:
-        resp = await request_with_retry(
-            self._http_client.get, f"/api/v1/workspaces/{slug}/patch-status"
-        )
+        resp = await request_with_retry(self._http_client.get, f"/api/v1/workspaces/{slug}/patch-status")
         _raise_for_status(resp)
         return PatchStatusDashboard(**resp.json())
 
     async def reclone_workspace(self, slug: str) -> Workspace:
-        resp = await request_with_retry(
-            self._http_client.post, f"/api/v1/workspaces/{slug}/reclone"
-        )
+        resp = await request_with_retry(self._http_client.post, f"/api/v1/workspaces/{slug}/reclone")
         _raise_for_status(resp)
         return Workspace(**resp.json())
 
     # -- Patch operations ----------------------------------------------------
 
     async def list_patches(self, slug: str) -> list[Patch]:
-        resp = await request_with_retry(
-            self._http_client.get, f"/api/v1/workspaces/{slug}/patches"
-        )
+        resp = await request_with_retry(self._http_client.get, f"/api/v1/workspaces/{slug}/patches")
         _raise_for_status(resp)
         return [Patch(**p) for p in resp.json()]
 
@@ -200,9 +192,7 @@ class HubClient:
         return RebuildJob(**resp.json())
 
     async def list_rebuilds(self, slug: str) -> list[RebuildJob]:
-        resp = await request_with_retry(
-            self._http_client.get, f"/api/v1/workspaces/{slug}/rebuilds"
-        )
+        resp = await request_with_retry(self._http_client.get, f"/api/v1/workspaces/{slug}/rebuilds")
         _raise_for_status(resp)
         return [RebuildJob(**j) for j in resp.json()["jobs"]]
 
@@ -249,9 +239,7 @@ class HubClient:
     # -- Rerere operations ---------------------------------------------------
 
     async def list_rerere(self, slug: str) -> list[RerereEntry]:
-        resp = await request_with_retry(
-            self._http_client.get, f"/api/v1/workspaces/{slug}/rerere"
-        )
+        resp = await request_with_retry(self._http_client.get, f"/api/v1/workspaces/{slug}/rerere")
         _raise_for_status(resp)
         return [RerereEntry(**e) for e in resp.json()["resolutions"]]
 
@@ -281,17 +269,13 @@ class HubClient:
         _raise_for_status(resp)
 
     async def set_variable(self, slug: str, key: str, value: str) -> None:
-        from afhub.errors import HubNotFoundError
-
         try:
             return await self.update_variable(slug, key, value)
         except HubNotFoundError:
             return await self.create_variable(slug, key, value)
 
     async def delete_variable(self, slug: str, key: str) -> None:
-        resp = await request_with_retry(
-            self._http_client.delete, f"/api/v1/workspaces/{slug}/vars/{key}"
-        )
+        resp = await request_with_retry(self._http_client.delete, f"/api/v1/workspaces/{slug}/vars/{key}")
         _raise_for_status(resp)
 
     async def get_resolved_variables(self, slug: str) -> dict[str, str]:

@@ -99,7 +99,6 @@ class TestReadOnlyCallSitesNeverWrite:
         conn.close()
 
 
-
 # ---------------------------------------------------------------------------
 # TS-06-P2: open_knowledge_store requires explicit read_only
 # ---------------------------------------------------------------------------
@@ -199,5 +198,3 @@ class TestAssembleContextZeroWrites:
             f"assemble_context modified DB for group {task_group}: before={counts_before}, after={counts_after}"
         )
         conn.close()
-
-

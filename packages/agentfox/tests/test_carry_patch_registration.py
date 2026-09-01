@@ -91,12 +91,8 @@ def _make_hub_client(
     if submit_raises is not None:
         client.submit_rebuild = AsyncMock(side_effect=submit_raises)
     else:
-        client.submit_rebuild = AsyncMock(
-            return_value=(submit_return or _RebuildJob("job-1", "queued"))
-        )
-    client.list_rebuilds = AsyncMock(
-        return_value=(list_rebuilds_result if list_rebuilds_result is not None else [])
-    )
+        client.submit_rebuild = AsyncMock(return_value=(submit_return or _RebuildJob("job-1", "queued")))
+    client.list_rebuilds = AsyncMock(return_value=(list_rebuilds_result if list_rebuilds_result is not None else []))
     return client
 
 
@@ -248,8 +244,7 @@ class TestCarryPatchCallOrder:
         # This assertion verifies the constructor signature we expect.
         sig = inspect.signature(FixPipeline.__init__)
         assert "hub_client" in sig.parameters, (
-            "FixPipeline.__init__ should accept hub_client parameter "
-            "(to be added in group 4 implementation)"
+            "FixPipeline.__init__ should accept hub_client parameter (to be added in group 4 implementation)"
         )
 
     async def test_carry_patch_does_not_run_local_harvest(self) -> None:
@@ -262,9 +257,7 @@ class TestCarryPatchCallOrder:
         hub_client = _make_hub_client()
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
-        with patch.object(
-            pipeline, "_harvest_and_push", AsyncMock(return_value=["changed.py"])
-        ) as mock_harvest:
+        with patch.object(pipeline, "_harvest_and_push", AsyncMock(return_value=["changed.py"])) as mock_harvest:
             with (
                 patch.object(pipeline, "_auto_commit_pending_changes", AsyncMock()),
                 patch(
@@ -309,9 +302,7 @@ class TestAddPatchArguments:
         """
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client()
-        pipeline = _make_pipeline(
-            config, hub_client=hub_client, workspace_slug="my-workspace"
-        )
+        pipeline = _make_pipeline(config, hub_client=hub_client, workspace_slug="my-workspace")
 
         await _call_integrate_fix(pipeline, branch_name="fix/issue-42")
 
@@ -420,9 +411,7 @@ class TestSubmitRebuildAndConflict:
         hub_client = _make_hub_client(
             submit_return=_RebuildJob("job-1", "queued"),
         )
-        pipeline = _make_pipeline(
-            config, hub_client=hub_client, workspace_slug="my-workspace"
-        )
+        pipeline = _make_pipeline(config, hub_client=hub_client, workspace_slug="my-workspace")
 
         await _call_integrate_fix(pipeline)
 
@@ -465,9 +454,7 @@ class TestSubmitRebuildAndConflict:
             submit_raises=HubConflictError(status_code=409, message="rebuild already running", error_type="conflict"),
             list_rebuilds_result=[_RebuildJob("active-job-1", "running")],
         )
-        pipeline = _make_pipeline(
-            config, hub_client=hub_client, workspace_slug="my-workspace"
-        )
+        pipeline = _make_pipeline(config, hub_client=hub_client, workspace_slug="my-workspace")
 
         await _call_integrate_fix(pipeline)
 
@@ -491,9 +478,7 @@ class TestSubmitRebuildAndConflict:
                 _RebuildJob("active-job-2", "queued"),
             ],
         )
-        pipeline = _make_pipeline(
-            config, hub_client=hub_client, workspace_slug="my-workspace"
-        )
+        pipeline = _make_pipeline(config, hub_client=hub_client, workspace_slug="my-workspace")
 
         await _call_integrate_fix(pipeline)
 
@@ -516,9 +501,7 @@ class TestHubNoActivePatchesError:
     Test ID: TS-03-5
     """
 
-    async def test_hub_no_active_patches_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_hub_no_active_patches_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """A WARNING is logged when submit_rebuild raises HubNoActivePatchesError.
 
         Requirements: 03-REQ-1.5
@@ -529,7 +512,9 @@ class TestHubNoActivePatchesError:
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
             submit_raises=HubNoActivePatchesError(
-                status_code=400, message="no active patches", error_type="no_active_patches",
+                status_code=400,
+                message="no active patches",
+                error_type="no_active_patches",
             ),
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
@@ -539,11 +524,7 @@ class TestHubNoActivePatchesError:
 
         hub_client.add_patch.assert_called_once()
         # Verify that a warning about skipped rebuild was logged.
-        assert any(
-            "no active patches" in r.message.lower()
-            for r in caplog.records
-            if r.levelno >= logging.WARNING
-        ), (
+        assert any("no active patches" in r.message.lower() for r in caplog.records if r.levelno >= logging.WARNING), (
             "Expected a WARNING-level log message mentioning 'no active patches'"
         )
 
@@ -556,7 +537,9 @@ class TestHubNoActivePatchesError:
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
             submit_raises=HubNoActivePatchesError(
-                status_code=400, message="no active patches", error_type="no_active_patches",
+                status_code=400,
+                message="no active patches",
+                error_type="no_active_patches",
             ),
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
@@ -594,7 +577,9 @@ class TestHubNoActivePatchesError:
         config = _make_config(carry_patch_enabled=True)
         hub_client = _make_hub_client(
             submit_raises=HubNoActivePatchesError(
-                status_code=400, message="no active patches", error_type="no_active_patches",
+                status_code=400,
+                message="no active patches",
+                error_type="no_active_patches",
             ),
         )
         pipeline = _make_pipeline(config, hub_client=hub_client)
@@ -603,9 +588,7 @@ class TestHubNoActivePatchesError:
 
         hub_client.add_patch.assert_called_once()
         # "merged" status means success — no retry needed.
-        assert result[0] == "merged", (
-            f"Expected 'merged' (no retry) on HubNoActivePatchesError, got {result[0]!r}"
-        )
+        assert result[0] == "merged", f"Expected 'merged' (no retry) on HubNoActivePatchesError, got {result[0]!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -633,16 +616,15 @@ class TestRebuildTerminalStatus:
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
         result = await _call_integrate_fix(
-            pipeline, poll_return=_RebuildJob("job-1", "completed"),
+            pipeline,
+            poll_return=_RebuildJob("job-1", "completed"),
         )
 
         # Verify carry-patch path was entered and completed successfully.
         hub_client.add_patch.assert_called_once()
         # "merged" status indicates success — issue will be closed normally,
         # not marked for retry.
-        assert result[0] == "merged", (
-            f"Expected 'merged' (normal closure) on completed rebuild, got {result[0]!r}"
-        )
+        assert result[0] == "merged", f"Expected 'merged' (normal closure) on completed rebuild, got {result[0]!r}"
 
     async def test_failed_rebuild_marks_issue_for_retry(self) -> None:
         """When poll_rebuild returns 'failed', the fix pipeline marks issue for retry.
@@ -657,14 +639,13 @@ class TestRebuildTerminalStatus:
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
         result = await _call_integrate_fix(
-            pipeline, poll_return=_RebuildJob("job-1", "failed"),
+            pipeline,
+            poll_return=_RebuildJob("job-1", "failed"),
         )
 
         hub_client.add_patch.assert_called_once()
         # "error" status signals the issue should be retried.
-        assert result[0] == "error", (
-            f"Expected 'error' (retry) on failed rebuild, got {result[0]!r}"
-        )
+        assert result[0] == "error", f"Expected 'error' (retry) on failed rebuild, got {result[0]!r}"
 
     async def test_dead_letter_rebuild_marks_issue_for_retry(self) -> None:
         """When poll_rebuild returns 'dead_letter', the fix pipeline marks issue for retry.
@@ -679,14 +660,13 @@ class TestRebuildTerminalStatus:
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
         result = await _call_integrate_fix(
-            pipeline, poll_return=_RebuildJob("job-1", "dead_letter"),
+            pipeline,
+            poll_return=_RebuildJob("job-1", "dead_letter"),
         )
 
         hub_client.add_patch.assert_called_once()
         # "error" status signals the issue should be retried.
-        assert result[0] == "error", (
-            f"Expected 'error' (retry) on dead_letter rebuild, got {result[0]!r}"
-        )
+        assert result[0] == "error", f"Expected 'error' (retry) on dead_letter rebuild, got {result[0]!r}"
 
     async def test_cancelled_rebuild_marks_issue_for_retry(self) -> None:
         """When poll_rebuild returns 'cancelled', treated same as 'failed'.
@@ -701,13 +681,12 @@ class TestRebuildTerminalStatus:
         pipeline = _make_pipeline(config, hub_client=hub_client)
 
         result = await _call_integrate_fix(
-            pipeline, poll_return=_RebuildJob("job-1", "cancelled"),
+            pipeline,
+            poll_return=_RebuildJob("job-1", "cancelled"),
         )
 
         hub_client.add_patch.assert_called_once()
-        assert result[0] == "error", (
-            f"Expected 'error' (retry) on cancelled rebuild, got {result[0]!r}"
-        )
+        assert result[0] == "error", f"Expected 'error' (retry) on cancelled rebuild, got {result[0]!r}"
 
     async def test_cancelled_rebuild_emits_rebuild_failed_audit_event(self) -> None:
         """CARRY_PATCH_REBUILD_FAILED is emitted when rebuild is cancelled.
@@ -723,9 +702,7 @@ class TestRebuildTerminalStatus:
 
         emitted_event_types: list[str] = []
 
-        def capture_emit(
-            sink: object, run_id: str, event_type: object, **kwargs: object
-        ) -> None:
+        def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_event_types.append(str(event_type))
 
         with patch(
@@ -733,7 +710,8 @@ class TestRebuildTerminalStatus:
             side_effect=capture_emit,
         ):
             await _call_integrate_fix(
-                pipeline, poll_return=_RebuildJob("job-1", "cancelled"),
+                pipeline,
+                poll_return=_RebuildJob("job-1", "cancelled"),
             )
 
         assert "carry_patch.rebuild_failed" in emitted_event_types, (
@@ -770,14 +748,8 @@ class TestCarryPatchAuditEvents:
             "CARRY_PATCH_CONFLICT_FAILED",
             "CARRY_PATCH_MERGED_DETECTED",
         ]
-        missing = [
-            name
-            for name in expected_constants
-            if not hasattr(AuditEventType, name)
-        ]
-        assert not missing, (
-            f"Missing AuditEventType constants in afaudit.events: {missing}"
-        )
+        missing = [name for name in expected_constants if not hasattr(AuditEventType, name)]
+        assert not missing, f"Missing AuditEventType constants in afaudit.events: {missing}"
 
     def test_carry_patch_audit_event_string_values_correct(self) -> None:
         """Carry-patch AuditEventType constants have the correct string values.
@@ -798,9 +770,7 @@ class TestCarryPatchAuditEvents:
         }
         for const_name, expected_value in expected_values.items():
             # hasattr check: if constant missing, test fails with clear message
-            assert hasattr(AuditEventType, const_name), (
-                f"AuditEventType.{const_name} not found"
-            )
+            assert hasattr(AuditEventType, const_name), f"AuditEventType.{const_name} not found"
             actual = getattr(AuditEventType, const_name)
             assert str(actual) == expected_value, (
                 f"AuditEventType.{const_name} = {actual!r}, expected {expected_value!r}"
@@ -910,10 +880,7 @@ class TestCarryPatchAuditEvents:
             "carry_patch.rebuild_completed",
         ]
         missing = [e for e in expected_events if e not in emitted_event_types]
-        assert not missing, (
-            f"Missing carry-patch audit events: {missing}. "
-            f"Emitted: {emitted_event_types}"
-        )
+        assert not missing, f"Missing carry-patch audit events: {missing}. Emitted: {emitted_event_types}"
 
     async def test_rebuild_failed_event_emitted_on_failed_rebuild(self) -> None:
         """CARRY_PATCH_REBUILD_FAILED is emitted when rebuild returns 'failed'.
@@ -929,9 +896,7 @@ class TestCarryPatchAuditEvents:
 
         emitted_event_types: list[str] = []
 
-        def capture_emit(
-            sink: object, run_id: str, event_type: object, **kwargs: object
-        ) -> None:
+        def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_event_types.append(str(event_type))
 
         with patch(
@@ -939,7 +904,8 @@ class TestCarryPatchAuditEvents:
             side_effect=capture_emit,
         ):
             await _call_integrate_fix(
-                pipeline, poll_return=_RebuildJob("job-1", "failed"),
+                pipeline,
+                poll_return=_RebuildJob("job-1", "failed"),
             )
 
         assert "carry_patch.rebuild_failed" in emitted_event_types, (
@@ -1065,9 +1031,7 @@ class TestPollRebuildTimeout:
             pipeline._platform.add_issue_comment = AsyncMock()
             result = await pipeline._integrate_fix(issue, spec, workspace)
 
-        assert result[0] == "error", (
-            f"Expected 'error' (retry) on poll_rebuild timeout, got {result[0]!r}"
-        )
+        assert result[0] == "error", f"Expected 'error' (retry) on poll_rebuild timeout, got {result[0]!r}"
 
     async def test_poll_rebuild_timeout_emits_rebuild_failed(self) -> None:
         """CARRY_PATCH_REBUILD_FAILED is emitted when poll_rebuild times out.
@@ -1086,9 +1050,7 @@ class TestPollRebuildTimeout:
 
         emitted_event_types: list[str] = []
 
-        def capture_emit(
-            sink: object, run_id: str, event_type: object, **kwargs: object
-        ) -> None:
+        def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_event_types.append(str(event_type))
 
         with (
@@ -1148,14 +1110,9 @@ class TestListRebuildsEmptyAfterConflict:
 
         hub_client.list_rebuilds.assert_called_once()
         # No rebuild to poll — should return success.
-        assert result[0] == "merged", (
-            f"Expected 'merged' (skip rebuild) when list_rebuilds is empty, "
-            f"got {result[0]!r}"
-        )
+        assert result[0] == "merged", f"Expected 'merged' (skip rebuild) when list_rebuilds is empty, got {result[0]!r}"
 
-    async def test_empty_list_rebuilds_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_empty_list_rebuilds_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """A warning is logged when list_rebuilds returns empty after HubConflictError.
 
         Requirements: 03-REQ-1.E3
@@ -1208,9 +1165,7 @@ class TestAddPatchFailure:
 
         result = await _call_integrate_fix(pipeline)
 
-        assert result[0] == "error", (
-            f"Expected 'error' (retry) on add_patch failure, got {result[0]!r}"
-        )
+        assert result[0] == "error", f"Expected 'error' (retry) on add_patch failure, got {result[0]!r}"
 
     async def test_add_patch_failure_skips_submit_rebuild(self) -> None:
         """submit_rebuild is NOT called when add_patch raises.
@@ -1242,9 +1197,7 @@ class TestAddPatchFailure:
 
         emitted_event_types: list[str] = []
 
-        def capture_emit(
-            sink: object, run_id: str, event_type: object, **kwargs: object
-        ) -> None:
+        def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_event_types.append(str(event_type))
 
         with patch(

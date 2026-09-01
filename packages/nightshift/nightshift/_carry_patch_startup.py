@@ -51,15 +51,13 @@ async def startup_helper(
         workspace = await hub_client.get_workspace(slug)
     except HubAuthError:
         click.echo(
-            "Error: invalid PAT or insufficient permissions — "
-            "check your --token / AF_HUB_TOKEN value",
+            "Error: invalid PAT or insufficient permissions — check your --token / AF_HUB_TOKEN value",
             err=True,
         )
         sys.exit(1)
     except HubForbiddenError:
         click.echo(
-            "Error: PAT has insufficient scope or permissions "
-            "for this workspace",
+            "Error: PAT has insufficient scope or permissions for this workspace",
             err=True,
         )
         sys.exit(1)
@@ -71,8 +69,7 @@ async def startup_helper(
         sys.exit(1)
     except HubConnectionError:
         click.echo(
-            "Error: could not connect to the hub — "
-            "check your network connection and hub URL",
+            "Error: could not connect to the hub — check your network connection and hub URL",
             err=True,
         )
         sys.exit(1)
@@ -80,8 +77,7 @@ async def startup_helper(
     # -- Step 2: Validate workspace_mode (REQ-3.4) --------------------------
     if workspace.workspace_mode != "carry_patch":
         click.echo(
-            f"Error: workspace is not in carry-patch mode "
-            f"(workspace_mode={workspace.workspace_mode!r})",
+            f"Error: workspace is not in carry-patch mode (workspace_mode={workspace.workspace_mode!r})",
             err=True,
         )
         sys.exit(1)
@@ -89,8 +85,7 @@ async def startup_helper(
     # -- Step 3: Validate clone_status (REQ-3.5) ----------------------------
     if workspace.clone_status != "ready":
         click.echo(
-            f"Error: workspace clone is not ready "
-            f"(clone_status={workspace.clone_status!r})",
+            f"Error: workspace clone is not ready (clone_status={workspace.clone_status!r})",
             err=True,
         )
         sys.exit(1)

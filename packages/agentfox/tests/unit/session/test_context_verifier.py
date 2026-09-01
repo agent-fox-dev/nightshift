@@ -99,5 +99,3 @@ def _setup_spec(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return spec_dir
-
-

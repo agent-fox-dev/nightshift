@@ -830,9 +830,7 @@ class TestRemovePatchNotFound:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=404,
-            json=lambda: {
-                "error": {"code": 404, "message": "not found", "error_type": "not_found"}
-            },
+            json=lambda: {"error": {"code": 404, "message": "not found", "error_type": "not_found"}},
         )
         client._http_client.delete = AsyncMock(return_value=mock_response)
         with pytest.raises(HubNotFoundError) as exc_info:
@@ -1116,9 +1114,7 @@ class TestListRebuilds:
     async def test_list_rebuilds_returns_list_of_rebuild_job_instances(self) -> None:
         """list_rebuilds returns a list where every element is a RebuildJob."""
         client = HubClient("https://hub.example.com", "pat")
-        mock_response = MagicMock(
-            status_code=200, json=lambda: {"jobs": [self._JOB_DATA]}
-        )
+        mock_response = MagicMock(status_code=200, json=lambda: {"jobs": [self._JOB_DATA]})
         client._http_client.get = AsyncMock(return_value=mock_response)
         result = await client.list_rebuilds("my-workspace")
         assert isinstance(result, list)
@@ -1128,9 +1124,7 @@ class TestListRebuilds:
     async def test_list_rebuilds_unwraps_jobs_envelope(self) -> None:
         """list_rebuilds unwraps {jobs: [...]} and does not return the wrapper dict."""
         client = HubClient("https://hub.example.com", "pat")
-        mock_response = MagicMock(
-            status_code=200, json=lambda: {"jobs": [self._JOB_DATA]}
-        )
+        mock_response = MagicMock(status_code=200, json=lambda: {"jobs": [self._JOB_DATA]})
         client._http_client.get = AsyncMock(return_value=mock_response)
         result = await client.list_rebuilds("my-workspace")
         assert not isinstance(result, dict)
@@ -1369,9 +1363,7 @@ class TestGetRebuildNotFound:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=404,
-            json=lambda: {
-                "error": {"code": 404, "message": "not found", "error_type": "not_found"}
-            },
+            json=lambda: {"error": {"code": 404, "message": "not found", "error_type": "not_found"}},
         )
         client._http_client.get = AsyncMock(return_value=mock_response)
         with pytest.raises(HubNotFoundError) as exc_info:
@@ -1576,9 +1568,7 @@ class TestListRerere:
     async def test_list_rerere_returns_list_of_rerere_entry_instances(self) -> None:
         """list_rerere returns a list where every element is a RerereEntry."""
         client = HubClient("https://hub.example.com", "pat")
-        mock_response = MagicMock(
-            status_code=200, json=lambda: {"resolutions": [self._ENTRY_DATA]}
-        )
+        mock_response = MagicMock(status_code=200, json=lambda: {"resolutions": [self._ENTRY_DATA]})
         client._http_client.get = AsyncMock(return_value=mock_response)
         result = await client.list_rerere("my-workspace")
         assert isinstance(result, list)
@@ -1589,9 +1579,7 @@ class TestListRerere:
     async def test_list_rerere_unwraps_resolutions_envelope(self) -> None:
         """list_rerere unwraps {'resolutions': [...]} and does not return the wrapper dict."""
         client = HubClient("https://hub.example.com", "pat")
-        mock_response = MagicMock(
-            status_code=200, json=lambda: {"resolutions": [self._ENTRY_DATA]}
-        )
+        mock_response = MagicMock(status_code=200, json=lambda: {"resolutions": [self._ENTRY_DATA]})
         client._http_client.get = AsyncMock(return_value=mock_response)
         result = await client.list_rerere("my-workspace")
         assert not isinstance(result, dict)
@@ -1787,9 +1775,7 @@ class TestSetVariablePatchFallback:
     Requirements: 01-REQ-4.6
     """
 
-    _PATCH_404 = {
-        "error": {"code": 404, "message": "not found", "error_type": "not_found"}
-    }
+    _PATCH_404 = {"error": {"code": 404, "message": "not found", "error_type": "not_found"}}
 
     async def test_set_variable_falls_back_to_post_on_404(self) -> None:
         """set_variable returns None when PATCH returns 404 and POST returns 201."""
@@ -1892,9 +1878,7 @@ class TestGetResolvedVariables:
     async def test_get_resolved_variables_returns_dict(self) -> None:
         """get_resolved_variables returns a dict."""
         client = HubClient("https://hub.example.com", "pat")
-        mock_response = MagicMock(
-            status_code=200, json=lambda: {"KEY1": "val1", "KEY2": "val2"}
-        )
+        mock_response = MagicMock(status_code=200, json=lambda: {"KEY1": "val1", "KEY2": "val2"})
         client._http_client.get = AsyncMock(return_value=mock_response)
         result = await client.get_resolved_variables("my-workspace")
         assert isinstance(result, dict)
@@ -1902,9 +1886,7 @@ class TestGetResolvedVariables:
     async def test_get_resolved_variables_returns_correct_values(self) -> None:
         """get_resolved_variables returns the key-value pairs from the response."""
         client = HubClient("https://hub.example.com", "pat")
-        mock_response = MagicMock(
-            status_code=200, json=lambda: {"KEY1": "val1", "KEY2": "val2"}
-        )
+        mock_response = MagicMock(status_code=200, json=lambda: {"KEY1": "val1", "KEY2": "val2"})
         client._http_client.get = AsyncMock(return_value=mock_response)
         result = await client.get_resolved_variables("my-workspace")
         assert result == {"KEY1": "val1", "KEY2": "val2"}
@@ -1992,9 +1974,7 @@ class TestForgetRerereNotFound:
         client = HubClient("https://hub.example.com", "pat")
         mock_response = MagicMock(
             status_code=404,
-            json=lambda: {
-                "error": {"code": 404, "message": "not found", "error_type": "not_found"}
-            },
+            json=lambda: {"error": {"code": 404, "message": "not found", "error_type": "not_found"}},
         )
         client._http_client.delete = AsyncMock(return_value=mock_response)
         with pytest.raises(HubNotFoundError) as exc_info:
@@ -2016,9 +1996,7 @@ class TestSetVariableDoubleNotFound:
 
     async def test_set_variable_raises_hub_not_found_error_when_both_404(self) -> None:
         """set_variable raises HubNotFoundError from the POST failure."""
-        error_envelope = {
-            "error": {"code": 404, "message": "not found", "error_type": "not_found"}
-        }
+        error_envelope = {"error": {"code": 404, "message": "not found", "error_type": "not_found"}}
         patch_404 = MagicMock(status_code=404, json=lambda: error_envelope)
         post_404 = MagicMock(status_code=404, json=lambda: error_envelope)
         client = HubClient("https://hub.example.com", "pat")
@@ -2030,9 +2008,7 @@ class TestSetVariableDoubleNotFound:
 
     async def test_set_variable_does_not_retry_after_post_404(self) -> None:
         """set_variable calls PATCH once and POST once, then stops (no further retry)."""
-        error_envelope = {
-            "error": {"code": 404, "message": "not found", "error_type": "not_found"}
-        }
+        error_envelope = {"error": {"code": 404, "message": "not found", "error_type": "not_found"}}
         patch_404 = MagicMock(status_code=404, json=lambda: error_envelope)
         post_404 = MagicMock(status_code=404, json=lambda: error_envelope)
         client = HubClient("https://hub.example.com", "pat")
@@ -2130,9 +2106,7 @@ class TestSetVariableConnectionError:
         """set_variable raises HubConnectionError; POST is never called."""
         client = HubClient("https://hub.example.com", "pat")
         # Mock the PATCH path to raise HubConnectionError (as if retries exhausted)
-        client._http_client.patch = AsyncMock(
-            side_effect=httpx.ConnectTimeout("timeout")
-        )
+        client._http_client.patch = AsyncMock(side_effect=httpx.ConnectTimeout("timeout"))
         client._http_client.post = AsyncMock()
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HubConnectionError):
@@ -2178,9 +2152,7 @@ class TestRetryWithBackoff:
         4 total attempts (1 original + 3 retries) (01-PROP-4).
         """
         client = HubClient("https://hub.example.com", "pat")
-        client._http_client.get = AsyncMock(
-            side_effect=httpx.ConnectTimeout("timeout")
-        )
+        client._http_client.get = AsyncMock(side_effect=httpx.ConnectTimeout("timeout"))
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(HubConnectionError):
                 await client.get_workspace("ws1")
@@ -2193,9 +2165,7 @@ class TestRetryWithBackoff:
         4 total attempts.
         """
         client = HubClient("https://hub.example.com", "pat")
-        client._http_client.get = AsyncMock(
-            side_effect=httpx.ReadTimeout("read timeout")
-        )
+        client._http_client.get = AsyncMock(side_effect=httpx.ReadTimeout("read timeout"))
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HubConnectionError):
                 await client.get_workspace("ws1")
@@ -2206,9 +2176,7 @@ class TestRetryWithBackoff:
         4 total attempts.
         """
         client = HubClient("https://hub.example.com", "pat")
-        client._http_client.get = AsyncMock(
-            side_effect=httpx.ConnectError("connection refused")
-        )
+        client._http_client.get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
         with patch("asyncio.sleep", new_callable=AsyncMock):
             with pytest.raises(HubConnectionError):
                 await client.get_workspace("ws1")
@@ -2230,9 +2198,7 @@ class TestRetryWithBackoff:
                 "sync_status": "ok",
             },
         )
-        client._http_client.get = AsyncMock(
-            side_effect=[httpx.ConnectTimeout("timeout"), success_response]
-        )
+        client._http_client.get = AsyncMock(side_effect=[httpx.ConnectTimeout("timeout"), success_response])
         with patch("asyncio.sleep", new_callable=AsyncMock):
             result = await client.get_workspace("ws1")
             assert result.slug == "ws1"
@@ -2242,9 +2208,7 @@ class TestRetryWithBackoff:
         (01-REQ-9.E3, 01-PROP-5).
         """
         client = HubClient("https://hub.example.com", "pat")
-        client._http_client.get = AsyncMock(
-            side_effect=httpx.ConnectTimeout("timeout")
-        )
+        client._http_client.get = AsyncMock(side_effect=httpx.ConnectTimeout("timeout"))
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(HubConnectionError):
                 await client.get_workspace("ws1")
@@ -2256,9 +2220,7 @@ class TestRetryWithBackoff:
         1.0, 2.0, 4.0 for 3 retries (01-REQ-9.1).
         """
         client = HubClient("https://hub.example.com", "pat")
-        client._http_client.get = AsyncMock(
-            side_effect=httpx.ConnectTimeout("timeout")
-        )
+        client._http_client.get = AsyncMock(side_effect=httpx.ConnectTimeout("timeout"))
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(HubConnectionError):
                 await client.get_workspace("ws1")
@@ -2283,9 +2245,7 @@ class TestNonRetryableExceptions:
         without retry.
         """
         client = HubClient("https://hub.example.com", "pat")
-        client._http_client.get = AsyncMock(
-            side_effect=httpx.TimeoutException("base timeout")
-        )
+        client._http_client.get = AsyncMock(side_effect=httpx.TimeoutException("base timeout"))
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(httpx.TimeoutException):
                 await client.get_workspace("ws1")
@@ -2297,9 +2257,7 @@ class TestNonRetryableExceptions:
         (01-REQ-9.E4).
         """
         client = HubClient("https://hub.example.com", "pat")
-        client._http_client.get = AsyncMock(
-            side_effect=httpx.PoolTimeout("pool timeout")
-        )
+        client._http_client.get = AsyncMock(side_effect=httpx.PoolTimeout("pool timeout"))
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(httpx.PoolTimeout):
                 await client.get_workspace("ws1")
@@ -2311,9 +2269,7 @@ class TestNonRetryableExceptions:
         (01-REQ-9.E4).
         """
         client = HubClient("https://hub.example.com", "pat")
-        client._http_client.get = AsyncMock(
-            side_effect=httpx.WriteTimeout("write timeout")
-        )
+        client._http_client.get = AsyncMock(side_effect=httpx.WriteTimeout("write timeout"))
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             with pytest.raises(httpx.WriteTimeout):
                 await client.get_workspace("ws1")
@@ -2486,9 +2442,7 @@ class TestPytestConfig:
                 with open(filepath) as f:
                     content = f.read()
                 for pat in patterns:
-                    assert pat not in content, (
-                        f"External mock library found in {fname}"
-                    )
+                    assert pat not in content, f"External mock library found in {fname}"
 
 
 # ---------------------------------------------------------------------------
@@ -2549,15 +2503,11 @@ class TestSmoke:
                 "completed_at": "2026-01-01T00:05:00Z",
             },
         )
-        client._http_client.get = AsyncMock(
-            side_effect=[running_response, completed_response]
-        )
+        client._http_client.get = AsyncMock(side_effect=[running_response, completed_response])
 
         # 4. Poll until terminal
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await poll_rebuild(
-                client, "ws1", "job-1", timeout=600.0, interval=5.0
-            )
+            result = await poll_rebuild(client, "ws1", "job-1", timeout=600.0, interval=5.0)
 
         # 5. Verify outcomes
         assert isinstance(result, RebuildJob)

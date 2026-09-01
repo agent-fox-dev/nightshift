@@ -212,7 +212,6 @@ class TestSmoke6ReadStdin:
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # TS-03-SMOKE-8: emit_error with state parameter
 # PATH-8: emit_error(exc, state='executing') -> JSON with top-level 'state'
@@ -336,5 +335,3 @@ class TestStubAudit:
                 "ProgressDisplay",
             ):
                 assert callable(sym), f"{sym_name} is not callable"
-
-

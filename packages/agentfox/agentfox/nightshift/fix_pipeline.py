@@ -822,6 +822,38 @@ class FixPipeline:
     # Prompt building (82-REQ-7.2, 82-REQ-7.3, 82-REQ-8.1, 82-REQ-5.E1)
     # ------------------------------------------------------------------
 
+    def _assemble_afspec_context(
+        self,
+        spec: InMemorySpec,
+        triage: TriageResult,
+        knowledge_context: str,
+    ) -> str:
+        """Build context string via afspec rendering with ad-hoc fallback.
+
+        Tries ``build_afspec_from_triage`` + ``render_inmemory_spec_sections``
+        first. Falls back to ``_render_criteria_context`` when afspec
+        construction fails. Appends *knowledge_context* if non-empty.
+        """
+        try:
+            afspec_spec = build_afspec_from_triage(triage, spec.issue_number)
+            rendered = render_inmemory_spec_sections(afspec_spec)
+            if isinstance(rendered, list):
+                rendered = "\n\n".join(rendered)
+            context = f"{spec.system_context}\n\n{rendered}"
+        except Exception:
+            logger.warning(
+                "Failed to build afspec from triage for issue #%d, falling back to ad-hoc criteria rendering",
+                spec.issue_number,
+                exc_info=True,
+            )
+            criteria_context = self._render_criteria_context(triage)
+            context = spec.system_context
+            if criteria_context:
+                context = f"{context}\n\n{criteria_context}"
+        if knowledge_context:
+            context = f"{context}\n\n{knowledge_context}"
+        return context
+
     def _build_coder_prompt(
         self,
         spec: InMemorySpec,
@@ -861,27 +893,10 @@ class FixPipeline:
             context = spec.system_context
             if criteria_context:
                 context = f"{context}\n\n{criteria_context}"
+            if knowledge_context:
+                context = f"{context}\n\n{knowledge_context}"
         else:
-            # Assemble criteria context via afspec rendering (happy path)
-            try:
-                afspec_spec = build_afspec_from_triage(triage, spec.issue_number)
-                rendered = render_inmemory_spec_sections(afspec_spec)
-                if isinstance(rendered, list):
-                    rendered = "\n\n".join(rendered)
-                context = f"{spec.system_context}\n\n{rendered}"
-            except Exception:
-                logger.warning(
-                    "Failed to build afspec from triage for issue #%d, falling back to ad-hoc criteria rendering",
-                    spec.issue_number,
-                    exc_info=True,
-                )
-                criteria_context = self._render_criteria_context(triage)
-                context = spec.system_context
-                if criteria_context:
-                    context = f"{context}\n\n{criteria_context}"
-
-        if knowledge_context:
-            context = f"{context}\n\n{knowledge_context}"
+            context = self._assemble_afspec_context(spec, triage, knowledge_context)
 
         system_prompt = build_system_prompt(
             context=context,
@@ -941,26 +956,7 @@ class FixPipeline:
             )
             return system_prompt, task_prompt
 
-        # Assemble criteria context via afspec rendering (happy path)
-        try:
-            afspec_spec = build_afspec_from_triage(triage, spec.issue_number)
-            rendered = render_inmemory_spec_sections(afspec_spec)
-            if isinstance(rendered, list):
-                rendered = "\n\n".join(rendered)
-            context = f"{spec.system_context}\n\n{rendered}"
-        except Exception:
-            logger.warning(
-                "Failed to build afspec from triage for issue #%d, falling back to ad-hoc criteria rendering",
-                spec.issue_number,
-                exc_info=True,
-            )
-            criteria_context = self._render_criteria_context(triage)
-            context = spec.system_context
-            if criteria_context:
-                context = f"{context}\n\n{criteria_context}"
-
-        if knowledge_context:
-            context = f"{context}\n\n{knowledge_context}"
+        context = self._assemble_afspec_context(spec, triage, knowledge_context)
 
         system_prompt = build_system_prompt(
             context=context,
@@ -1204,7 +1200,9 @@ class FixPipeline:
         carry_patch_cfg = getattr(self._config, "carry_patch", None)
         if carry_patch_cfg and carry_patch_cfg.enabled and self._hub_client is not None:
             return await self._carry_patch_register_and_rebuild(
-                issue, spec, workspace,
+                issue,
+                spec,
+                workspace,
             )
 
         # 02-REQ-2.2 / 02-REQ-3.2 / 02-REQ-4.2: Branch on merge strategy
@@ -1395,8 +1393,7 @@ class FixPipeline:
         except HubConflictError:
             # 03-REQ-1.4: A rebuild is already running — poll it instead.
             logger.info(
-                "submit_rebuild raised HubConflictError for %s — "
-                "looking up active rebuild",
+                "submit_rebuild raised HubConflictError for %s — looking up active rebuild",
                 slug,
             )
             active_jobs = await hub_client.list_rebuilds(slug)
@@ -1405,8 +1402,7 @@ class FixPipeline:
             else:
                 # 03-REQ-1.E3: Empty list — skip rebuild polling.
                 logger.warning(
-                    "list_rebuilds returned empty after HubConflictError for %s "
-                    "— skipping rebuild polling",
+                    "list_rebuilds returned empty after HubConflictError for %s — skipping rebuild polling",
                     slug,
                 )
         except HubNoActivePatchesError:
