@@ -1850,23 +1850,25 @@ class TestPyprojectTomlDependencies:
     Requirements: 01-REQ-10.2
     """
 
+    _PYPROJECT = os.path.join(os.path.dirname(__file__), "..", "pyproject.toml")
+
     def test_runtime_dep_httpx(self) -> None:
         """pyproject.toml declares httpx>=0.27 as a runtime dependency."""
-        with open("packages/afhub/pyproject.toml", "rb") as f:
+        with open(self._PYPROJECT, "rb") as f:
             config = tomllib.load(f)
         deps = config["project"]["dependencies"]
         assert any("httpx" in d and "0.27" in d for d in deps)
 
     def test_runtime_dep_pydantic(self) -> None:
         """pyproject.toml declares pydantic>=2.0 as a runtime dependency."""
-        with open("packages/afhub/pyproject.toml", "rb") as f:
+        with open(self._PYPROJECT, "rb") as f:
             config = tomllib.load(f)
         deps = config["project"]["dependencies"]
         assert any("pydantic" in d and "2.0" in d for d in deps)
 
     def test_python_requires_312(self) -> None:
         """pyproject.toml declares requires-python >= 3.12."""
-        with open("packages/afhub/pyproject.toml", "rb") as f:
+        with open(self._PYPROJECT, "rb") as f:
             config = tomllib.load(f)
         assert config["project"]["requires-python"] == ">=3.12"
 
@@ -1882,6 +1884,8 @@ class TestPackageLayout:
 
     Requirements: 01-REQ-10.3
     """
+
+    _PKG_ROOT = os.path.join(os.path.dirname(__file__), "..")
 
     @pytest.mark.parametrize(
         "rel_path",
@@ -1902,7 +1906,7 @@ class TestPackageLayout:
     )
     def test_file_exists(self, rel_path: str) -> None:
         """Expected file exists within the packages/afhub directory."""
-        full_path = os.path.join("packages/afhub", rel_path)
+        full_path = os.path.join(self._PKG_ROOT, rel_path)
         assert os.path.exists(full_path), f"Expected file not found: {full_path}"
 
 
@@ -1919,9 +1923,11 @@ class TestPytestConfig:
     Requirements: 01-REQ-10.4
     """
 
+    _PYPROJECT = os.path.join(os.path.dirname(__file__), "..", "pyproject.toml")
+
     def test_asyncio_mode_auto_configured(self) -> None:
         """pyproject.toml configures asyncio_mode='auto' for pytest."""
-        with open("packages/afhub/pyproject.toml", "rb") as f:
+        with open(self._PYPROJECT, "rb") as f:
             config = tomllib.load(f)
         ini_opts = config.get("tool", {}).get("pytest", {}).get("ini_options", {})
         assert ini_opts.get("asyncio_mode") == "auto"
@@ -1932,7 +1938,7 @@ class TestPytestConfig:
         # matching itself.
         ext_lib = "pytest" + "_" + "mock"
         patterns = [f"from {ext_lib}", f"import {ext_lib}"]
-        test_dir = os.path.join("packages", "afhub", "tests")
+        test_dir = os.path.dirname(__file__)
         for fname in os.listdir(test_dir):
             if fname.startswith("test_") and fname.endswith(".py"):
                 filepath = os.path.join(test_dir, fname)
@@ -1942,3 +1948,81 @@ class TestPytestConfig:
                     assert pat not in content, (
                         f"External mock library found in {fname}"
                     )
+
+
+# ---------------------------------------------------------------------------
+# TS-01-SMOKE-1: End-to-end smoke test — submit rebuild and poll to completion
+# ---------------------------------------------------------------------------
+
+
+class TestSmoke:
+    """TS-01-SMOKE-1 — End-to-end smoke test: instantiate HubClient, submit a
+    rebuild, and poll until the job reaches 'completed' status using mocked
+    httpx responses.
+
+    Real components: HubClient, poll_rebuild, RebuildJob, afhub._http retry logic.
+    Mockable: httpx.AsyncClient (network I/O), asyncio.sleep.
+
+    Requirements: 01-REQ-1, 01-REQ-3, 01-REQ-8, 01-REQ-9
+    Execution path: 01-PATH-1
+    """
+
+    async def test_smoke_submit_rebuild_and_poll_to_completion(self) -> None:
+        """Submit a rebuild via HubClient, then poll until 'completed'."""
+        from afhub.polling import poll_rebuild
+
+        # 1. Instantiate HubClient with real constructor (creates httpx.AsyncClient)
+        client = HubClient("https://hub.example.com", "test-pat")
+
+        # 2. Mock POST /rebuild -> 202 with pending RebuildJob
+        submit_response = MagicMock(
+            status_code=202,
+            json=lambda: {
+                "id": "job-1",
+                "status": "pending",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        )
+        client._http_client.post = AsyncMock(return_value=submit_response)
+
+        job = await client.submit_rebuild("ws1", strategy="merge", fail_mode="stop")
+        assert isinstance(job, RebuildJob)
+        assert job.status == "pending"
+        assert job.id == "job-1"
+
+        # 3. Mock GET /rebuilds/:id -> running, then completed
+        running_response = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "id": "job-1",
+                "status": "running",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        )
+        completed_response = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "id": "job-1",
+                "status": "completed",
+                "created_at": "2026-01-01T00:00:00Z",
+                "completed_at": "2026-01-01T00:05:00Z",
+            },
+        )
+        client._http_client.get = AsyncMock(
+            side_effect=[running_response, completed_response]
+        )
+
+        # 4. Poll until terminal
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result = await poll_rebuild(
+                client, "ws1", "job-1", timeout=600.0, interval=5.0
+            )
+
+        # 5. Verify outcomes
+        assert isinstance(result, RebuildJob)
+        assert result.status == "completed"
+        assert result.id == "job-1"
+        # asyncio.sleep called once with interval=5.0 between the two polls
+        mock_sleep.assert_called_once_with(5.0)
+        # get_rebuild called exactly twice (running -> completed)
+        assert client._http_client.get.call_count == 2
