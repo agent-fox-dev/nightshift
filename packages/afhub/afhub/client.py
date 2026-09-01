@@ -1,6 +1,6 @@
 """HubClient -- async client for the af-hub carry-patch REST API.
 
-Partial implementation: error handling is wired (group 9).
+Implements retry logic (group 12) and error handling (group 9).
 Full response parsing pending (groups 13-14).
 """
 
@@ -10,20 +10,26 @@ from typing import Any
 
 import httpx
 
-from afhub._http import DEFAULT_TIMEOUT
+from afhub._http import DEFAULT_TIMEOUT, request_with_retry
 from afhub.errors import _raise_for_status
+from afhub.models import Workspace
 
 
 class HubClient:
     """Async client for the af-hub carry-patch REST API.
 
     Wraps an ``httpx.AsyncClient`` with bearer-token auth, API-versioned
-    URLs, and structured error dispatch.
+    URLs, structured error dispatch, and transient-error retry with
+    exponential backoff.
     """
 
     _http_client: httpx.AsyncClient
 
     def __init__(self, endpoint_url: str, pat: str) -> None:
+        if not endpoint_url:
+            raise ValueError("endpoint_url must not be empty")
+        if not pat:
+            raise ValueError("pat must not be empty")
         self._http_client = httpx.AsyncClient(
             base_url=endpoint_url.rstrip("/"),
             headers={"Authorization": f"Bearer {pat}"},
@@ -42,33 +48,43 @@ class HubClient:
 
     # -- Workspace operations ------------------------------------------------
 
-    async def get_workspace(self, slug: str) -> Any:
-        resp = await self._http_client.get(f"/api/v1/workspaces/{slug}")
+    async def get_workspace(self, slug: str) -> Workspace:
+        resp = await request_with_retry(
+            self._http_client.get, f"/api/v1/workspaces/{slug}"
+        )
         _raise_for_status(resp)
-        return resp.json()
+        return Workspace(**resp.json())
 
     async def sync_workspace(self, slug: str, *, reset_to_upstream: bool = False) -> Any:
-        body: dict[str, Any] = {}
-        if reset_to_upstream:
-            body["reset_to_upstream"] = True
-        resp = await self._http_client.post(f"/api/v1/workspaces/{slug}/sync", json=body)
+        body: dict[str, Any] = {"reset_to_upstream": reset_to_upstream}
+        resp = await request_with_retry(
+            self._http_client.post,
+            f"/api/v1/workspaces/{slug}/sync",
+            json=body,
+        )
         _raise_for_status(resp)
         return resp.json()
 
     async def get_patch_status(self, slug: str) -> Any:
-        resp = await self._http_client.get(f"/api/v1/workspaces/{slug}/patch-status")
+        resp = await request_with_retry(
+            self._http_client.get, f"/api/v1/workspaces/{slug}/patch-status"
+        )
         _raise_for_status(resp)
         return resp.json()
 
     async def reclone_workspace(self, slug: str) -> Any:
-        resp = await self._http_client.post(f"/api/v1/workspaces/{slug}/reclone")
+        resp = await request_with_retry(
+            self._http_client.post, f"/api/v1/workspaces/{slug}/reclone"
+        )
         _raise_for_status(resp)
         return resp.json()
 
     # -- Patch operations ----------------------------------------------------
 
     async def list_patches(self, slug: str) -> Any:
-        resp = await self._http_client.get(f"/api/v1/workspaces/{slug}/patches")
+        resp = await request_with_retry(
+            self._http_client.get, f"/api/v1/workspaces/{slug}/patches"
+        )
         _raise_for_status(resp)
         return resp.json()
 
@@ -94,37 +110,52 @@ class HubClient:
             body["if_not_exists"] = True
         if skip_branch_check:
             body["skip_branch_check"] = True
-        resp = await self._http_client.post(f"/api/v1/workspaces/{slug}/patches", json=body)
+        resp = await request_with_retry(
+            self._http_client.post,
+            f"/api/v1/workspaces/{slug}/patches",
+            json=body,
+        )
         _raise_for_status(resp)
         return resp.json()
 
     async def add_patches_batch(self, slug: str, patches: list[dict[str, Any]]) -> Any:
-        resp = await self._http_client.post(f"/api/v1/workspaces/{slug}/patches", json=patches)
+        resp = await request_with_retry(
+            self._http_client.post,
+            f"/api/v1/workspaces/{slug}/patches",
+            json=patches,
+        )
         _raise_for_status(resp)
         return resp.json()
 
     async def update_patch(self, slug: str, patch_id: str, **kwargs: Any) -> Any:
-        resp = await self._http_client.patch(
-            f"/api/v1/workspaces/{slug}/patches/{patch_id}", json=kwargs
+        resp = await request_with_retry(
+            self._http_client.patch,
+            f"/api/v1/workspaces/{slug}/patches/{patch_id}",
+            json=kwargs,
         )
         _raise_for_status(resp)
         return resp.json()
 
     async def remove_patch(self, slug: str, patch_id: str) -> None:
-        resp = await self._http_client.delete(f"/api/v1/workspaces/{slug}/patches/{patch_id}")
+        resp = await request_with_retry(
+            self._http_client.delete,
+            f"/api/v1/workspaces/{slug}/patches/{patch_id}",
+        )
         _raise_for_status(resp)
 
     async def restore_patch(self, slug: str, patch_id: str) -> Any:
-        resp = await self._http_client.post(
-            f"/api/v1/workspaces/{slug}/patches/{patch_id}/restore"
+        resp = await request_with_retry(
+            self._http_client.post,
+            f"/api/v1/workspaces/{slug}/patches/{patch_id}/restore",
         )
         _raise_for_status(resp)
         return resp.json()
 
     async def reorder_patches(self, slug: str, ordered_ids: list[str]) -> Any:
-        resp = await self._http_client.post(
+        resp = await request_with_retry(
+            self._http_client.post,
             f"/api/v1/workspaces/{slug}/patches/reorder",
-            json={"ordered_ids": ordered_ids},
+            json={"patch_ids": ordered_ids},
         )
         _raise_for_status(resp)
         return resp.json()
@@ -136,55 +167,64 @@ class HubClient:
         slug: str,
         *,
         strategy: str | None = None,
-        fail_fast: bool = False,
+        fail_mode: str | None = None,
     ) -> Any:
         body: dict[str, Any] = {}
         if strategy is not None:
             body["strategy"] = strategy
-        if fail_fast:
-            body["fail_fast"] = True
-        resp = await self._http_client.post(
-            f"/api/v1/workspaces/{slug}/rebuild", json=body
+        if fail_mode is not None:
+            body["fail_mode"] = fail_mode
+        resp = await request_with_retry(
+            self._http_client.post,
+            f"/api/v1/workspaces/{slug}/rebuild",
+            json=body,
         )
         _raise_for_status(resp)
         return resp.json()
 
     async def get_rebuild(self, slug: str, job_id: str) -> Any:
-        resp = await self._http_client.get(
-            f"/api/v1/workspaces/{slug}/rebuilds/{job_id}"
+        resp = await request_with_retry(
+            self._http_client.get,
+            f"/api/v1/workspaces/{slug}/rebuilds/{job_id}",
         )
         _raise_for_status(resp)
         return resp.json()
 
     async def list_rebuilds(self, slug: str) -> Any:
-        resp = await self._http_client.get(f"/api/v1/workspaces/{slug}/rebuilds")
+        resp = await request_with_retry(
+            self._http_client.get, f"/api/v1/workspaces/{slug}/rebuilds"
+        )
         _raise_for_status(resp)
         return resp.json()
 
     async def cancel_rebuild(self, slug: str, job_id: str) -> Any:
-        resp = await self._http_client.post(
-            f"/api/v1/workspaces/{slug}/rebuilds/{job_id}/cancel"
+        resp = await request_with_retry(
+            self._http_client.delete,
+            f"/api/v1/workspaces/{slug}/rebuilds/{job_id}",
         )
         _raise_for_status(resp)
         return resp.json()
 
     async def requeue_rebuild(self, slug: str, job_id: str) -> Any:
-        resp = await self._http_client.post(
-            f"/api/v1/workspaces/{slug}/rebuilds/{job_id}/requeue"
+        resp = await request_with_retry(
+            self._http_client.post,
+            f"/api/v1/workspaces/{slug}/rebuilds/{job_id}/requeue",
         )
         _raise_for_status(resp)
         return resp.json()
 
     async def rollback_rebuild(self, slug: str, job_id: str) -> Any:
-        resp = await self._http_client.post(
-            f"/api/v1/workspaces/{slug}/rebuilds/{job_id}/rollback"
+        resp = await request_with_retry(
+            self._http_client.post,
+            f"/api/v1/workspaces/{slug}/rebuilds/{job_id}/rollback",
         )
         _raise_for_status(resp)
         return resp.json()
 
     async def get_rebuild_preview(self, slug: str) -> Any:
-        resp = await self._http_client.get(
-            f"/api/v1/workspaces/{slug}/rebuild/preview"
+        resp = await request_with_retry(
+            self._http_client.get,
+            f"/api/v1/workspaces/{slug}/rebuild-preview",
         )
         _raise_for_status(resp)
         return resp.json()
@@ -192,35 +232,38 @@ class HubClient:
     # -- Rerere operations ---------------------------------------------------
 
     async def list_rerere(self, slug: str) -> Any:
-        resp = await self._http_client.get(f"/api/v1/workspaces/{slug}/rerere")
+        resp = await request_with_retry(
+            self._http_client.get, f"/api/v1/workspaces/{slug}/rerere"
+        )
         _raise_for_status(resp)
         return resp.json()
 
     async def forget_rerere(self, slug: str, pathspec: str) -> None:
-        resp = await self._http_client.delete(
-            f"/api/v1/workspaces/{slug}/rerere/{pathspec}"
+        resp = await request_with_retry(
+            self._http_client.delete,
+            f"/api/v1/workspaces/{slug}/rerere/{pathspec}",
         )
         _raise_for_status(resp)
 
     # -- Variable operations -------------------------------------------------
 
-    async def create_variable(self, slug: str, key: str, value: str) -> Any:
-        resp = await self._http_client.post(
+    async def create_variable(self, slug: str, key: str, value: str) -> None:
+        resp = await request_with_retry(
+            self._http_client.post,
             f"/api/v1/workspaces/{slug}/vars",
             json={"key": key, "value": value},
         )
         _raise_for_status(resp)
-        return None
 
-    async def update_variable(self, slug: str, key: str, value: str) -> Any:
-        resp = await self._http_client.patch(
+    async def update_variable(self, slug: str, key: str, value: str) -> None:
+        resp = await request_with_retry(
+            self._http_client.patch,
             f"/api/v1/workspaces/{slug}/vars/{key}",
             json={"value": value},
         )
         _raise_for_status(resp)
-        return resp.json()
 
-    async def set_variable(self, slug: str, key: str, value: str) -> Any:
+    async def set_variable(self, slug: str, key: str, value: str) -> None:
         from afhub.errors import HubNotFoundError
 
         try:
@@ -229,12 +272,15 @@ class HubClient:
             return await self.create_variable(slug, key, value)
 
     async def delete_variable(self, slug: str, key: str) -> None:
-        resp = await self._http_client.delete(f"/api/v1/workspaces/{slug}/vars/{key}")
+        resp = await request_with_retry(
+            self._http_client.delete, f"/api/v1/workspaces/{slug}/vars/{key}"
+        )
         _raise_for_status(resp)
 
     async def get_resolved_variables(self, slug: str) -> Any:
-        resp = await self._http_client.get(
-            f"/api/v1/workspaces/{slug}/vars/resolved"
+        resp = await request_with_retry(
+            self._http_client.get,
+            f"/api/v1/workspaces/{slug}/vars/resolved",
         )
         _raise_for_status(resp)
         return resp.json()
@@ -242,7 +288,8 @@ class HubClient:
     # -- Secret operations ---------------------------------------------------
 
     async def create_secret(self, slug: str, key: str, value: str) -> None:
-        resp = await self._http_client.post(
+        resp = await request_with_retry(
+            self._http_client.post,
             f"/api/v1/workspaces/{slug}/secrets",
             json={"key": key, "value": value},
         )

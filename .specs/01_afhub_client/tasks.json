@@ -681,7 +681,7 @@
           "requirement_refs": [
             "01-REQ-9"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
