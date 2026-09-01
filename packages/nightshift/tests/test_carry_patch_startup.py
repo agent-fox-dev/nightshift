@@ -1,4 +1,5 @@
-"""Tests for CLI flag 3-tier resolution and CWD validation in nightshift carry-patch mode.
+"""Tests for CLI flag 3-tier resolution, CWD validation, config generation,
+and workspace variable initialization in nightshift carry-patch mode.
 
 Tests verify that hub URL, workspace slug, and PAT are resolved in priority
 order: CLI flag > environment variable > config file. They also verify the
@@ -8,14 +9,24 @@ CWD validation tests (TS-02-16 through TS-02-26) verify the async startup
 helper: HubClient construction, workspace state checks, git subprocess
 invocation, origin URL matching, and logging on success.
 
-These are initially failing tests (groups 2–3). They will pass once the CLI
-flags (--hub-url, --workspace, --token), 3-tier resolution logic, and the
-async startup helper are implemented (groups 5–9).
+Config generation tests (TS-02-27 through TS-02-32) verify the default
+config file atomic write, skip-if-exists behaviour, PAT exclusion,
+integration_branch handling, OS error resilience, and no-reload guarantee.
+
+Workspace variable init tests (TS-02-33 through TS-02-35) verify
+set_variable calls, non-fatal exception handling, and HubClient lifecycle.
+
+These are initially failing tests (groups 2–4). They will pass once the CLI
+flags (--hub-url, --workspace, --token), 3-tier resolution logic, the async
+startup helper, config generator, and variable init are implemented
+(groups 5–9).
 
 Specification: 02_carry_patch_bootstrap
 Test IDs: TS-02-7 through TS-02-15 (CLI resolution),
-          TS-02-16 through TS-02-26 (CWD validation)
-Requirements: 02-REQ-2, 02-REQ-3
+          TS-02-16 through TS-02-26 (CWD validation),
+          TS-02-27 through TS-02-32 (config generation),
+          TS-02-33 through TS-02-35 (workspace variable init)
+Requirements: 02-REQ-2, 02-REQ-3, 02-REQ-4, 02-REQ-5
 """
 
 from __future__ import annotations
@@ -26,6 +37,7 @@ import os
 import subprocess
 from collections.abc import Generator
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1283,4 +1295,680 @@ class TestCwdValidationOriginUrl:
         captured = capfd.readouterr()
         assert "cd" in captured.err, (
             f"Expected URL mismatch error with 'cd' instruction; got: {captured.err!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for config generation and variable init tests (TS-02-27 – TS-02-35)
+# ---------------------------------------------------------------------------
+
+
+def _successful_cwd_patches(
+    mock_client: MagicMock,
+    mock_git: MagicMock,
+) -> contextmanager:
+    """Context manager that patches HubClient construction and subprocess.run
+    so that CWD validation succeeds, allowing tests to focus on behaviour
+    that happens *after* validation (config generation, variable init).
+    """
+    from contextlib import ExitStack
+
+    @contextmanager
+    def _cm():
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "nightshift._carry_patch_startup.HubClient",
+                    create=True,
+                    return_value=mock_client,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "subprocess.run",
+                    return_value=mock_git,
+                )
+            )
+            yield
+
+    return _cm()
+
+
+def _passing_cwd_mocks(
+    *,
+    set_variable_side_effect: BaseException | list | None = None,
+) -> tuple[MagicMock, MagicMock]:
+    """Build a (mock_client, mock_git) pair that passes CWD validation.
+
+    ``set_variable_side_effect`` is forwarded to
+    ``mock_client.set_variable.side_effect`` for variable-init tests.
+    """
+    client = _mock_hub_client()
+    if set_variable_side_effect is not None:
+        client.set_variable.side_effect = set_variable_side_effect
+    git = _git_result(returncode=0, stdout=_VALID_GIT_URL.encode() + b"\n")
+    return client, git
+
+
+# ---------------------------------------------------------------------------
+# TS-02-27: Config written on first start (atomic write, sections present)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigGenerationOnFirstStart:
+    """Verify that .nightshift/config.toml is atomically written when absent.
+
+    Requirements: 02-REQ-4.1, 02-REQ-4.E1
+    Test ID: TS-02-27
+    """
+
+    def test_config_written_on_first_start(self, tmp_path: Path) -> None:
+        """When .nightshift/config.toml does not exist in CWD, the startup
+        helper creates it with [hub], [carry_patch], and [workspace] sections
+        via an atomic temp-file rename.  The .tmp file must not remain.
+
+        TS-02-27 / 02-REQ-4.1
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+        config_path = tmp_path / ".nightshift" / "config.toml"
+        tmp_file = tmp_path / ".nightshift" / "config.toml.tmp"
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
+
+        assert config_path.exists(), (
+            ".nightshift/config.toml was not created on first start"
+        )
+        content = config_path.read_text(encoding="utf-8")
+        assert "[hub]" in content, (
+            f"Generated config missing [hub] section; content:\n{content}"
+        )
+        assert "[carry_patch]" in content, (
+            f"Generated config missing [carry_patch] section; content:\n{content}"
+        )
+        assert "[workspace]" in content, (
+            f"Generated config missing [workspace] section; content:\n{content}"
+        )
+        assert "endpoint_url" in content, (
+            f"Generated config missing endpoint_url field; content:\n{content}"
+        )
+        assert not tmp_file.exists(), (
+            ".nightshift/config.toml.tmp should not remain after successful write"
+        )
+
+    def test_config_dir_already_exists(self, tmp_path: Path) -> None:
+        """When .nightshift/ directory exists but config.toml is absent,
+        config generation proceeds without error (no double-mkdir crash).
+
+        02-REQ-4.E1
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+        nightshift_dir = tmp_path / ".nightshift"
+        nightshift_dir.mkdir()
+        config_path = nightshift_dir / "config.toml"
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
+
+        assert config_path.exists(), (
+            ".nightshift/config.toml was not created when directory already existed"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-28: Config not overwritten if exists
+# ---------------------------------------------------------------------------
+
+
+class TestConfigGenerationSkipIfExists:
+    """Verify that existing .nightshift/config.toml is never modified.
+
+    Requirements: 02-REQ-4.2, 02-PROP-5
+    Test ID: TS-02-28
+    """
+
+    def test_config_not_overwritten_if_exists(self, tmp_path: Path) -> None:
+        """When .nightshift/config.toml already exists, config generation is
+        skipped entirely and the existing file is unchanged.
+
+        TS-02-28 / 02-REQ-4.2
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+        nightshift_dir = tmp_path / ".nightshift"
+        nightshift_dir.mkdir()
+        config_path = nightshift_dir / "config.toml"
+        original_content = "existing content"
+        config_path.write_text(original_content)
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
+
+        assert config_path.read_text() == original_content, (
+            "Existing .nightshift/config.toml was modified during startup; "
+            "config generation must be skipped when the file already exists"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-29: integration_branch = "" when workspace.integration_branch is None
+# TS-02-E3: integration_branch = "<branch_name>" when non-empty
+# ---------------------------------------------------------------------------
+
+
+class TestConfigIntegrationBranch:
+    """Verify integration_branch is written correctly in generated config.
+
+    Requirements: 02-REQ-4.3, 02-REQ-4.E3
+    Test IDs: TS-02-29, 02-REQ-4.E3
+    """
+
+    def test_integration_branch_none_writes_empty_string(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """When workspace.integration_branch is None, the generated config
+        writes integration_branch = "" in the [workspace] section.
+
+        TS-02-29 / 02-REQ-4.3
+        """
+        workspace = _valid_workspace()
+        workspace.integration_branch = None  # type: ignore[attr-defined]
+        mock_client = _mock_hub_client(get_workspace_returns=workspace)
+        mock_git = _git_result(
+            returncode=0,
+            stdout=_VALID_GIT_URL.encode() + b"\n",
+        )
+        config_path = tmp_path / ".nightshift" / "config.toml"
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
+
+        assert config_path.exists(), (
+            ".nightshift/config.toml was not created"
+        )
+        content = config_path.read_text()
+        assert 'integration_branch = ""' in content, (
+            f"Expected integration_branch = \"\" for None; "
+            f"content:\n{content}"
+        )
+
+    def test_integration_branch_nonempty_writes_value(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """When workspace.integration_branch is a non-empty string, the
+        generated config writes the actual branch name.
+
+        02-REQ-4.E3
+        """
+        workspace = _valid_workspace()
+        workspace.integration_branch = "develop"  # type: ignore[attr-defined]
+        mock_client = _mock_hub_client(get_workspace_returns=workspace)
+        mock_git = _git_result(
+            returncode=0,
+            stdout=_VALID_GIT_URL.encode() + b"\n",
+        )
+        config_path = tmp_path / ".nightshift" / "config.toml"
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
+
+        assert config_path.exists(), (
+            ".nightshift/config.toml was not created"
+        )
+        content = config_path.read_text()
+        assert 'integration_branch = "develop"' in content, (
+            f"Expected integration_branch = \"develop\"; "
+            f"content:\n{content}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-30: Config write failure is non-fatal
+# ---------------------------------------------------------------------------
+
+
+class TestConfigWriteFailureNonFatal:
+    """Verify that OS-level errors during config generation are handled
+    gracefully with a warning log and continued startup.
+
+    Requirements: 02-REQ-4.4, 02-REQ-4.E2
+    Test ID: TS-02-30
+    """
+
+    def test_config_write_failure_logs_warning_and_continues(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When writing .nightshift/config.toml raises an OS-level exception,
+        the startup helper emits logging.warning and continues without exiting.
+
+        TS-02-30 / 02-REQ-4.4
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+            patch("os.rename", side_effect=PermissionError("Permission denied")),
+            caplog.at_level(logging.WARNING),
+        ):
+            # Should NOT raise — startup continues despite the write failure
+            _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
+
+        warning_messages = [
+            r.message for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert any(
+            "permission" in m.lower() or "failed" in m.lower() or "config" in m.lower()
+            for m in warning_messages
+        ), (
+            f"Expected a WARNING log about config write failure; "
+            f"got warnings: {warning_messages}"
+        )
+
+    def test_rename_failure_leaves_tmp_and_continues(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When the atomic rename step fails after writing the temp file,
+        the .tmp file may remain on disk but nightshift continues.
+
+        02-REQ-4.E2
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+        nightshift_dir = tmp_path / ".nightshift"
+        nightshift_dir.mkdir()
+
+        original_rename = os.rename
+
+        def _failing_rename(src: str, dst: str) -> None:
+            # Only fail the config.toml rename, not other renames
+            if "config.toml" in str(dst) and not str(dst).endswith(".tmp"):
+                raise OSError("Simulated rename failure")
+            original_rename(src, dst)
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+            patch("os.rename", side_effect=_failing_rename),
+            caplog.at_level(logging.WARNING),
+        ):
+            # Should NOT raise — startup continues despite rename failure
+            _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
+
+        warning_messages = [
+            r.message for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert len(warning_messages) >= 1, (
+            "Expected at least one WARNING log about the rename failure"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-31: PAT is never written to the generated config
+# ---------------------------------------------------------------------------
+
+
+class TestConfigPatExclusion:
+    """Verify that the PAT / token value is never persisted in the config file.
+
+    Requirements: 02-REQ-4.5, 02-PROP-6
+    Test ID: TS-02-31
+    """
+
+    def test_pat_never_written_to_config(self, tmp_path: Path) -> None:
+        """The generated .nightshift/config.toml must not contain the PAT
+        or token value under any circumstances.
+
+        TS-02-31 / 02-REQ-4.5
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+        secret_pat = "super-secret-token-value-xyzzy"
+        config_path = tmp_path / ".nightshift" / "config.toml"
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            _run_startup(
+                hub_url=_VALID_HUB_URL,
+                pat=secret_pat,
+                slug=_VALID_SLUG,
+            )
+
+        assert config_path.exists(), (
+            ".nightshift/config.toml was not created"
+        )
+        content = config_path.read_text()
+        assert secret_pat not in content, (
+            f"PAT value '{secret_pat}' found in generated config file; "
+            f"PAT must never be persisted to disk"
+        )
+        # Also check for common token/pat key names with the secret value
+        assert "super-secret" not in content, (
+            "PAT value fragment found in generated config"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-32: In-memory config unchanged after generation
+# ---------------------------------------------------------------------------
+
+
+class TestConfigNoReload:
+    """Verify nightshift does not reload the newly-written config into memory.
+
+    Requirements: 02-REQ-4.6
+    Test ID: TS-02-32
+    """
+
+    def test_in_memory_config_unchanged_after_generation(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """The in-memory AgentFoxConfig instance must remain unchanged after
+        config file generation. Nightshift must not reload the written file.
+
+        TS-02-32 / 02-REQ-4.6
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+        config = _make_config(
+            hub_endpoint_url=_VALID_HUB_URL,
+            carry_patch_workspace="original-slug",
+        )
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            asyncio.run(
+                startup_helper(
+                    hub_url=_VALID_HUB_URL,
+                    pat=_VALID_PAT,
+                    slug="different-slug",
+                    config=config,
+                )
+            )
+
+        # The in-memory config must still have 'original-slug'
+        assert config.carry_patch.workspace == "original-slug", (
+            "In-memory config.carry_patch.workspace was changed after "
+            "config file generation; nightshift must not reload the config"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-33: set_variable called with correct arguments
+# ---------------------------------------------------------------------------
+
+
+class TestSetVariableCorrectArgs:
+    """Verify the startup helper calls set_variable for both auto-rebuild
+    variables with the correct arguments, in the correct order.
+
+    Requirements: 02-REQ-5.1, 02-PROP-8
+    Test ID: TS-02-33
+    """
+
+    def test_set_variable_called_with_correct_args(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """set_variable is called twice: first with AUTO_REBUILD_AFTER_SYNC,
+        then with AUTO_REBUILD_AFTER_PUSH, both set to 'false'.
+
+        TS-02-33 / 02-REQ-5.1
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            _run_startup(slug=_VALID_SLUG)
+
+        calls = mock_client.set_variable.call_args_list
+        assert len(calls) == 2, (
+            f"Expected exactly 2 set_variable calls; got {len(calls)}: {calls}"
+        )
+        assert calls[0].args == (_VALID_SLUG, "AUTO_REBUILD_AFTER_SYNC", "false") or (
+            calls[0].args[0] == _VALID_SLUG
+            and calls[0].args[1] == "AUTO_REBUILD_AFTER_SYNC"
+            and calls[0].args[2] == "false"
+        ), (
+            f"First set_variable call has wrong args: {calls[0]}"
+        )
+        assert calls[1].args == (_VALID_SLUG, "AUTO_REBUILD_AFTER_PUSH", "false") or (
+            calls[1].args[0] == _VALID_SLUG
+            and calls[1].args[1] == "AUTO_REBUILD_AFTER_PUSH"
+            and calls[1].args[2] == "false"
+        ), (
+            f"Second set_variable call has wrong args: {calls[1]}"
+        )
+
+    def test_single_hubclient_reused_for_all_calls(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A single HubClient instance is constructed and reused for
+        get_workspace and both set_variable calls.
+
+        02-PROP-8
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ) as mock_cls,
+            patch("subprocess.run", return_value=mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            _run_startup(slug=_VALID_SLUG)
+
+        # Exactly one HubClient constructed
+        assert mock_cls.call_count == 1, (
+            f"Expected exactly 1 HubClient construction; got {mock_cls.call_count}"
+        )
+        # Same instance used for get_workspace and set_variable
+        assert mock_client.get_workspace.call_count >= 1, (
+            "get_workspace was not called on the HubClient instance"
+        )
+        assert mock_client.set_variable.call_count == 2, (
+            "set_variable was not called exactly twice on the same HubClient"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-34: set_variable exception is non-fatal
+# ---------------------------------------------------------------------------
+
+
+class TestSetVariableExceptionNonFatal:
+    """Verify that exceptions from set_variable are caught and logged as
+    warnings without aborting startup.
+
+    Requirements: 02-REQ-5.2, 02-REQ-5.E1, 02-PROP-7
+    Test ID: TS-02-34
+    """
+
+    def test_both_set_variable_raise_forbidden_continues(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When both set_variable calls raise HubForbiddenError, the startup
+        helper logs warnings and continues — nightshift does not exit.
+
+        TS-02-34 / 02-REQ-5.2
+        """
+        err = HubForbiddenError(
+            status_code=403,
+            message="insufficient scope",
+            error_type="forbidden",
+        )
+        mock_client, mock_git = _passing_cwd_mocks(
+            set_variable_side_effect=err,
+        )
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+            caplog.at_level(logging.WARNING),
+        ):
+            # Should NOT raise — startup continues despite set_variable failures
+            _run_startup(slug=_VALID_SLUG)
+
+        warning_messages = [
+            r.message for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert len(warning_messages) >= 1, (
+            "Expected at least one WARNING log for set_variable failure"
+        )
+
+    def test_connection_error_is_nonfatal(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When set_variable raises HubConnectionError, the startup helper
+        logs a warning and continues.
+
+        02-REQ-5.2 (HubConnectionError variant)
+        """
+        err = HubConnectionError(
+            status_code=0,
+            message="Connection refused",
+            error_type="connection_error",
+        )
+        mock_client, mock_git = _passing_cwd_mocks(
+            set_variable_side_effect=err,
+        )
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+            caplog.at_level(logging.WARNING),
+        ):
+            _run_startup(slug=_VALID_SLUG)
+
+        warning_messages = [
+            r.message for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert len(warning_messages) >= 1, (
+            "Expected WARNING log for HubConnectionError in set_variable"
+        )
+
+    def test_first_set_variable_fails_second_still_attempted(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When the first set_variable call (AUTO_REBUILD_AFTER_SYNC) raises,
+        the second call (AUTO_REBUILD_AFTER_PUSH) is still attempted.
+
+        02-REQ-5.E1
+        """
+        call_count = {"n": 0}
+        err = HubForbiddenError(
+            status_code=403,
+            message="insufficient scope",
+            error_type="forbidden",
+        )
+
+        async def _set_variable_track(*args, **kwargs):  # noqa: ARG001
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise err
+            # Second call succeeds
+
+        mock_client, mock_git = _passing_cwd_mocks()
+        mock_client.set_variable = AsyncMock(side_effect=_set_variable_track)
+
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+            caplog.at_level(logging.WARNING),
+        ):
+            _run_startup(slug=_VALID_SLUG)
+
+        assert call_count["n"] == 2, (
+            f"Expected 2 set_variable calls (both attempted independently); "
+            f"got {call_count['n']}"
+        )
+        # At least one warning for the first failure
+        warning_messages = [
+            r.message for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert len(warning_messages) >= 1, (
+            "Expected WARNING for first set_variable failure"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-02-35: Startup helper returns, DaemonRunner.run() invoked
+# ---------------------------------------------------------------------------
+
+
+class TestStartupHelperReturnsHubClient:
+    """Verify the async startup helper returns the HubClient to main(),
+    which then invokes DaemonRunner.run().
+
+    Requirements: 02-REQ-5.3
+    Test ID: TS-02-35
+    """
+
+    def test_startup_helper_returns_hub_client(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """The async startup helper returns the constructed HubClient instance
+        after completing CWD validation and variable initialization.
+
+        TS-02-35 / 02-REQ-5.3
+        """
+        mock_client, mock_git = _passing_cwd_mocks()
+
+        with (
+            patch(
+                "nightshift._carry_patch_startup.HubClient",
+                create=True,
+                return_value=mock_client,
+            ),
+            patch("subprocess.run", return_value=mock_git),
+            patch("os.getcwd", return_value=str(tmp_path)),
+        ):
+            result = asyncio.run(
+                startup_helper(
+                    hub_url=_VALID_HUB_URL,
+                    pat=_VALID_PAT,
+                    slug=_VALID_SLUG,
+                    config=MagicMock(),
+                )
+            )
+
+        # The startup helper must return the HubClient instance
+        assert result is mock_client, (
+            f"Expected startup_helper to return the HubClient instance; "
+            f"got {type(result).__name__}: {result!r}"
         )
