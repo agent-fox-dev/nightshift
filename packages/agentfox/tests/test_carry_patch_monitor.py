@@ -1,0 +1,836 @@
+"""Tests for CarryPatchMonitor class and MonitorCycleResult dataclass.
+
+All tests in this file are *intentionally failing* pending the implementation
+in task groups 5, 6, and 7.  They will be collected by pytest without import
+errors but will fail at execution time with ``NotImplementedError`` (from
+``CarryPatchMonitor.run_cycle()``) or ``AssertionError`` (from direct
+structural checks that fail on the stub types).
+
+Dependencies and forward stubs
+-------------------------------
+- ``afhub`` package (Spec 01) is not yet available; all afhub types are
+  stubbed inline (``_PatchDetail``, ``_PatchStatusDashboard``,
+  ``_RebuildJob``, ``_RerereEntry``).
+- ``agentfox.core.config.CarryPatchConfig`` (Spec 02) may not yet expose
+  all fields; config is built with ``MagicMock`` to avoid import errors.
+- ``afaudit.events.AuditEventType`` carry-patch constants are not yet
+  added (group 4.1 pending); they are accessed inside test functions
+  (never at module import time) so collection succeeds.
+
+Specification: 03_carry_patch_pipeline_monitor
+Requirements: 03-REQ-2, 03-REQ-3
+Test IDs: TS-03-7, TS-03-8, TS-03-9, TS-03-10, TS-03-11, TS-03-12,
+          TS-03-13, TS-03-14
+"""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import logging
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from agentfox.nightshift.carry_patch_monitor import CarryPatchMonitor, MonitorCycleResult
+
+# ---------------------------------------------------------------------------
+# Stub types for afhub (Spec 01 — not yet implemented)
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class _PatchDetail:
+    """Stub for afhub.PatchDetail."""
+
+    id: str
+    status: str
+    branch_name: str = ""
+    description: str = ""
+    conflict_files: list[str] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass
+class _PatchStatusDashboard:
+    """Stub for afhub.PatchStatusDashboard."""
+
+    patches: list[_PatchDetail] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass
+class _RebuildJob:
+    """Stub for afhub.RebuildJob."""
+
+    id: str
+    status: str
+
+
+@dataclasses.dataclass
+class _RerereEntry:
+    """Stub for afhub.RerereEntry."""
+
+    path: str
+    recorded_at: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_config(
+    *,
+    auto_resolve: bool = True,
+    max_resolve_retries: int = 3,
+    check_interval: int = 60,
+    rebuild_timeout: int = 600,
+    poll_interval: int = 5,
+) -> MagicMock:
+    """Return a MagicMock config with carry_patch fields populated."""
+    config = MagicMock()
+    config.carry_patch = MagicMock()
+    config.carry_patch.auto_resolve = auto_resolve
+    config.carry_patch.max_resolve_retries = max_resolve_retries
+    config.carry_patch.check_interval = check_interval
+    config.carry_patch.rebuild_timeout = rebuild_timeout
+    config.carry_patch.poll_interval = poll_interval
+    config.carry_patch.hub_git_remote = "hub"
+    return config
+
+
+def _make_hub_client(
+    *,
+    patches: list[_PatchDetail] | None = None,
+    get_status_raises: Exception | None = None,
+    rerere_entries: list[_RerereEntry] | None = None,
+    submit_rebuild_return: _RebuildJob | None = None,
+    list_rebuilds_return: list[_RebuildJob] | None = None,
+) -> MagicMock:
+    """Return a MagicMock HubClient with async methods."""
+    client = MagicMock()
+    if get_status_raises is not None:
+        client.get_patch_status = AsyncMock(side_effect=get_status_raises)
+    else:
+        dashboard = _PatchStatusDashboard(patches=patches or [])
+        client.get_patch_status = AsyncMock(return_value=dashboard)
+    client.list_rerere = AsyncMock(return_value=rerere_entries or [])
+    client.submit_rebuild = AsyncMock(
+        return_value=(submit_rebuild_return or _RebuildJob("job-1", "queued"))
+    )
+    client.list_rebuilds = AsyncMock(return_value=list_rebuilds_return or [])
+    return client
+
+
+def _make_engine(
+    *,
+    coder_session_raises: Exception | None = None,
+    coder_session_returns: object = None,
+) -> MagicMock:
+    """Return a MagicMock NightShiftEngine with async _run_coder_session."""
+    engine = MagicMock()
+    if coder_session_raises is not None:
+        engine._run_coder_session = AsyncMock(side_effect=coder_session_raises)
+    else:
+        engine._run_coder_session = AsyncMock(return_value=coder_session_returns)
+    return engine
+
+
+def _make_monitor(
+    *,
+    hub_client: MagicMock | None = None,
+    config: MagicMock | None = None,
+    workspace_slug: str = "ws-1",
+    engine: MagicMock | None = None,
+) -> CarryPatchMonitor:
+    """Construct a CarryPatchMonitor with sensible defaults."""
+    return CarryPatchMonitor(
+        hub_client=hub_client or _make_hub_client(),
+        workspace_slug=workspace_slug,
+        config=config or _make_config(),
+        engine=engine or _make_engine(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2.1 — TS-03-7, TS-03-8: Instantiation and MonitorCycleResult structure
+# ---------------------------------------------------------------------------
+
+
+class TestCarryPatchMonitorInstantiation:
+    """TS-03-7, TS-03-8: Instantiation and MonitorCycleResult dataclass.
+
+    Requirements: 03-REQ-2.1, 03-REQ-2.2
+    Test IDs: TS-03-7, TS-03-8
+    """
+
+    async def test_instantiation_accepts_four_required_params(self) -> None:
+        """CarryPatchMonitor accepts hub_client, workspace_slug, config, engine.
+
+        Requirements: 03-REQ-2.1
+        Test ID: TS-03-7
+        Fails: run_cycle() raises NotImplementedError (groups 5–7 pending)
+        """
+        hub_client = _make_hub_client()
+        config = _make_config()
+        engine = _make_engine()
+        monitor = CarryPatchMonitor(
+            hub_client=hub_client,
+            workspace_slug="test-workspace",
+            config=config,
+            engine=engine,
+        )
+        assert isinstance(monitor, CarryPatchMonitor)
+
+        # run_cycle() must be a coroutine function.
+        assert asyncio.iscoroutinefunction(monitor.run_cycle), (
+            "CarryPatchMonitor.run_cycle() must be an async method"
+        )
+
+        # FAILS: run_cycle raises NotImplementedError (implementation pending)
+        result = await monitor.run_cycle()
+
+        # Assertions after implementation:
+        assert isinstance(result, MonitorCycleResult), (
+            "run_cycle() must return a MonitorCycleResult instance"
+        )
+
+    def test_monitor_cycle_result_is_dataclass(self) -> None:
+        """MonitorCycleResult is a dataclasses.dataclass.
+
+        Requirements: 03-REQ-2.2
+        Test ID: TS-03-8
+        Fails: stub MonitorCycleResult is a plain class, not a dataclass
+        """
+        # FAILS: MonitorCycleResult is not yet a dataclass (group 5.1 pending)
+        assert dataclasses.is_dataclass(MonitorCycleResult), (
+            "MonitorCycleResult must be decorated with @dataclasses.dataclass"
+        )
+
+    def test_monitor_cycle_result_has_five_required_fields(self) -> None:
+        """MonitorCycleResult has the 5 fields with correct types and defaults.
+
+        Requirements: 03-REQ-2.2
+        Test ID: TS-03-8
+        Fails: stub MonitorCycleResult is not a dataclass (group 5.1 pending)
+        """
+        # FAILS: MonitorCycleResult is not yet a dataclass
+        assert dataclasses.is_dataclass(MonitorCycleResult), (
+            "MonitorCycleResult must be a dataclass"
+        )
+        r = MonitorCycleResult(
+            conflicts_detected=3,
+            conflicts_resolved=2,
+            conflicts_failed=1,
+            patches_merged=0,
+            rebuild_triggered=True,
+        )
+        assert r.conflicts_detected == 3
+        assert r.conflicts_resolved == 2
+        assert r.conflicts_failed == 1
+        assert r.patches_merged == 0
+        assert r.rebuild_triggered is True
+
+    def test_monitor_cycle_result_defaults_to_all_zero(self) -> None:
+        """MonitorCycleResult() with no args defaults to all-zero / False values.
+
+        Requirements: 03-REQ-2.2
+        Test ID: TS-03-8
+        Fails: stub MonitorCycleResult is not a dataclass (group 5.1 pending)
+        """
+        # FAILS: MonitorCycleResult is not yet a dataclass
+        assert dataclasses.is_dataclass(MonitorCycleResult), (
+            "MonitorCycleResult must be a dataclass with zero defaults"
+        )
+        r = MonitorCycleResult()
+        assert r.conflicts_detected == 0
+        assert r.conflicts_resolved == 0
+        assert r.conflicts_failed == 0
+        assert r.patches_merged == 0
+        assert r.rebuild_triggered is False
+
+    async def test_monitor_has_retry_counter_and_run_cycle_returns_result(
+        self,
+    ) -> None:
+        """CarryPatchMonitor has _retry_counter dict and run_cycle returns MonitorCycleResult.
+
+        Requirements: 03-REQ-2, 03-REQ-3.4
+        Test ID: TS-03-7 (structural + behavioral)
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        monitor = _make_monitor()
+        assert hasattr(monitor, "_retry_counter"), (
+            "CarryPatchMonitor must have a _retry_counter dict attribute"
+        )
+        assert isinstance(monitor._retry_counter, dict), (
+            "_retry_counter must be a dict"
+        )
+
+        # FAILS: run_cycle raises NotImplementedError — the retry counter must
+        # be properly wired to run_cycle logic for this assertion to hold.
+        result = await monitor.run_cycle()
+        assert isinstance(result, MonitorCycleResult), (
+            "run_cycle() must return MonitorCycleResult so retry counter "
+            "tracking is observable through result fields"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 2.2 — TS-03-9: Hub error returns empty MonitorCycleResult (fail-open)
+# ---------------------------------------------------------------------------
+
+
+class TestRunCycleHubError:
+    """TS-03-9: get_patch_status() error → fail-open empty MonitorCycleResult.
+
+    Requirements: 03-REQ-3.1, 03-REQ-3.E1
+    Test ID: TS-03-9
+    """
+
+    async def test_get_patch_status_hub_error_returns_empty_result(self) -> None:
+        """When get_patch_status raises, run_cycle returns empty MonitorCycleResult.
+
+        Requirements: 03-REQ-3.1 (fail-open)
+        Test ID: TS-03-9
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        hub_client = _make_hub_client(get_status_raises=ConnectionError("hub unreachable"))
+        monitor = _make_monitor(hub_client=hub_client)
+
+        # FAILS: run_cycle raises NotImplementedError
+        result = await monitor.run_cycle()
+
+        # Assertions after implementation:
+        assert isinstance(result, MonitorCycleResult)
+        assert result.conflicts_detected == 0, "fail-open: conflicts_detected must be 0"
+        assert result.conflicts_resolved == 0, "fail-open: conflicts_resolved must be 0"
+        assert result.conflicts_failed == 0, "fail-open: conflicts_failed must be 0"
+        assert result.patches_merged == 0, "fail-open: patches_merged must be 0"
+        assert result.rebuild_triggered is False, (
+            "fail-open: rebuild_triggered must be False"
+        )
+
+    async def test_get_patch_status_runtime_error_returns_empty_result(self) -> None:
+        """RuntimeError from get_patch_status also produces fail-open result.
+
+        Requirements: 03-REQ-3.E1 (any hub error)
+        Test ID: TS-03-9
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        hub_client = _make_hub_client(get_status_raises=RuntimeError("internal server error"))
+        monitor = _make_monitor(hub_client=hub_client)
+
+        # FAILS: run_cycle raises NotImplementedError
+        result = await monitor.run_cycle()
+
+        assert isinstance(result, MonitorCycleResult)
+        assert result.conflicts_detected == 0
+        assert result.rebuild_triggered is False
+
+    async def test_get_patch_status_error_does_not_propagate(self) -> None:
+        """Hub errors must not propagate out of run_cycle (fail-open contract).
+
+        Requirements: 03-REQ-3.E1
+        Test ID: TS-03-9
+        Fails: run_cycle raises NotImplementedError, not a wrapped hub error
+        """
+        hub_client = _make_hub_client(get_status_raises=TimeoutError("timed out"))
+        monitor = _make_monitor(hub_client=hub_client)
+
+        # FAILS: run_cycle raises NotImplementedError instead of returning
+        # a MonitorCycleResult.  After implementation the TimeoutError must
+        # be caught and a zero-result returned instead of propagated.
+        result = await monitor.run_cycle()
+        assert isinstance(result, MonitorCycleResult)
+
+
+# ---------------------------------------------------------------------------
+# 2.3 — TS-03-10: merged_upstream logged; TS-03-11: auto_resolve=False guard
+# ---------------------------------------------------------------------------
+
+
+class TestMergedUpstreamAndAutoResolve:
+    """TS-03-10, TS-03-11: merged_upstream logging and auto_resolve=False guard.
+
+    Requirements: 03-REQ-3.1 (merged detection), 03-REQ-3.2 (auto_resolve gate)
+    Test IDs: TS-03-10, TS-03-11
+    """
+
+    async def test_merged_upstream_patches_increment_patches_merged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """run_cycle increments patches_merged for merged_upstream patches.
+
+        Requirements: 03-REQ-3.1
+        Test ID: TS-03-10
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="merged_upstream", branch_name="fix/p1"),
+            _PatchDetail(id="p2", status="pending"),
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        monitor = _make_monitor(hub_client=hub_client)
+
+        with caplog.at_level(logging.INFO):
+            # FAILS: run_cycle raises NotImplementedError
+            result = await monitor.run_cycle()
+
+        assert isinstance(result, MonitorCycleResult)
+        assert result.patches_merged == 1, (
+            "patches_merged must equal the number of merged_upstream patches"
+        )
+        # merged_upstream patches must be logged at INFO level
+        assert any(
+            "merged_upstream" in record.message.lower()
+            or "p1" in record.message
+            for record in caplog.records
+        ), "merged_upstream patch must be logged"
+
+    async def test_all_merged_upstream_patches_counted(self) -> None:
+        """All merged_upstream patches are counted in patches_merged.
+
+        Requirements: 03-REQ-3.1
+        Test ID: TS-03-10
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="merged_upstream"),
+            _PatchDetail(id="p2", status="merged_upstream"),
+            _PatchDetail(id="p3", status="conflict"),
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        # FAILS: run_cycle raises NotImplementedError
+        result = await monitor.run_cycle()
+
+        assert result.patches_merged == 2, (
+            "patches_merged must count both merged_upstream patches"
+        )
+
+    async def test_auto_resolve_false_does_not_invoke_coder_session(self) -> None:
+        """When auto_resolve=False, run_cycle does not invoke the coder session.
+
+        Requirements: 03-REQ-3.2
+        Test ID: TS-03-11
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1"),
+            _PatchDetail(id="p2", status="conflict", branch_name="fix/p2"),
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=False)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        # FAILS: run_cycle raises NotImplementedError
+        result = await monitor.run_cycle()
+
+        # After implementation:
+        assert result.conflicts_detected == 2, (
+            "conflicts_detected must be set even when auto_resolve=False"
+        )
+        assert result.conflicts_resolved == 0, (
+            "conflicts_resolved must be 0 when auto_resolve=False"
+        )
+        assert result.conflicts_failed == 0, (
+            "conflicts_failed must be 0 when auto_resolve=False"
+        )
+        assert result.rebuild_triggered is False, (
+            "rebuild_triggered must be False when auto_resolve=False"
+        )
+        engine._run_coder_session.assert_not_called()
+
+    async def test_auto_resolve_false_logs_conflict_count(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When auto_resolve=False, conflict count is logged at INFO.
+
+        Requirements: 03-REQ-3.2
+        Test ID: TS-03-11
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict"),
+            _PatchDetail(id="p2", status="conflict"),
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=False)
+        monitor = _make_monitor(hub_client=hub_client, config=config)
+
+        with caplog.at_level(logging.INFO):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        # After implementation, conflict count logged at INFO
+        assert any(
+            "2" in record.message or "conflict" in record.message.lower()
+            for record in caplog.records
+        ), "conflict count must be logged when auto_resolve=False"
+
+
+# ---------------------------------------------------------------------------
+# 2.4 — TS-03-12: max_resolve_retries exceeded skips patch with warning
+# ---------------------------------------------------------------------------
+
+
+class TestMaxResolveRetriesExceeded:
+    """TS-03-12: Patch at max retry count is skipped with a WARNING.
+
+    Requirements: 03-REQ-3.4
+    Test ID: TS-03-12
+    """
+
+    async def test_patch_at_max_retries_is_skipped(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Patch with retry count == max_resolve_retries is skipped.
+
+        Requirements: 03-REQ-3.4
+        Test ID: TS-03-12
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1"),
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        # Seed the retry counter to the maximum allowed count.
+        monitor._retry_counter[("ws-1", "p1")] = 3
+
+        with caplog.at_level(logging.WARNING):
+            # FAILS: run_cycle raises NotImplementedError
+            result = await monitor.run_cycle()
+
+        # After implementation:
+        engine._run_coder_session.assert_not_called()
+        assert result.conflicts_detected == 1, (
+            "conflicts_detected must still be incremented for skipped patches"
+        )
+        assert result.conflicts_failed == 1, (
+            "conflicts_failed must count patches skipped due to retry exhaustion"
+        )
+        assert result.conflicts_resolved == 0
+
+        # Warning logged containing patch id and branch name
+        warning_messages = [
+            r.message for r in caplog.records if r.levelno >= logging.WARNING
+        ]
+        assert any("p1" in msg for msg in warning_messages), (
+            "WARNING must include patch id 'p1'"
+        )
+        assert any("fix/p1" in msg for msg in warning_messages), (
+            "WARNING must include branch name 'fix/p1'"
+        )
+
+    async def test_patch_below_max_retries_is_not_skipped(self) -> None:
+        """Patch with retry count < max_resolve_retries proceeds to resolution.
+
+        Requirements: 03-REQ-3.4 (counter check boundary)
+        Test ID: TS-03-12 (negative boundary)
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1"),
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        # Retry count below max — patch should proceed to resolution attempt.
+        monitor._retry_counter[("ws-1", "p1")] = 2
+
+        # FAILS: run_cycle raises NotImplementedError
+        await monitor.run_cycle()
+
+        # After implementation, coder session must be invoked:
+        engine._run_coder_session.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 2.5 — TS-03-13: Successful conflict resolution
+# ---------------------------------------------------------------------------
+
+
+class TestSuccessfulConflictResolution:
+    """TS-03-13: Successful resolution → fetch, checkout, coder session, push, rebuild.
+
+    Requirements: 03-REQ-3.3, 03-REQ-3.5
+    Test ID: TS-03-13
+    """
+
+    async def test_successful_resolution_calls_fetch_checkout_coder_push_rebuild(
+        self,
+    ) -> None:
+        """Full resolution sequence is executed on a conflict patch.
+
+        Requirements: 03-REQ-3.3 (steps b–d)
+        Test ID: TS-03-13
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                description="Fix auth bug",
+                conflict_files=["auth.py"],
+            )
+        ]
+        hub_client = _make_hub_client(
+            patches=patches,
+            submit_rebuild_return=_RebuildJob("job-1", "queued"),
+        )
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine(coder_session_returns=None)  # success: returns None
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()) as mock_fetch,
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()) as mock_checkout,
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()) as mock_push,
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            result = await monitor.run_cycle()
+
+        # After implementation, all steps must be invoked:
+        mock_fetch.assert_called()
+        mock_checkout.assert_called()
+        engine._run_coder_session.assert_called_once()
+        mock_push.assert_called()
+        hub_client.submit_rebuild.assert_called()
+
+        assert result.conflicts_detected == 1
+        assert result.conflicts_resolved == 1
+        assert result.conflicts_failed == 0
+        assert result.rebuild_triggered is True
+
+    async def test_successful_resolution_invokes_coder_with_carry_patch_mode(
+        self,
+    ) -> None:
+        """Coder session is invoked with archetype='coder' and mode='carry-patch'.
+
+        Requirements: 03-REQ-3.3 step c
+        Test ID: TS-03-13
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        # After implementation, coder session must have been called with the
+        # correct archetype and mode:
+        engine._run_coder_session.assert_called_once()
+        call_kwargs = engine._run_coder_session.call_args
+        assert call_kwargs is not None
+        # archetype='coder' and mode='carry-patch' must appear in args/kwargs
+        all_args = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
+        assert any(v == "coder" for v in all_args if isinstance(v, str)), (
+            "coder session must be invoked with archetype='coder'"
+        )
+        assert any(v == "carry-patch" for v in all_args if isinstance(v, str)), (
+            "coder session must be invoked with mode='carry-patch'"
+        )
+
+    async def test_successful_resolution_emits_conflict_resolved_audit_event(
+        self,
+    ) -> None:
+        """CARRY_PATCH_CONFLICT_RESOLVED audit event is emitted on success.
+
+        Requirements: 03-REQ-3.5, 03-REQ-8
+        Test ID: TS-03-13
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        emitted_types: list[str] = []
+
+        def capture_emit(
+            sink: object, run_id: str, event_type: object, **kwargs: object
+        ) -> None:
+            emitted_types.append(str(event_type))
+
+        with (
+            patch("afaudit.emit.emit_audit_event", side_effect=capture_emit),
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+            patch("agentfox.workspace.git.push_to_remote", AsyncMock()),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        # After implementation:
+        from afaudit.events import AuditEventType  # noqa: PLC0415
+
+        assert str(AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED) in emitted_types, (
+            "CARRY_PATCH_CONFLICT_RESOLVED audit event must be emitted on success"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 2.6 — TS-03-14: Failed conflict resolution increments retry counter
+# ---------------------------------------------------------------------------
+
+
+class TestFailedConflictResolution:
+    """TS-03-14: Coder session failure increments retry counter, emits audit event.
+
+    Requirements: 03-REQ-3.6
+    Test ID: TS-03-14
+    """
+
+    async def test_failed_resolution_increments_retry_counter(self) -> None:
+        """Session retry counter is incremented when coder session fails.
+
+        Requirements: 03-REQ-3.6
+        Test ID: TS-03-14
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine(coder_session_raises=RuntimeError("coder session failed"))
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        initial_count = monitor._retry_counter.get(("ws-1", "p1"), 0)
+        assert initial_count == 0
+
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            result = await monitor.run_cycle()
+
+        # After implementation:
+        new_count = monitor._retry_counter.get(("ws-1", "p1"), 0)
+        assert new_count == initial_count + 1, (
+            "retry counter must be incremented by 1 on coder session failure"
+        )
+        assert result.conflicts_failed == 1
+        assert result.conflicts_resolved == 0
+
+    async def test_failed_resolution_emits_conflict_failed_audit_event(
+        self,
+    ) -> None:
+        """CARRY_PATCH_CONFLICT_FAILED audit event emitted on resolution failure.
+
+        Requirements: 03-REQ-3.6, 03-REQ-8
+        Test ID: TS-03-14
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine(coder_session_raises=RuntimeError("coder failed"))
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        emitted_types: list[str] = []
+
+        def capture_emit(
+            sink: object, run_id: str, event_type: object, **kwargs: object
+        ) -> None:
+            emitted_types.append(str(event_type))
+
+        with (
+            patch("afaudit.emit.emit_audit_event", side_effect=capture_emit),
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        # After implementation:
+        from afaudit.events import AuditEventType  # noqa: PLC0415
+
+        assert str(AuditEventType.CARRY_PATCH_CONFLICT_FAILED) in emitted_types, (
+            "CARRY_PATCH_CONFLICT_FAILED audit event must be emitted on failure"
+        )
+
+    async def test_failed_resolution_does_not_propagate_exception(self) -> None:
+        """Coder session failure must not propagate out of run_cycle.
+
+        Requirements: 03-REQ-3.6 (continue to next patch)
+        Test ID: TS-03-14
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1"),
+            _PatchDetail(id="p2", status="conflict", branch_name="fix/p2"),
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine(coder_session_raises=RuntimeError("coder failed"))
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+        ):
+            # FAILS: run_cycle raises NotImplementedError rather than returning.
+            # After implementation, the RuntimeError from coder must be caught
+            # and the second conflict patch must also be attempted.
+            result = await monitor.run_cycle()
+
+        # Both patches attempted (neither resolution succeeded):
+        assert result.conflicts_failed == 2
+        assert result.conflicts_resolved == 0
+        assert result.rebuild_triggered is False
+
+    async def test_failed_resolution_retry_counter_starts_at_zero(self) -> None:
+        """First failure increments the retry counter from 0 to 1.
+
+        Requirements: 03-REQ-3.6
+        Test ID: TS-03-14
+        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
+        """
+        patches = [
+            _PatchDetail(id="p1", status="conflict", branch_name="fix/p1")
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine(coder_session_raises=RuntimeError("coder failed"))
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        # Retry counter starts empty for this patch.
+        assert ("ws-1", "p1") not in monitor._retry_counter
+
+        with (
+            patch("agentfox.workspace.git.fetch_remote", AsyncMock()),
+            patch("agentfox.workspace.git.checkout_branch", AsyncMock()),
+        ):
+            # FAILS: run_cycle raises NotImplementedError
+            await monitor.run_cycle()
+
+        # After implementation, counter must be 1:
+        assert monitor._retry_counter.get(("ws-1", "p1"), 0) == 1, (
+            "retry counter for ('ws-1', 'p1') must be 1 after first failure"
+        )
