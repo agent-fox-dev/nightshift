@@ -5,13 +5,13 @@ should push the fix branch to the hub git server, register it via add_patch(),
 submit a rebuild, and poll until completion or failure.
 
 Specification: 03_carry_patch_pipeline_monitor
-Requirements: 03-REQ-1
-Test IDs: TS-03-1, TS-03-2, TS-03-3, TS-03-4, TS-03-5, TS-03-6
+Requirements: 03-REQ-1 (03-REQ-1.1 through 03-REQ-1.6, 03-REQ-1.E1 through E5,
+              03-REQ-1.3b), 03-REQ-8 (audit event constants)
+Test IDs: TS-03-1, TS-03-2, TS-03-3, TS-03-4, TS-03-5, TS-03-6, TS-03-23
 
 Dependencies:
 - Spec 01 (afhub): HubClient, RebuildJob, HubConflictError, HubNoActivePatchesError.
-- Spec 02 (CarryPatchConfig): AgentFoxConfig.carry_patch not yet available;
-  config is built with MagicMock to avoid import errors.
+- Spec 02 (CarryPatchConfig): config is built with MagicMock.
 """
 
 from __future__ import annotations
@@ -107,19 +107,15 @@ def _make_pipeline(
 ) -> FixPipeline:
     """Build a FixPipeline with mocked platform; optionally inject hub_client.
 
-    When hub_client is provided it is stored as _hub_client on the pipeline
-    and workspace_slug is stored as _workspace_slug — these are the attributes
-    the carry-patch implementation (group 4) will use.
+    Passes hub_client and workspace_slug to the FixPipeline constructor
+    so the carry-patch code path can read self._hub_client / self._workspace_slug.
     """
-    pipeline = FixPipeline(
+    return FixPipeline(
         config=config,
         platform=MagicMock(),
+        hub_client=hub_client,
+        workspace_slug=workspace_slug,
     )
-    if hub_client is not None:
-        # The implementation will use self._hub_client for hub API calls.
-        pipeline._hub_client = hub_client
-        pipeline._workspace_slug = workspace_slug
-    return pipeline
 
 
 def _make_mock_issue(
@@ -692,6 +688,58 @@ class TestRebuildTerminalStatus:
             f"Expected 'error' (retry) on dead_letter rebuild, got {result[0]!r}"
         )
 
+    async def test_cancelled_rebuild_marks_issue_for_retry(self) -> None:
+        """When poll_rebuild returns 'cancelled', treated same as 'failed'.
+
+        Requirements: 03-REQ-1.3b
+        Test ID: TS-03-3
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client(
+            submit_return=_RebuildJob("job-1", "queued"),
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        result = await _call_integrate_fix(
+            pipeline, poll_return=_RebuildJob("job-1", "cancelled"),
+        )
+
+        hub_client.add_patch.assert_called_once()
+        assert result[0] == "error", (
+            f"Expected 'error' (retry) on cancelled rebuild, got {result[0]!r}"
+        )
+
+    async def test_cancelled_rebuild_emits_rebuild_failed_audit_event(self) -> None:
+        """CARRY_PATCH_REBUILD_FAILED is emitted when rebuild is cancelled.
+
+        Requirements: 03-REQ-1.3b, 03-REQ-1.6
+        Test ID: TS-03-3
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client(
+            submit_return=_RebuildJob("job-1", "queued"),
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        emitted_event_types: list[str] = []
+
+        def capture_emit(
+            sink: object, run_id: str, event_type: object, **kwargs: object
+        ) -> None:
+            emitted_event_types.append(str(event_type))
+
+        with patch(
+            "agentfox.nightshift.fix_pipeline.emit_audit_event",
+            side_effect=capture_emit,
+        ):
+            await _call_integrate_fix(
+                pipeline, poll_return=_RebuildJob("job-1", "cancelled"),
+            )
+
+        assert "carry_patch.rebuild_failed" in emitted_event_types, (
+            "CARRY_PATCH_REBUILD_FAILED should be emitted for cancelled rebuild"
+        )
+
 
 # ---------------------------------------------------------------------------
 # TS-03-6: Audit events emitted during carry-patch pipeline flow
@@ -865,4 +913,346 @@ class TestCarryPatchAuditEvents:
         assert not missing, (
             f"Missing carry-patch audit events: {missing}. "
             f"Emitted: {emitted_event_types}"
+        )
+
+    async def test_rebuild_failed_event_emitted_on_failed_rebuild(self) -> None:
+        """CARRY_PATCH_REBUILD_FAILED is emitted when rebuild returns 'failed'.
+
+        Requirements: 03-REQ-1.6
+        Test ID: TS-03-6
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client(
+            submit_return=_RebuildJob("job-1", "queued"),
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        emitted_event_types: list[str] = []
+
+        def capture_emit(
+            sink: object, run_id: str, event_type: object, **kwargs: object
+        ) -> None:
+            emitted_event_types.append(str(event_type))
+
+        with patch(
+            "agentfox.nightshift.fix_pipeline.emit_audit_event",
+            side_effect=capture_emit,
+        ):
+            await _call_integrate_fix(
+                pipeline, poll_return=_RebuildJob("job-1", "failed"),
+            )
+
+        assert "carry_patch.rebuild_failed" in emitted_event_types, (
+            "CARRY_PATCH_REBUILD_FAILED should be emitted on failed rebuild"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Edge case: push_to_remote failure (03-REQ-1.E1)
+# ---------------------------------------------------------------------------
+
+
+class TestPushToRemoteFailure:
+    """03-REQ-1.E1: push_to_remote failure re-raises and skips hub API calls.
+
+    Requirements: 03-REQ-1.E1
+    """
+
+    async def test_push_to_remote_failure_reraises(self) -> None:
+        """Exception from push_to_remote is re-raised.
+
+        Requirements: 03-REQ-1.E1
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client()
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        issue = _make_mock_issue()
+        spec = _make_mock_spec()
+        workspace = _make_mock_workspace()
+
+        with (
+            patch.object(pipeline, "_auto_commit_pending_changes", AsyncMock()),
+            patch.object(pipeline, "_harvest_and_push", AsyncMock(return_value=[])),
+            patch(
+                "agentfox.workspace.git.push_to_remote",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("network timeout"),
+            ),
+            patch(
+                "agentfox.nightshift.fix_pipeline.poll_rebuild",
+                new_callable=AsyncMock,
+            ),
+        ):
+            pipeline._platform.add_issue_comment = AsyncMock()
+            with pytest.raises(RuntimeError, match="network timeout"):
+                await pipeline._integrate_fix(issue, spec, workspace)
+
+    async def test_push_to_remote_failure_skips_add_patch(self) -> None:
+        """add_patch and submit_rebuild are NOT called after push_to_remote fails.
+
+        Requirements: 03-REQ-1.E1
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client()
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        issue = _make_mock_issue()
+        spec = _make_mock_spec()
+        workspace = _make_mock_workspace()
+
+        with (
+            patch.object(pipeline, "_auto_commit_pending_changes", AsyncMock()),
+            patch.object(pipeline, "_harvest_and_push", AsyncMock(return_value=[])),
+            patch(
+                "agentfox.workspace.git.push_to_remote",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("push failed"),
+            ),
+            patch(
+                "agentfox.nightshift.fix_pipeline.poll_rebuild",
+                new_callable=AsyncMock,
+            ),
+        ):
+            pipeline._platform.add_issue_comment = AsyncMock()
+            with pytest.raises(RuntimeError):
+                await pipeline._integrate_fix(issue, spec, workspace)
+
+        hub_client.add_patch.assert_not_called()
+        hub_client.submit_rebuild.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Edge case: poll_rebuild timeout (03-REQ-1.E2)
+# ---------------------------------------------------------------------------
+
+
+class TestPollRebuildTimeout:
+    """03-REQ-1.E2: poll_rebuild timeout is treated as rebuild failure.
+
+    Requirements: 03-REQ-1.E2
+    """
+
+    async def test_poll_rebuild_timeout_marks_issue_for_retry(self) -> None:
+        """TimeoutError from poll_rebuild returns 'error' (retry).
+
+        Requirements: 03-REQ-1.E2
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client(
+            submit_return=_RebuildJob("job-1", "queued"),
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        issue = _make_mock_issue()
+        spec = _make_mock_spec()
+        workspace = _make_mock_workspace()
+
+        with (
+            patch.object(pipeline, "_auto_commit_pending_changes", AsyncMock()),
+            patch.object(pipeline, "_harvest_and_push", AsyncMock(return_value=[])),
+            patch(
+                "agentfox.workspace.git.push_to_remote",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agentfox.nightshift.fix_pipeline.poll_rebuild",
+                new_callable=AsyncMock,
+                side_effect=TimeoutError("rebuild timed out"),
+            ),
+        ):
+            pipeline._platform.add_issue_comment = AsyncMock()
+            result = await pipeline._integrate_fix(issue, spec, workspace)
+
+        assert result[0] == "error", (
+            f"Expected 'error' (retry) on poll_rebuild timeout, got {result[0]!r}"
+        )
+
+    async def test_poll_rebuild_timeout_emits_rebuild_failed(self) -> None:
+        """CARRY_PATCH_REBUILD_FAILED is emitted when poll_rebuild times out.
+
+        Requirements: 03-REQ-1.E2, 03-REQ-1.6
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client(
+            submit_return=_RebuildJob("job-1", "queued"),
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        issue = _make_mock_issue()
+        spec = _make_mock_spec()
+        workspace = _make_mock_workspace()
+
+        emitted_event_types: list[str] = []
+
+        def capture_emit(
+            sink: object, run_id: str, event_type: object, **kwargs: object
+        ) -> None:
+            emitted_event_types.append(str(event_type))
+
+        with (
+            patch.object(pipeline, "_auto_commit_pending_changes", AsyncMock()),
+            patch.object(pipeline, "_harvest_and_push", AsyncMock(return_value=[])),
+            patch(
+                "agentfox.workspace.git.push_to_remote",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "agentfox.nightshift.fix_pipeline.poll_rebuild",
+                new_callable=AsyncMock,
+                side_effect=TimeoutError("rebuild timed out"),
+            ),
+            patch(
+                "agentfox.nightshift.fix_pipeline.emit_audit_event",
+                side_effect=capture_emit,
+            ),
+        ):
+            pipeline._platform.add_issue_comment = AsyncMock()
+            await pipeline._integrate_fix(issue, spec, workspace)
+
+        assert "carry_patch.rebuild_failed" in emitted_event_types, (
+            "CARRY_PATCH_REBUILD_FAILED should be emitted on poll_rebuild timeout"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Edge case: list_rebuilds empty after HubConflictError (03-REQ-1.E3)
+# ---------------------------------------------------------------------------
+
+
+class TestListRebuildsEmptyAfterConflict:
+    """03-REQ-1.E3: empty list_rebuilds after HubConflictError skips rebuild.
+
+    Requirements: 03-REQ-1.E3
+    """
+
+    async def test_empty_list_rebuilds_returns_merged(self) -> None:
+        """No rebuild polled when list_rebuilds is empty; returns 'merged'.
+
+        Requirements: 03-REQ-1.E3
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client(
+            submit_raises=HubConflictError(
+                status_code=409,
+                message="rebuild already running",
+                error_type="conflict",
+            ),
+            list_rebuilds_result=[],  # empty list
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        result = await _call_integrate_fix(pipeline)
+
+        hub_client.list_rebuilds.assert_called_once()
+        # No rebuild to poll — should return success.
+        assert result[0] == "merged", (
+            f"Expected 'merged' (skip rebuild) when list_rebuilds is empty, "
+            f"got {result[0]!r}"
+        )
+
+    async def test_empty_list_rebuilds_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A warning is logged when list_rebuilds returns empty after HubConflictError.
+
+        Requirements: 03-REQ-1.E3
+        """
+        import logging
+
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client(
+            submit_raises=HubConflictError(
+                status_code=409,
+                message="rebuild already running",
+                error_type="conflict",
+            ),
+            list_rebuilds_result=[],
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        with caplog.at_level(logging.WARNING):
+            await _call_integrate_fix(pipeline)
+
+        assert any(
+            "empty" in r.message.lower() or "list_rebuilds" in r.message.lower()
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        ), "Expected a WARNING about empty list_rebuilds after HubConflictError"
+
+
+# ---------------------------------------------------------------------------
+# Edge case: add_patch unexpected exception (03-REQ-1.E4)
+# ---------------------------------------------------------------------------
+
+
+class TestAddPatchFailure:
+    """03-REQ-1.E4: add_patch unexpected exception marks issue for retry.
+
+    Requirements: 03-REQ-1.E4
+    """
+
+    async def test_add_patch_failure_returns_error(self) -> None:
+        """When add_patch raises, the pipeline returns 'error' (retry).
+
+        Requirements: 03-REQ-1.E4
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client()
+        hub_client.add_patch = AsyncMock(
+            side_effect=RuntimeError("hub API 500"),
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        result = await _call_integrate_fix(pipeline)
+
+        assert result[0] == "error", (
+            f"Expected 'error' (retry) on add_patch failure, got {result[0]!r}"
+        )
+
+    async def test_add_patch_failure_skips_submit_rebuild(self) -> None:
+        """submit_rebuild is NOT called when add_patch raises.
+
+        Requirements: 03-REQ-1.E4
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client()
+        hub_client.add_patch = AsyncMock(
+            side_effect=RuntimeError("hub API 500"),
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        await _call_integrate_fix(pipeline)
+
+        hub_client.submit_rebuild.assert_not_called()
+
+    async def test_add_patch_failure_emits_rebuild_failed(self) -> None:
+        """CARRY_PATCH_REBUILD_FAILED is emitted when add_patch raises.
+
+        Requirements: 03-REQ-1.E4, 03-REQ-1.6
+        """
+        config = _make_config(carry_patch_enabled=True)
+        hub_client = _make_hub_client()
+        hub_client.add_patch = AsyncMock(
+            side_effect=RuntimeError("hub API error"),
+        )
+        pipeline = _make_pipeline(config, hub_client=hub_client)
+
+        emitted_event_types: list[str] = []
+
+        def capture_emit(
+            sink: object, run_id: str, event_type: object, **kwargs: object
+        ) -> None:
+            emitted_event_types.append(str(event_type))
+
+        with patch(
+            "agentfox.nightshift.fix_pipeline.emit_audit_event",
+            side_effect=capture_emit,
+        ):
+            await _call_integrate_fix(pipeline)
+
+        assert "carry_patch.rebuild_failed" in emitted_event_types, (
+            "CARRY_PATCH_REBUILD_FAILED should be emitted on add_patch failure"
         )
