@@ -632,8 +632,10 @@ The carry-patch workflow maps well onto nightshift's existing patterns:
    worktrees. Carry-patch operations (sync, rebuild, patch status) are remote API
    calls to hub. The "workspace" concept in nightshift (a local directory with a
    worktree) differs from the hub "workspace" (a server-side repository clone).
-   Nightshift bridges this by cloning the hub workspace locally at bootstrap
-   time (see [Bootstrapping](#bootstrapping)).
+   Nightshift requires the operator to provide a local clone of the hub
+   workspace. At startup, nightshift validates the CWD against the hub
+   workspace metadata and exits with an error if they do not match (see
+   [Bootstrapping](#bootstrapping)).
 
 4. ~~**Budget accounting**~~: Not an issue. There is one shared budget for all
    work -- fix pipeline and conflict resolution draw from the same pool. No
@@ -654,9 +656,10 @@ approach:
 
 ## Bootstrapping
 
-An operator sets up the hub workspace and provisions a Personal Access Token
-(PAT) before nightshift starts. Nightshift then bootstraps itself from just
-two CLI arguments and the hub's REST API.
+An operator sets up the hub workspace, provisions a Personal Access Token
+(PAT), and clones the workspace repository locally before nightshift starts.
+Nightshift validates its environment using two CLI arguments and the hub's
+REST API -- it does not create infrastructure on its own.
 
 ### Prerequisites
 
@@ -683,48 +686,74 @@ two CLI arguments and the hub's REST API.
    restricted to their granted scopes and cannot escalate privileges. This is
    the recommended credential type for unattended automation.
 
+3. **Local clone exists.** The operator has cloned the hub workspace into the
+   directory where nightshift will run, using the hub git server URL (obtained
+   from the workspace metadata via `afc workspace show` or the hub UI). The
+   clone must use the hub's git server as its origin remote:
+   ```
+   git clone https://_:<pat>@hub.example.com/git/<org>/<slug>.git
+   cd <slug>
+   ```
+   Nightshift must be invoked from the root of this clone. It will not create
+   or clone repositories on its own.
+
 ### Invocation
 
 ```
-nightshift --workspace <slug> --token <pat>
+nightshift --hub-url <url> --workspace <slug> --token <pat>
 ```
 
-Both `--workspace` and `--token` are required to activate carry-patch mode.
-When either is absent, nightshift falls back to its normal fix-pipeline
+All three flags are required on first start (before a
+`.nightshift/config.toml` exists). On subsequent starts, each value is
+resolved from multiple sources in priority order:
+
+| Value | Resolution order |
+|-------|-----------------|
+| Hub URL | `--hub-url` flag > `AF_HUB_URL` env var > `[hub] endpoint_url` in config |
+| Workspace slug | `--workspace` flag > `[carry_patch] workspace` in config |
+| PAT | `--token` flag > `AF_HUB_TOKEN` env var |
+
+After the first successful start, the hub URL and workspace slug are
+persisted in `.nightshift/config.toml`, so only the PAT (via `--token` or
+`AF_HUB_TOKEN`) is needed on subsequent invocations. The PAT is never
+written to disk.
+
+The operator must invoke nightshift from within a git clone of the hub
+workspace (see prerequisite 3). When no workspace slug and no PAT can be
+resolved from any source, nightshift falls back to its normal fix-pipeline
 behavior (if configured) or exits with an error if no work mode is available.
 
 ### Startup Behavior
 
-On startup, nightshift resolves the local working directory in one of two ways:
+On startup, nightshift resolves the hub endpoint URL from (in priority order):
+the `--hub-url` CLI flag, the `AF_HUB_URL` environment variable, or the
+`[hub] endpoint_url` field in an existing `.nightshift/config.toml`. If none
+of these is available, nightshift exits with an error explaining that a hub
+URL is required on first start.
 
-1. **CWD matches the workspace.** If the current working directory is already
-   a git clone whose origin matches the hub workspace identified by `<slug>`,
-   nightshift starts working from there immediately. It reads any existing
-   `.nightshift/config.toml` in the CWD and merges in the `--workspace` and
-   `--token` values.
+It then validates the local working directory against the hub workspace
+metadata:
 
-2. **CWD does not match.** If nightshift is not inside a directory that matches
-   the `--workspace` slug, it bootstraps a new clone via the hub API:
-
-   1. Fetches workspace metadata via `GET /api/v1/workspaces/<slug>`
-      (authenticated with `Authorization: Bearer <pat>`). The response
-      provides `git_url`, `upstream_url`, `integration_branch`,
-      `workspace_mode`, and `clone_status`. Nightshift verifies that
-      `workspace_mode` is `"carry_patch"` and `clone_status` is `"ready"`
-      before proceeding.
-   2. Clones the repository from the hub's built-in git server using the
-      `git_url` from the workspace response. Authentication uses HTTP Basic
-      with the PAT as the password (username is ignored by the hub).
-      ```
-      git clone https://_:<pat>@hub.example.com/git/<org>/<slug>.git <slug>
-      ```
-   3. Changes its working directory to the new clone.
-   4. Creates a default `.nightshift/config.toml` inside the clone,
-      pre-populated with hub endpoint, workspace slug, and carry-patch
-      defaults (see [Config Generation](#config-generation) below).
-   5. Disables hub-side auto-rebuild by setting workspace variables via the
-      API (see [Workspace Variable Setup](#workspace-variable-setup) below).
-   6. Begins the carry-patch work loop.
+1. Fetches workspace metadata via `GET /api/v1/workspaces/<slug>`
+   (authenticated with `Authorization: Bearer <pat>`). The response provides
+   `git_url`, `upstream_url`, `integration_branch`, `workspace_mode`, and
+   `clone_status`.
+2. Verifies that `workspace_mode` is `"carry_patch"` and `clone_status` is
+   `"ready"`. If either check fails, nightshift logs a diagnostic error and
+   exits.
+3. Reads the local repository's origin remote URL (e.g., via
+   `git remote get-url origin`). If the CWD is not a git repository,
+   nightshift exits with an error explaining that it must be run from within a
+   clone of the hub workspace.
+4. Compares the workspace `git_url` from the API response with the local
+   origin remote URL. If they match, nightshift proceeds -- it reads any
+   existing `.nightshift/config.toml` in the CWD and merges in the
+   `--workspace` and `--token` values.
+5. If the URLs do not match, nightshift exits with an error explaining the
+   mismatch (showing the expected `git_url` and the actual local origin URL)
+   and telling the operator to `cd` into the correct directory or clone the
+   workspace manually first. Nightshift does not create clones or switch
+   directories on its own.
 
 ### Token Handling
 
@@ -743,8 +772,9 @@ On startup, nightshift resolves the local working directory in one of two ways:
 
 ### Config Generation
 
-When nightshift creates a new clone and config, the generated
-`.nightshift/config.toml` contains:
+When nightshift starts in a matching workspace directory that does not yet
+have a `.nightshift/config.toml`, it generates a default config using values
+fetched from the hub workspace metadata:
 
 ```toml
 [hub]
@@ -761,16 +791,17 @@ integration_branch = "<from workspace API: integration_branch>"
 merge_strategy = "direct"
 ```
 
-The operator can customize this config after the first run. Subsequent
-invocations with the same `--workspace` flag reuse the existing config and
-clone directory.
+The operator can customize this config after the first run or create it
+manually before starting nightshift. Subsequent invocations with the same
+`--workspace` flag reuse the existing config.
 
 ### Workspace Variable Setup
 
-During bootstrapping, nightshift sets two workspace variables via the hub API
-to prevent the hub from triggering rebuilds autonomously. Nightshift controls
-rebuild timing itself -- it needs to observe rebuild results, coordinate with
-conflict resolution, and track outcomes for audit logging.
+On first startup in a workspace, nightshift sets two workspace variables via
+the hub API to prevent the hub from triggering rebuilds autonomously.
+Nightshift controls rebuild timing itself -- it needs to observe rebuild
+results, coordinate with conflict resolution, and track outcomes for audit
+logging.
 
 ```
 POST /api/v1/workspaces/<slug>/vars
@@ -785,9 +816,10 @@ POST /api/v1/workspaces/<slug>/vars
 | `AUTO_REBUILD_AFTER_SYNC` | `"false"` | Nightshift triggers rebuilds explicitly after sync so it can poll for completion and act on the result (resolve conflicts, log outcomes). |
 | `AUTO_REBUILD_AFTER_PUSH` | `"false"` | Nightshift triggers rebuilds explicitly after pushing fix branches so it can track whether the rebuild succeeds or produces new conflicts. |
 
-These variables are set once during initial bootstrapping. Nightshift does not
-reset them on subsequent startups (the hub persists them). If an operator wants
-hub-side auto-rebuild for manual workflows alongside nightshift, they can
+These variables are set once during the first successful startup. Nightshift
+does not reset them on subsequent startups (the hub persists them). If an
+operator wants hub-side auto-rebuild for manual workflows alongside nightshift,
+they can
 override these variables and nightshift will still function correctly -- it
 handles 409 (concurrent rebuild) gracefully by polling the existing rebuild
 instead of submitting a new one.
@@ -817,20 +849,23 @@ principle of least privilege; nightshift never needs admin access.
 **Decision**: Nightshift operates on the single workspace specified by
 `--workspace <slug>`. At startup, nightshift fetches workspace metadata via
 `GET /api/v1/workspaces/<slug>` to confirm the workspace exists, is in
-`carry_patch` mode, and has `clone_status: ready`. The slug is persisted in the
-local config's `[carry_patch] workspaces` list after bootstrapping. Multiple
-workspaces can be monitored by running multiple nightshift instances, each with
-its own `--workspace` flag and working directory.
+`carry_patch` mode, and has `clone_status: ready`. It then verifies that the
+CWD's origin remote URL matches the workspace's `git_url`. The slug is
+persisted in the local config's `[carry_patch] workspaces` list after initial
+configuration. Multiple workspaces can be monitored by running multiple
+nightshift instances, each with its own `--workspace` flag and working
+directory.
 
 **Rationale**: A single-workspace-per-process model is simpler, avoids
-cross-repo CWD management, and maps cleanly to one clone per workspace. For
-multi-workspace scenarios, an operator runs multiple nightshift instances
-(e.g., one systemd unit or container per workspace).
+cross-repo CWD management, and maps cleanly to one working directory per
+workspace. Each nightshift instance operates in a single operator-provided
+clone. For multi-workspace scenarios, an operator runs multiple nightshift
+instances (e.g., one systemd unit or container per workspace).
 
 **Alternative considered**: Multi-workspace in a single process (list of slugs
-in config). Rejected for initial implementation because it requires managing
-multiple local clones and CWD switching within a single daemon. Can be
-reconsidered later if demand warrants it.
+in config). Rejected for initial implementation because it requires operating
+across multiple local working directories with CWD switching within a single
+daemon. Can be reconsidered later if demand warrants it.
 
 ### DD-3: Conflict resolution strategy
 
@@ -931,21 +966,25 @@ logic.
 
 ### DD-7: Local clone and working directory
 
-**Decision**: Nightshift works from a local clone of the hub workspace. At
-bootstrap time, if the CWD is not already a matching clone, nightshift creates
-one automatically (see [Bootstrapping](#bootstrapping)). The clone URL is the
-hub's built-in git server (`/git/<org>/<slug>.git`), obtained from the `git_url`
-field of the workspace metadata (`GET /api/v1/workspaces/<slug>`).
-Authentication uses HTTP Basic with the PAT as the password (matching the
+**Decision**: Nightshift requires a local clone of the hub workspace as its
+working directory. At startup, nightshift validates the CWD by comparing the
+local origin remote URL against the `git_url` from the hub workspace metadata
+(`GET /api/v1/workspaces/<slug>`). If the CWD does not match, nightshift exits
+with a diagnostic error. The operator is responsible for cloning the repository
+beforehand (e.g., via `afc` or `git clone` with the hub git URL). The clone URL
+is the hub's built-in git server (`/git/<org>/<slug>.git`), and authentication
+uses HTTP Basic with the PAT as the password (matching the
 `afc credential-helper` pattern). Conflict resolution, patch inspection, and all
-git operations run against this local clone. The clone is kept up-to-date via
-`git fetch` at the start of each carry-patch cycle.
+git operations run against this operator-provided clone. The clone is kept
+up-to-date via `git fetch` at the start of each carry-patch cycle.
 
 **Rationale**: Conflict resolution requires local file access for the coder
 agent. Hub's git server at `/git/<org>/<slug>.git` provides authenticated access
 via PAT-based HTTP Basic auth. A persistent clone (rather than ephemeral
 worktrees) avoids re-cloning on every cycle and gives the coder agent a full
-repository context.
+repository context. Requiring the operator to create the clone keeps nightshift
+from creating infrastructure on its own, consistent with how operators also
+create the hub workspace and PAT as prerequisites.
 
 ---
 
@@ -1279,7 +1318,11 @@ the `HubConflictError` instance for caller inspection.
   1. Explicit value passed from `--token` CLI flag
   2. `AF_HUB_TOKEN` environment variable
 - Returns `None` if neither is set (carry-patch mode unavailable)
-- The hub endpoint URL is read from `[hub] endpoint_url` in the config
+- `resolve_hub_url()` resolves the hub endpoint URL from (in priority order):
+  1. Explicit value passed from `--hub-url` CLI flag
+  2. `AF_HUB_URL` environment variable
+  3. `[hub] endpoint_url` from the existing `.nightshift/config.toml`
+- Returns `None` if none is set (required on first start before config exists)
 - The PAT must have the scopes listed in section 1.1.1
 
 ```python
@@ -1296,6 +1339,16 @@ def resolve_hub_pat(
     *, token_flag: str | None = None, env_var: str = "AF_HUB_TOKEN",
 ) -> str | None:
     """Return the af-hub PAT or None if unavailable."""
+
+def resolve_hub_url(
+    *, hub_url_flag: str | None = None, config_url: str = "",
+    env_var: str = "AF_HUB_URL",
+) -> str | None:
+    """Return the hub endpoint URL from flag, env var, or config.
+
+    Resolution order: --hub-url flag > AF_HUB_URL env var > config value.
+    Returns None if none is set (required on first start).
+    """
 ```
 
 #### 1.2 Add hub configuration to nightshift
@@ -1414,7 +1467,7 @@ async def initialize_workspace_variables(
     await client.set_variable(slug, "AUTO_REBUILD_AFTER_PUSH", "false")
 ```
 
-This is idempotent. The variables are set once during workspace bootstrap and
+This is idempotent. The variables are set once during initial startup and
 persist across nightshift restarts (they are stored on the hub, not locally).
 
 Hub variables that nightshift reads but does not set:
@@ -1567,8 +1620,31 @@ Files to modify:
 ```python
 hub_client = None
 if hub_pat := resolve_hub_pat(token_flag=token_flag):
+    hub_url = resolve_hub_url(
+        hub_url_flag=hub_url_flag, config_url=config.hub.endpoint_url,
+    )
+    if not hub_url:
+        click.echo(
+            "Error: hub URL required on first start. "
+            "Pass --hub-url or set AF_HUB_URL.",
+            err=True,
+        )
+        sys.exit(1)
     from afhub.client import HubClient
-    hub_client = HubClient(config.hub.endpoint_url, hub_pat)
+    hub_client = HubClient(hub_url, hub_pat)
+    # Validate CWD against workspace metadata before proceeding
+    for slug in config.carry_patch.workspaces:
+        ws = await hub_client.get_workspace(slug)
+        local_origin = run_git_sync(["remote", "get-url", "origin"], cwd=root)
+        if local_origin != ws.git_url:
+            click.echo(
+                f"Error: CWD origin does not match workspace '{slug}': "
+                f"local origin is '{local_origin}' but workspace expects "
+                f"'{ws.git_url}'. cd into the correct directory or clone "
+                f"the workspace first.",
+                err=True,
+            )
+            sys.exit(1)
     # Initialize workspace variables on first connect
     for slug in config.carry_patch.workspaces:
         await initialize_workspace_variables(hub_client, slug)
@@ -1850,7 +1926,7 @@ Document the following known limitations:
 | `agentfox/nightshift/daemon.py` | Display names for carry-patch stream |
 | `agentfox/session/context.py` | Carry-patch artifact filtering (if needed) |
 | `afaudit/events.py` | Add carry-patch audit event types |
-| `nightshift/app.py` | `--token` flag, hub client init, variable bootstrap |
+| `nightshift/app.py` | `--hub-url` and `--token` flags, hub client init, CWD validation, variable initialization |
 | `agentfox/pyproject.toml` | Add afhub dependency |
 | `nightshift/pyproject.toml` | Add afhub dependency |
 | `agentfox/core/config_gen.py` | Add hub/carry_patch to visible sections |
