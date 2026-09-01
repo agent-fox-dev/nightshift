@@ -31,7 +31,7 @@
           "requirement_refs": [
             "01-REQ-1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -50,7 +50,7 @@
           "requirement_refs": [
             "01-REQ-1"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         },
         {
@@ -71,7 +71,7 @@
             "01-REQ-1",
             "01-REQ-10"
           ],
-          "state": "pending",
+          "state": "done",
           "optional": false
         }
       ],
