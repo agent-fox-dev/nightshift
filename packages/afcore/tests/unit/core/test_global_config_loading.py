@@ -151,9 +151,9 @@ class TestExistingGlobalConfig:
     """TS-13-5: Existing global config is parsed and used."""
 
     def test_existing_global_config_used(self, fake_home, global_config_dir, tmp_path, monkeypatch, clean_af_env):
-        """Global config with theme.playful=false is reflected; file not modified."""
+        """Global config with theme.header override is reflected; file not modified."""
         global_cfg = global_config_dir / "config.toml"
-        global_cfg.write_text("[theme]\nplayful = false\n")
+        global_cfg.write_text('[theme]\nheader = "bold blue"\n')
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
         monkeypatch.chdir(repo)
@@ -162,7 +162,7 @@ class TestExistingGlobalConfig:
 
         config = load_config()
 
-        assert config.theme.playful is False
+        assert config.theme.header == "bold blue"
         # TS-13-5: file must not be modified
         mtime_after = global_cfg.stat().st_mtime
         assert mtime_before == mtime_after
@@ -290,7 +290,7 @@ class TestNoLocalConfig:
 
     def test_no_local_config(self, fake_home, global_config_dir, tmp_path, monkeypatch, caplog, clean_af_env):
         """When no local config, global values used and DEBUG log emitted."""
-        (global_config_dir / "config.toml").write_text("[theme]\nplayful = false\n")
+        (global_config_dir / "config.toml").write_text('[theme]\nheader = "bold blue"\n')
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
         monkeypatch.chdir(repo)
@@ -298,7 +298,7 @@ class TestNoLocalConfig:
         with caplog.at_level(logging.DEBUG):
             config = load_config()
 
-        assert config.theme.playful is False
+        assert config.theme.header == "bold blue"
         # TS-13-8: must include the full path suffix
         assert any("No local config found at" in msg and ".nightshift/config.toml" in msg for msg in caplog.messages)
 
@@ -737,7 +737,7 @@ class TestSymlinkFinalFileOnlyProperty:
         toml_content_st = st.sampled_from(
             [
                 "[orchestrator]\nmax_retries = 1\n",
-                "[theme]\nplayful = true\n",
+                '[theme]\nheader = "bold blue"\n',
                 "[orchestrator]\nsession_timeout = 30\n",
                 "# empty\n",
             ]

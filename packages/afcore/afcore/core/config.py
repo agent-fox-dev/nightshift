@@ -130,13 +130,7 @@ class SecurityConfig(BaseModel):
 class ThemeConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    playful: bool = Field(default=True, description="Enable playful output style")
     header: str = Field(default="bold #ff8c00", description="Header text style")
-    success: str = Field(default="bold green", description="Success text style")
-    error: str = Field(default="bold red", description="Error text style")
-    warning: str = Field(default="bold yellow", description="Warning text style")
-    info: str = Field(default="#daa520", description="Info text style")
-    tool: str = Field(default="bold #cd853f", description="Tool text style")
     muted: str = Field(default="dim", description="Muted text style")
 
 
@@ -553,10 +547,11 @@ def load_config(path: Path | None = None) -> AgentFoxConfig:
     """Load config from TOML, validate, and merge with defaults.
 
     When called **without arguments** (``path is None``), resolves the
-    global config from ``$HOME/.agent-fox/config.toml`` and the local
-    config from ``.agent-fox/config.toml`` relative to the current
-    working directory, merges them using shallow section replacement,
-    validates through ``AgentFoxConfig``, and returns the result.
+    local config from ``.nightshift/config.toml`` relative to the
+    current working directory.  If a local config exists it is used as
+    the sole source; otherwise falls back to
+    ``$HOME/.nightshift/config.toml``.  Validates through
+    ``AgentFoxConfig`` and returns the result.
 
     When called **with a path**, loads and validates only that single
     file (backward compatibility with pre-spec-13 callers).

@@ -1,6 +1,6 @@
 """Theme system tests.
 
-Test Spec: TS-01-12 (playful toggle), TS-01-E6 (invalid color fallback)
+Test Spec: TS-01-E6 (invalid color fallback)
 Requirements: 01-REQ-7.1, 01-REQ-7.3, 01-REQ-7.4, 01-REQ-7.E1
 """
 
@@ -10,26 +10,15 @@ from afcore.core.config import ThemeConfig
 from afcore.ui.display import AppTheme, create_theme
 
 
-class TestThemePlayfulToggle:
-    """TS-01-12: Theme playful mode toggle."""
-
-    def test_playful_and_neutral_differ(self) -> None:
-        """Playful and non-playful modes return different messages."""
-        playful_theme = create_theme(ThemeConfig(playful=True))
-        neutral_theme = create_theme(ThemeConfig(playful=False))
-
-        playful_msg = playful_theme.playful("task_complete")
-        neutral_msg = neutral_theme.playful("task_complete")
-
-        assert playful_msg != neutral_msg
+class TestThemeColorRoles:
+    """Theme exposes required color roles."""
 
     def test_theme_has_color_roles(self) -> None:
-        """Theme exposes all required color roles."""
+        """Theme exposes header and muted roles."""
         theme = create_theme(ThemeConfig())
 
         assert isinstance(theme, AppTheme)
-        # Theme should be able to style text with each role
-        for role in ("header", "success", "error", "warning", "info", "tool", "muted"):
+        for role in ("header", "muted"):
             styled = theme.styled("test", role)
             assert isinstance(styled, str)
 
@@ -49,4 +38,4 @@ class TestThemeInvalidColor:
         theme = create_theme(ThemeConfig(header="not_a_valid_style"))
 
         # Should not raise — falls back to default
-        theme.header("test text")
+        theme.print("test text", role="header")

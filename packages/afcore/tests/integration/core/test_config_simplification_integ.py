@@ -22,14 +22,14 @@ class TestHiddenSectionsLoad:
         Theme is a hidden section that still loads correctly.
         """
         base = generate_default_config()
-        extra = "\n[theme]\nplayful = false\n"
+        extra = '\n[theme]\nheader = "bold blue"\n'
         content = base + extra
         config_file = tmp_path / "config.toml"
         config_file.write_text(content)
 
         config = load_config(config_file)
 
-        assert config.theme.playful is False, f"theme.playful is {config.theme.playful}, expected False"
+        assert config.theme.header == "bold blue"
 
     def test_knowledge_hidden_section_loads(self, tmp_path: Path):
         """Config with old knowledge fields loads without error (extra=ignore)."""
@@ -48,12 +48,12 @@ class TestHiddenSectionsLoad:
     def test_multiple_hidden_sections_load(self, tmp_path: Path):
         """Config with multiple hidden sections all load correctly."""
         base = generate_default_config()
-        extra = '\n[theme]\nplayful = true\n\n[knowledge]\nstore_path = "custom.duckdb"\n'
+        extra = '\n[theme]\nheader = "bold green"\n\n[knowledge]\nstore_path = "custom.duckdb"\n'
         content = base + extra
         config_file = tmp_path / "config.toml"
         config_file.write_text(content)
 
         config = load_config(config_file)
 
-        assert config.theme.playful is True
+        assert config.theme.header == "bold green"
         assert config.knowledge.store_path == "custom.duckdb"

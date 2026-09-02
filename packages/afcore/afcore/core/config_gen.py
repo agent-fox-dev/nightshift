@@ -421,7 +421,7 @@ def generate_local_config_template() -> str:
     but with a header indicating this is a local override file.
 
     When a local config exists it is the **sole** config source; the
-    global ``~/.agent-fox/config.toml`` is ignored entirely.
+    global ``~/.nightshift/config.toml`` is ignored entirely.
     """
     logger.debug("Generating local config template from AgentFoxConfig")
     schema = extract_schema(AgentFoxConfig)
