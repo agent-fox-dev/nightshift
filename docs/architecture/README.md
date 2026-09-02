@@ -14,9 +14,10 @@ For configuration specifics, see the
 its own feature branch. Multiple fixes can run simultaneously without stepping
 on each other. Integration happens through a serializing merge lock.
 
-**Separation of concerns through archetypes.** Four archetypes divide labor:
-Maintainer (triage), Coder (implementation), Reviewer (quality gate), and
-a merge agent (conflict resolution). Review agents cannot modify code.
+**Separation of concerns through archetypes.** Five archetypes divide labor:
+Coder (implementation), Reviewer (quality gate), Verifier (requirement
+verification), Gate (go/no-go decisions), and Maintainer (triage and
+maintenance). Review agents cannot modify code.
 
 **Graceful degradation everywhere.** Every component handles failure
 non-fatally. If knowledge retrieval fails, the session proceeds without
