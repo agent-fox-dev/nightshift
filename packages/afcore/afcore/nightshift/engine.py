@@ -571,77 +571,54 @@ class NightShiftEngine:
         )
 
         effective_body = issue_body if issue_body else getattr(issue, "body", "")
+        succeeded = False
+        cost = 0.0
+        sessions_run = 0
+        input_tokens = 0
+        output_tokens = 0
         try:
             metrics = await pipeline.process_issue(issue, issue_body=effective_body, run_id=fix_run_id)
             cost = self._calculate_fix_cost(metrics)
-
-            from afcore.ui.progress import format_duration
-
-            duration_ms = int((time.monotonic() - fix_start) * 1000)
-            duration_str = format_duration(duration_ms / 1000)
-            self._emit_status(
-                f"\u2714 Issue #{issue.number} fixed ({duration_str})",
-                "bold green",
-            )
-
-            outcome = IssueOutcome(
-                issue_number=issue.number,
-                title=issue.title,
-                run_id=fix_run_id,
-                outcome="fixed",
-                duration_ms=duration_ms,
-                cost_usd=cost,
-                sessions_run=getattr(metrics, "sessions_run", 0),
-                input_tokens=getattr(metrics, "input_tokens", 0),
-                output_tokens=getattr(metrics, "output_tokens", 0),
-            )
-            await self.state.add_fix_result(
-                cost,
-                getattr(metrics, "sessions_run", 0),
-                outcome,
-                succeeded=True,
-            )
-
-            _emit_audit_event(
-                self._sink,
-                fix_run_id,
-                AuditEventType.FIX_COMPLETE,
-                payload={"issue_number": issue.number},
-            )
+            sessions_run = getattr(metrics, "sessions_run", 0)
+            input_tokens = getattr(metrics, "input_tokens", 0)
+            output_tokens = getattr(metrics, "output_tokens", 0)
+            succeeded = True
         except Exception:
-            from afcore.ui.progress import format_duration
-
-            duration_ms = int((time.monotonic() - fix_start) * 1000)
-            duration_str = format_duration(duration_ms / 1000)
-            self._emit_status(
-                f"\u2718 Issue #{issue.number} failed ({duration_str})",
-                "bold red",
-            )
-
-            outcome = IssueOutcome(
-                issue_number=issue.number,
-                title=issue.title,
-                run_id=fix_run_id,
-                outcome="failed",
-                duration_ms=duration_ms,
-                cost_usd=0.0,
-                sessions_run=0,
-                input_tokens=0,
-                output_tokens=0,
-            )
-            await self.state.add_fix_result(0.0, 0, outcome, succeeded=False)
-
             logger.warning(
                 "Fix pipeline raised unexpectedly for issue #%d",
                 issue.number,
                 exc_info=True,
             )
-            _emit_audit_event(
-                self._sink,
-                fix_run_id,
-                AuditEventType.FIX_FAILED,
-                payload={"issue_number": issue.number},
-            )
+
+        from afcore.ui.progress import format_duration
+
+        duration_ms = int((time.monotonic() - fix_start) * 1000)
+        duration_str = format_duration(duration_ms / 1000)
+
+        if succeeded:
+            self._emit_status(f"\u2714 Issue #{issue.number} fixed ({duration_str})", "bold green")
+        else:
+            self._emit_status(f"\u2718 Issue #{issue.number} failed ({duration_str})", "bold red")
+
+        outcome = IssueOutcome(
+            issue_number=issue.number,
+            title=issue.title,
+            run_id=fix_run_id,
+            outcome="fixed" if succeeded else "failed",
+            duration_ms=duration_ms,
+            cost_usd=cost,
+            sessions_run=sessions_run,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+        await self.state.add_fix_result(cost, sessions_run, outcome, succeeded=succeeded)
+
+        _emit_audit_event(
+            self._sink,
+            fix_run_id,
+            AuditEventType.FIX_COMPLETE if succeeded else AuditEventType.FIX_FAILED,
+            payload={"issue_number": issue.number},
+        )
 
     async def _drain_issues(self) -> bool:
         """Run issue checks until no open af:fix issues remain.

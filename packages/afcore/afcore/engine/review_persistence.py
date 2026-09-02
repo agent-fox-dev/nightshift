@@ -14,16 +14,13 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from afaudit.emit import emit_audit_event
 from afaudit.events import AuditEventType, AuditSeverity
 from afaudit.sink import SessionSink, SinkDispatcher
 
 from afcore.core.json_extraction import extract_json_array
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

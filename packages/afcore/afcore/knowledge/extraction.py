@@ -19,16 +19,13 @@ Requirements: 05-REQ-3.1, 05-REQ-3.2, 05-REQ-3.3, 05-REQ-3.4,
 
 import json
 import logging
-import re
 
 from pydantic import ValidationError
 
+from afcore.core.json_extraction import _FENCE_RE
 from afcore.schemas.session_summary import RejectedApproach, SessionSummary
 
 logger = logging.getLogger(__name__)
-
-# Regex for markdown code fences (```json ... ``` or ``` ... ```)
-_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
 
 _EMPTY_RESULT: tuple[None, list, list, list] = (None, [], [], [])
 

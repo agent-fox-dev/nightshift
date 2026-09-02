@@ -28,6 +28,14 @@ def _sanitize_embedding_dim(dim: int) -> int:
 MigrationFn = Callable[[duckdb.DuckDBPyConnection], "bool | None"]
 
 
+def _get_tables(conn: duckdb.DuckDBPyConnection) -> set[str]:
+    """Return the set of table names in the main schema."""
+    return {
+        r[0]
+        for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
+    }
+
+
 @dataclass(frozen=True)
 class Migration:
     """A forward-only schema migration."""
@@ -138,10 +146,7 @@ def _migrate_v5(conn: duckdb.DuckDBPyConnection) -> bool | None:
     Requirements: 37-REQ-2.1, 37-REQ-2.2, 37-REQ-2.3, 37-REQ-2.E1
     """
     # Check if memory_facts table exists; skip if not
-    tables = {
-        r[0]
-        for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
-    }
+    tables = _get_tables(conn)
     if "memory_facts" not in tables:
         logger.info("memory_facts table not found, skipping v5 migration")
         return False
@@ -298,10 +303,7 @@ def _migrate_v10(conn: duckdb.DuckDBPyConnection) -> bool | None:
     Requirements: 101-REQ-4.E3, 101-REQ-5.6, 101-REQ-6.6, 101-REQ-8.2
     """
     # Check if memory_facts table exists; skip if not
-    tables = {
-        r[0]
-        for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
-    }
+    tables = _get_tables(conn)
     if "memory_facts" not in tables:
         logger.info("memory_facts table not found, skipping v10 migration")
         return False
@@ -493,10 +495,7 @@ def _migrate_v11(conn: duckdb.DuckDBPyConnection) -> None:
     # Uses ADD COLUMN IF NOT EXISTS for idempotency on fresh databases that
     # already have the updated _CURRENT_SCHEMA_DDL. Skips if the table does not
     # exist (e.g., during testing with minimal schema fixtures).
-    tables = {
-        r[0]
-        for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
-    }
+    tables = _get_tables(conn)
     if "session_outcomes" in tables:
         conn.execute("ALTER TABLE session_outcomes ADD COLUMN IF NOT EXISTS run_id VARCHAR")
         conn.execute("ALTER TABLE session_outcomes ADD COLUMN IF NOT EXISTS attempt INTEGER DEFAULT 1")
@@ -556,10 +555,7 @@ def _migrate_v12(conn: duckdb.DuckDBPyConnection) -> None:
     DuckDB does not support ALTER TABLE DROP CONSTRAINT, so we recreate the
     table with the correct schema and copy the data across.
     """
-    tables = {
-        r[0]
-        for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
-    }
+    tables = _get_tables(conn)
     if "plan_nodes" not in tables:
         return
 
@@ -649,10 +645,7 @@ def _migrate_v16(conn: duckdb.DuckDBPyConnection) -> None:
 
     Requirements: 113-REQ-7.2
     """
-    tables = {
-        r[0]
-        for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
-    }
+    tables = _get_tables(conn)
     if "session_outcomes" in tables:
         conn.execute("ALTER TABLE session_outcomes ADD COLUMN IF NOT EXISTS retrieval_summary TEXT")
     else:
@@ -740,10 +733,7 @@ def _migrate_v19(conn: duckdb.DuckDBPyConnection) -> None:
 
 def _migrate_v20(conn: duckdb.DuckDBPyConnection) -> None:
     """Add coverage_data column to session_outcomes for trend tracking."""
-    tables = {
-        r[0]
-        for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
-    }
+    tables = _get_tables(conn)
     if "session_outcomes" in tables:
         conn.execute("ALTER TABLE session_outcomes ADD COLUMN IF NOT EXISTS coverage_data TEXT")
 
@@ -850,10 +840,7 @@ def _migrate_v25(conn: duckdb.DuckDBPyConnection) -> bool | None:
 
     Requirements: 592-AC-1 (pre-condition fix for drift_findings dismissal)
     """
-    tables = {
-        r[0]
-        for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
-    }
+    tables = _get_tables(conn)
     if "drift_findings" not in tables:
         logger.info("drift_findings table not found, skipping v25 migration")
         return False
@@ -897,10 +884,7 @@ def _migrate_v21(conn: duckdb.DuckDBPyConnection) -> None:
     - coverage_data was written but never queried or read.
     The coverage regression gate is preserved; only the persistence path is removed.
     """
-    tables = {
-        r[0]
-        for r in conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
-    }
+    tables = _get_tables(conn)
     if "session_outcomes" not in tables:
         return
     cols = {

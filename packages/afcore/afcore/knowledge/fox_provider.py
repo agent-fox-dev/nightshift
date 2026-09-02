@@ -34,6 +34,13 @@ from afcore.knowledge.review_store import (
 logger = logging.getLogger(__name__)
 
 
+def _filter_actionable(findings: list, task_description: str) -> list:
+    """Filter to critical/major findings and sort by relevance."""
+    keywords = _extract_keywords(task_description)
+    actionable = [f for f in findings if f.severity in ("critical", "major")]
+    return sort_findings(actionable, keywords)
+
+
 def _query_safe(query_fn, args, *, label: str, spec_name: str, default=None):
     """Run a query function, returning *default* on any exception.
 
@@ -446,10 +453,7 @@ class FoxKnowledgeProvider:
 
         # Table may not exist in a fresh database (116-REQ-6.E1).
         findings = _query_safe(_do_query, (), label="review findings", spec_name=spec_name)
-
-        keywords = _extract_keywords(task_description)
-        actionable = [f for f in findings if f.severity in ("critical", "major")]
-        actionable = sort_findings(actionable, keywords)
+        actionable = _filter_actionable(findings, task_description)
 
         result: list[str] = []
         ids: list[str] = []
@@ -487,10 +491,7 @@ class FoxKnowledgeProvider:
             return query_cross_group_findings(conn, spec_name, task_group, exclude_prereview=exclude_prereview)
 
         findings = _query_safe(_do_query, (), label="cross-group findings", spec_name=spec_name)
-
-        keywords = _extract_keywords(task_description)
-        actionable = [f for f in findings if f.severity in ("critical", "major")]
-        actionable = sort_findings(actionable, keywords)
+        actionable = _filter_actionable(findings, task_description)
 
         result: list[str] = []
         for f in actionable:
@@ -520,10 +521,7 @@ class FoxKnowledgeProvider:
             return query_cross_spec_drift_findings(conn, spec_name, file_footprint)
 
         findings = _query_safe(_do_query, (), label="cross-spec drift findings", spec_name=spec_name)
-
-        keywords = _extract_keywords(task_description)
-        actionable = [f for f in findings if f.severity in ("critical", "major")]
-        actionable = sort_findings(actionable, keywords)
+        actionable = _filter_actionable(findings, task_description)
 
         from afcore.knowledge.formatting import format_drift_finding_parts
 
@@ -559,10 +557,7 @@ class FoxKnowledgeProvider:
             )
 
         findings = _query_safe(_do_query, (), label="drift findings", spec_name=spec_name)
-
-        keywords = _extract_keywords(task_description)
-        actionable = [f for f in findings if f.severity in ("critical", "major")]
-        actionable = sort_findings(actionable, keywords)
+        actionable = _filter_actionable(findings, task_description)
 
         from afcore.knowledge.formatting import format_drift_finding_parts
 
