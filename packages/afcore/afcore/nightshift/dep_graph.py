@@ -63,6 +63,20 @@ class ParallelGraph:
         return newly_ready
 
 
+def _build_priority_map(issues: list[IssueResult]) -> dict[int, int]:
+    """Build a priority rank map: high=0, medium/none=1, low=2."""
+    priority_map: dict[int, int] = {}
+    for issue in issues:
+        label_set = set(issue.labels)
+        if LABEL_PRIORITY_HIGH in label_set:
+            priority_map[issue.number] = 0
+        elif LABEL_PRIORITY_LOW in label_set:
+            priority_map[issue.number] = 2
+        else:
+            priority_map[issue.number] = 1
+    return priority_map
+
+
 def build_parallel_graph(
     issues: list[IssueResult],
     edges: list[DependencyEdge],
@@ -75,15 +89,7 @@ def build_parallel_graph(
     """
     issue_numbers = {i.number for i in issues}
 
-    priority_map: dict[int, int] = {}
-    for issue in issues:
-        label_set = set(issue.labels)
-        if LABEL_PRIORITY_HIGH in label_set:
-            priority_map[issue.number] = 0
-        elif LABEL_PRIORITY_LOW in label_set:
-            priority_map[issue.number] = 2
-        else:
-            priority_map[issue.number] = 1
+    priority_map = _build_priority_map(issues)
 
     valid_edges = [e for e in edges if e.from_issue in issue_numbers and e.to_issue in issue_numbers]
     valid_edges = _break_all_cycles(valid_edges, issue_numbers)
@@ -118,16 +124,7 @@ def build_graph(
     """
     issue_numbers = {i.number for i in issues}
 
-    # Build a priority rank map: high=0, medium/none=1, low=2
-    priority_map: dict[int, int] = {}
-    for issue in issues:
-        label_set = set(issue.labels)
-        if LABEL_PRIORITY_HIGH in label_set:
-            priority_map[issue.number] = 0
-        elif LABEL_PRIORITY_LOW in label_set:
-            priority_map[issue.number] = 2
-        else:
-            priority_map[issue.number] = 1  # medium or unlabelled
+    priority_map = _build_priority_map(issues)
 
     # Filter edges to only include those between issues in the batch
     valid_edges = [e for e in edges if e.from_issue in issue_numbers and e.to_issue in issue_numbers]

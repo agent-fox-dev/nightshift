@@ -28,16 +28,13 @@ if TYPE_CHECKING:
     from afcore.nightshift.fix_pipeline import FixReviewResult, TriageResult
     from afcore.session.convergence import AuditResult
 
-from afcore.core.json_extraction import extract_json_array
+from afcore.core.json_extraction import _FENCE_RE, extract_json_array  # noqa: F401
 from afcore.knowledge.review_store import (
     DriftFinding,
     ReviewFinding,
     VerificationResult,
     normalize_severity,
 )
-
-# Re-export for backward compatibility with consumers
-__all__ = ["extract_json_array"]
 
 logger = logging.getLogger(__name__)
 
@@ -203,11 +200,6 @@ def _classify_category(description: str) -> str | None:
             if keyword in lower:
                 return category
     return None
-
-
-# Backward-compatibility alias — callers that imported _detect_security_category
-# directly continue to work unchanged.
-_detect_security_category = _classify_category
 
 
 # ---------------------------------------------------------------------------
@@ -381,10 +373,6 @@ def _resolve_wrapper_key(data: dict, canonical_key: str) -> str | None:
         if actual is not None:
             return actual
     return None
-
-
-# Regex for markdown code fences (```json ... ``` or ``` ... ```)
-_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
 
 
 def _extract_json_dict(response: str) -> dict | None:

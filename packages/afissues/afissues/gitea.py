@@ -24,14 +24,12 @@ import re
 
 import httpx
 
-from afissues._http import request_with_retry
+from afissues._http import _truncate_response, request_with_retry
 from afissues._ssrf import SSRFGuardTransport, _validate_url
 from afissues.errors import IntegrationError
 from afissues.protocol import IssueComment, IssueResult, PrResult
 
 logger = logging.getLogger(__name__)
-
-_MAX_ERROR_TEXT = 500
 
 # Timeout for all Gitea API calls: 30s connect, 30s read/write.
 _GITEA_TIMEOUT = httpx.Timeout(connect=30.0, read=30.0, write=30.0, pool=30.0)
@@ -49,13 +47,6 @@ _SORT_MAP: dict[tuple[str, str], str] = {
     ("updated", "asc"): "leastupdate",
     ("updated", "desc"): "recentupdate",
 }
-
-
-def _truncate_response(text: str) -> str:
-    """Truncate API response text to avoid leaking verbose error details."""
-    if len(text) <= _MAX_ERROR_TEXT:
-        return text
-    return text[:_MAX_ERROR_TEXT] + "..."
 
 
 def _map_issue(data: dict) -> IssueResult:

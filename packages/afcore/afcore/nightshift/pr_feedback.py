@@ -31,8 +31,8 @@ from afcore.core.config import NightShiftConfig
 from afcore.nightshift.fix_pipeline import (
     PR_TRACKING_PATTERN,  # noqa: F401 — re-exported for pr_feedback namespace
     FixPipeline,
-    TriageResult,  # noqa: F401 — re-exported for pr_feedback namespace
-    format_tracking_comment,  # noqa: F401 — re-exported for pr_feedback namespace
+    TriageResult,
+    format_tracking_comment,
     parse_tracking_comment,
 )
 from afcore.nightshift.spec_builder import sanitise_branch_name  # noqa: F401
