@@ -104,8 +104,8 @@ specs rather than human-authored ones.
 ### Stage 1: Triage Analysis
 
 A Maintainer agent in `fix-triage` mode analyzes the issue. This agent has
-read-only access to the codebase (`cat`, `head`, `tail`, `ls`, `git`,
-`grep`, `find`, `wc`) and operates at the STANDARD model tier.
+read-only access to the codebase (`ls`, `cat`, `git`, `wc`, `head`,
+`tail`) and operates at the STANDARD model tier.
 
 The triage agent explores the codebase, traces the code path related to the
 issue, identifies the root cause, and produces a structured JSON report
@@ -164,7 +164,7 @@ with the correct run for auditing purposes.
 ### Stage 4: Coder-Reviewer Loop
 
 The coder-reviewer loop is the core execution mechanism. It retries up to
-`max_retries + 1` iterations (default `max_retries = 3`).
+`max_retries + 1` iterations (default `max_retries = 2`).
 
 Each iteration consists of:
 
@@ -285,7 +285,7 @@ Night Shift.
 On startup, the engine validates that a platform is configured (one of
 `github`, `gitlab`, or `gitea` is required for issue management), initializes
 the platform client, initializes the knowledge store, cleans up stale merge
-locks and audit files, and writes a PID file to `.agent-fox/daemon.pid`. The
+locks and audit files, and writes a PID file to `.nightshift/daemon.pid`. The
 first fix cycle fires immediately without waiting for the timer interval.
 
 ### Event Loop
@@ -295,8 +295,12 @@ a loop that fires immediately on first run and then waits the configured
 interval (default 15 minutes) between cycles. The runner uses a 50ms tick
 between checks, keeping shutdown responsive without busy-looping.
 
-Currently there is exactly one stream: the `fix-pipeline` stream, which
-calls the engine's drain loop on each cycle.
+Up to three streams are registered: the `fix-pipeline` stream (always
+present, calls the engine's drain loop on each cycle), the `pr-feedback`
+stream (enabled when `merge_strategy = "pr"`, polls open PRs for CI
+failures and reviewer-requested changes), and the `carry-patch` stream
+(enabled when `carry_patch.enabled` is true and a hub client is
+available, monitors carry-patch workspaces for conflicts).
 
 ### Cost and Session Limits
 

@@ -8,10 +8,10 @@ this repository. Treat this file as mandatory policy for every coding session.
 Before making any changes, orient yourself:
 
 1. **Read `README.md`** for project overview and quick-start.
-2. **Read `.agent-fox/steering.md`** if it exists — project-level directives that
+2. **Read `.specs/steering.md`** if it exists — project-level directives that
    apply to all agents and skills. Follow any instructions found there.
-3. **Read relevant specs** in `.agent-fox/specs/` for the area you're working on.
-4. **Read ADRs** in `docs/adr/` for architectural context.
+3. **Read relevant specs** in `.specs/` for the area you're working on.
+4. **Read errata** in `docs/errata/` for spec divergences and implementation notes.
 5. **Explore the codebase:** the main packages are under `packages/`. Tests
    live alongside each package in `packages/<name>/tests/`.
 6. **Check git state:** `git log --oneline -20`, `git status --short --branch`.
@@ -27,18 +27,18 @@ Do not implement anything before completing these steps.
 
 ```
 packages/nightshift/    # CLI entry point (nightshift command)
-packages/afcore/      # Core library (sessions, knowledge, archetypes)
+packages/afcore/        # Core library (sessions, knowledge, archetypes)
 packages/afissues/      # Platform abstraction (GitHub, GitLab, Gitea)
 packages/afaudit/       # Audit infrastructure (events, sinks, traces)
+packages/afhub/         # Hub API client (carry-patch, polling)
 docs/                   # Documentation
-.agent-fox/specs/       # Specs to be implemented
-.agent-fox/specs/archive/ # Old specs. Ignore for coding tasks, except for reference
+.specs/                 # Specs to be implemented
 ```
 
 ## Spec-Driven Workflow
 
 This project uses spec-driven development. Specifications live in
-`.agent-fox/specs/NN_name/` (numbered by creation order) and contain five artifacts:
+`.specs/NN_name/` (numbered by creation order) and contain five artifacts:
 
 - `prd.md` — product requirements document (source of truth)
 - `requirements.md` — EARS-syntax acceptance criteria

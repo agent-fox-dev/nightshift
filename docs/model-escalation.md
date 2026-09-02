@@ -32,11 +32,9 @@ Each archetype/mode pair has a default tier and variant configured in
 |---|---|---|
 | coder | STANDARD / standard | xhigh |
 | coder (fix) | STANDARD / standard | xhigh |
-| reviewer (pre-review) | ADVANCED / standard | high |
-| reviewer (drift-review) | STANDARD / standard | high |
+| reviewer (pre-flight) | ADVANCED / standard | high |
 | reviewer (audit-review) | ADVANCED / standard | high |
 | reviewer (fix-review) | ADVANCED / standard | high |
-| curator | STANDARD / standard | medium |
 | verifier | STANDARD / standard | high |
 | gate | STANDARD / standard | low |
 | maintainer (hunt) | SIMPLE / standard | medium |

@@ -37,7 +37,7 @@ uv sync
 
 ## Configuration
 
-Night Shift reads its configuration from `.agent-fox/config.toml`. Key
+Night Shift reads its configuration from `.nightshift/config.toml`. Key
 settings:
 
 ```toml
@@ -60,7 +60,7 @@ See [docs/config-reference.md](docs/config-reference.md) for all options.
 ## Development
 
 This is a [uv workspace](https://docs.astral.sh/uv/concepts/workspaces/)
-with four packages:
+with five packages:
 
 | Package | Description |
 |---------|-------------|
@@ -68,6 +68,7 @@ with four packages:
 | `packages/afcore/` | Core library — session infrastructure, knowledge system, archetypes |
 | `packages/afissues/` | Platform abstraction — GitHub, GitLab, Gitea integration |
 | `packages/afaudit/` | Audit infrastructure — structured events, sinks, traces |
+| `packages/afhub/` | Hub API client — authentication, polling, carry-patch helpers |
 
 ```bash
 uv sync                      # install all packages

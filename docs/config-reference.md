@@ -28,6 +28,8 @@ with default values for reference.
 - [night_shift](#night_shift)
 - [workspace](#workspace)
 - [caching](#caching)
+- [hub](#hub)
+- [carry_patch](#carry_patch)
 
 ---
 
@@ -213,7 +215,7 @@ Custom per-model pricing for cost tracking.
 | `cache_creation_price_per_m` | float | `0.0` | USD per million cache-creation tokens |
 
 Built-in defaults cover `claude-haiku-4-5`, `claude-sonnet-4-6`,
-`claude-opus-4-5`, and `claude-opus-4-6`.
+`claude-opus-4-5`, `claude-opus-4-6`, and `claude-opus-4-6[1m]`.
 
 ```toml
 [pricing.models.claude-sonnet-4-6]
@@ -286,6 +288,46 @@ Prompt caching configuration.
 ```toml
 [caching]
 cache_policy = "DEFAULT"
+```
+
+---
+
+## hub
+
+Hub API configuration for carry-patch mode.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `endpoint_url` | str | `""` | Hub API base URL |
+
+```toml
+[hub]
+endpoint_url = "https://hub.example.com/api/v1"
+```
+
+---
+
+## carry_patch
+
+Carry-patch mode configuration. Automates conflict resolution for
+organizations maintaining a fork of an upstream repository. Requires
+a running af-hub instance and the `[hub]` section to be configured.
+
+| Field | Type | Default | Bounds | Description |
+|-------|------|---------|--------|-------------|
+| `enabled` | bool | `false` | -- | Enable carry-patch mode |
+| `workspace` | str | `""` | -- | Hub workspace slug |
+| `check_interval` | int | `300` | >= 60 | Seconds between conflict checks |
+| `auto_resolve` | bool | `true` | -- | Auto-resolve detected conflicts |
+| `rebuild_timeout` | int | `600` | >= 1 | Max seconds to wait for hub rebuild |
+| `rebuild_poll_interval` | int | `5` | >= 2 | Seconds between rebuild poll checks |
+| `max_resolve_retries` | int | `2` | 0--10 | Max automatic conflict-resolve retries |
+
+```toml
+[carry_patch]
+enabled = true
+workspace = "my-workspace"
+check_interval = 300
 ```
 
 ---

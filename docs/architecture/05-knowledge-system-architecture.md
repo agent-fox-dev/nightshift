@@ -31,7 +31,7 @@ The engine interacts with the knowledge system through a two-method protocol:
 
 ```
 KnowledgeProvider
-  retrieve(spec_name, task_description, task_group?, session_id?) → list[str]
+  retrieve(spec_name, task_description, task_group?, session_id?, file_footprint?, archetype?) → list[str]
   ingest(session_id, spec_name, context)
 ```
 
@@ -188,7 +188,7 @@ not affected — ingestion never blocks the coding lifecycle.
 ## 5. The Knowledge Store
 
 The knowledge store lives in a single DuckDB database
-(`.agent-fox/knowledge.duckdb`). The following tables form the knowledge layer
+(`.nightshift/knowledge.duckdb`). The following tables form the knowledge layer
 (separate from plan state and execution state):
 
 ### 5.1 `review_findings`
