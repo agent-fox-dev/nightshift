@@ -29,7 +29,7 @@ class TestConfigDefaults:
         assert config.orchestrator.max_retries == 2
         assert config.orchestrator.session_timeout == 45
         assert config.orchestrator.max_budget_usd == 20.0
-        assert config.theme.playful is True
+        assert config.theme.header == "bold #ff8c00"
 
     def test_whitespace_only_toml_returns_defaults(self, tmp_path: Path) -> None:
         """A whitespace-only config file produces all default values."""
@@ -58,13 +58,15 @@ class TestConfigOverrides:
     def test_multiple_overrides(self, tmp_path: Path) -> None:
         """Multiple overrides are all applied."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text("[orchestrator]\nmax_retries = 5\nsession_timeout = 60\n\n[theme]\nplayful = false\n")
+        config_file.write_text(
+            '[orchestrator]\nmax_retries = 5\nsession_timeout = 60\n\n[theme]\nheader = "bold blue"\n'
+        )
 
         config = load_config(path=config_file)
 
         assert config.orchestrator.max_retries == 5
         assert config.orchestrator.session_timeout == 60
-        assert config.theme.playful is False
+        assert config.theme.header == "bold blue"
 
 
 class TestConfigInvalidType:

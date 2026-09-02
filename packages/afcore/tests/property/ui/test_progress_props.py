@@ -23,7 +23,7 @@ from hypothesis import strategies as st
 from rich.console import Console
 from rich.theme import Theme
 
-_STYLE_ROLES = ("header", "success", "error", "warning", "info", "tool", "muted")
+_STYLE_ROLES = ("header", "muted")
 
 
 def _make_theme(*, force_terminal: bool = True, width: int = 120) -> tuple[AppTheme, StringIO]:

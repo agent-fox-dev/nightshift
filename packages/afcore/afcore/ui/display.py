@@ -1,8 +1,7 @@
 """Terminal theme and banner rendering.
 
-Provides themed console output with configurable color roles and
-playful/neutral message variants, plus the CLI banner with fox ASCII
-art, version, model, and current working directory.
+Provides themed console output with configurable color roles, plus the
+CLI banner with ASCII art, version, model, and current working directory.
 
 Requirements: 01-REQ-7.1, 01-REQ-7.2, 01-REQ-7.3, 01-REQ-7.4, 01-REQ-7.E1,
               01-REQ-1.3, 14-REQ-1.1, 14-REQ-1.2, 14-REQ-2.1,
@@ -33,37 +32,9 @@ logger = logging.getLogger(__name__)
 # Theme
 # ---------------------------------------------------------------------------
 
-# Default style values matching ThemeConfig defaults
 _DEFAULT_STYLES: dict[str, str] = {
     "header": "bold #ff8c00",
-    "success": "bold green",
-    "error": "bold red",
-    "warning": "bold yellow",
-    "info": "#daa520",
-    "tool": "bold #cd853f",
     "muted": "dim",
-}
-
-# Playful (fox-themed) messages keyed by event
-_PLAYFUL_MESSAGES: dict[str, str] = {
-    "task_complete": "Tail wagging — task complete!",
-    "thinking": "The fox is thinking...",
-    "starting": "The fox is on the hunt!",
-    "error": "The fox stumbled!",
-    "success": "The fox nailed it!",
-    "init": "The fox is setting up its den!",
-    "waiting": "The fox is watching patiently...",
-}
-
-# Neutral (professional) messages keyed by event
-_NEUTRAL_MESSAGES: dict[str, str] = {
-    "task_complete": "Task complete.",
-    "thinking": "Processing...",
-    "starting": "Starting task.",
-    "error": "An error occurred.",
-    "success": "Operation succeeded.",
-    "init": "Initializing project.",
-    "waiting": "Waiting...",
 }
 
 
@@ -100,8 +71,7 @@ class AppTheme:
 
     def __post_init__(self) -> None:
         """Initialize the Rich console with validated theme styles."""
-        # Validate each style from config, falling back to defaults
-        roles = ("header", "success", "error", "warning", "info", "tool", "muted")
+        roles = ("header", "muted")
         styles: dict[str, str] = {}
         for role in roles:
             raw_style = getattr(self.config, role)
@@ -118,46 +88,16 @@ class AppTheme:
         """
         return f"[{role}]{text}[/{role}]"
 
-    def print(self, text: str, role: str = "info") -> None:
+    def print(self, text: str, role: str = "header") -> None:
         """Print styled text to console."""
         self.console.print(f"[{role}]{text}[/{role}]")
-
-    def success(self, text: str) -> None:
-        """Print a success message."""
-        self.print(text, role="success")
-
-    def error(self, text: str) -> None:
-        """Print an error message."""
-        self.print(text, role="error")
-
-    def warning(self, text: str) -> None:
-        """Print a warning message."""
-        self.print(text, role="warning")
-
-    def header(self, text: str) -> None:
-        """Print a header message."""
-        self.print(text, role="header")
-
-    def playful(self, key: str) -> str:
-        """Return playful or neutral message based on config.
-
-        Args:
-            key: The message key (e.g., "task_complete", "thinking").
-
-        Returns:
-            A fox-themed message if playful mode is enabled,
-            otherwise a neutral professional message.
-        """
-        if self.config.playful:
-            return _PLAYFUL_MESSAGES.get(key, key)
-        return _NEUTRAL_MESSAGES.get(key, key)
 
 
 def create_theme(config: ThemeConfig) -> AppTheme:
     """Create an AppTheme from configuration.
 
     Args:
-        config: Theme configuration with color roles and playful flag.
+        config: Theme configuration with color roles.
 
     Returns:
         A fully initialized AppTheme ready for styled output.
@@ -177,7 +117,7 @@ FOX_ART = r"""
 
 
 def _get_git_revision() -> str | None:
-    """Return the short git revision of the *agent-fox* package.
+    """Return the short git revision of the nightshift package.
 
     Resolution order:
     1. Build-time stamp in ``_build_info.GIT_REVISION`` (set by
@@ -185,10 +125,6 @@ def _get_git_revision() -> str | None:
     2. Live ``git rev-parse`` executed inside the package source tree
        (works for editable / dev installs where the source *is* a git
        checkout).
-
-    The previous implementation ran ``git rev-parse`` in the CWD,
-    which returned the revision of whatever repo the user was working
-    in — not agent-fox's own revision.
     """
     if GIT_REVISION is not None:
         return GIT_REVISION
@@ -231,7 +167,7 @@ def render_banner(
     theme: AppTheme,
     quiet: bool = False,
 ) -> None:
-    """Render the CLI banner with fox art, version, model, and cwd.
+    """Render the CLI banner with art, version, model, and cwd.
 
     Args:
         theme: The app theme for styled output.
@@ -251,7 +187,7 @@ def render_banner(
     # 14-REQ-2.1, 14-REQ-2.2, 14-REQ-2.3, 14-REQ-2.E1: Version + model line
     model_display = _resolve_coding_model_display()
     revision = _get_git_revision()
-    version_part = f"agent-fox v{__version__}"
+    version_part = f"nightshift v{__version__}"
     if revision:
         version_part += f" ({revision})."
     version_line = f"{version_part}  model: {model_display}"

@@ -36,13 +36,7 @@ class TestConfigDefaultsCompleteness:
         assert config.orchestrator.max_budget_usd == 20.0
         assert config.orchestrator.max_cost is None
         assert config.orchestrator.max_sessions is None
-        assert config.theme.playful is True
         assert config.theme.header == "bold #ff8c00"
-        assert config.theme.success == "bold green"
-        assert config.theme.error == "bold red"
-        assert config.theme.warning == "bold yellow"
-        assert config.theme.info == "#daa520"
-        assert config.theme.tool == "bold #cd853f"
         assert config.theme.muted == "dim"
 
 

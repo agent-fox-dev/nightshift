@@ -27,7 +27,7 @@ spec files.
 
 ## 2. Persistent State in DuckDB
 
-All system state lives in `.agent-fox/knowledge.duckdb` — an embedded DuckDB
+All system state lives in `.nightshift/knowledge.duckdb` — an embedded DuckDB
 file. Key tables:
 
 - **`session_outcomes`** — One row per session attempt with status, tokens,

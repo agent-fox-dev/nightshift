@@ -92,18 +92,11 @@ Rich text styles for terminal output. Values use
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `playful` | bool | `true` | Enable playful emoji/banner output style |
-| `header` | str | `"bold #ff8c00"` | Style for section headers |
-| `success` | str | `"bold green"` | Style for success messages |
-| `error` | str | `"bold red"` | Style for error messages |
-| `warning` | str | `"bold yellow"` | Style for warning messages |
-| `info` | str | `"#daa520"` | Style for informational messages |
-| `tool` | str | `"bold #cd853f"` | Style for tool/command output |
+| `header` | str | `"bold #ff8c00"` | Style for the startup banner header |
 | `muted` | str | `"dim"` | Style for secondary/muted text |
 
 ```toml
 [theme]
-playful = false
 header = "bold blue"
 ```
 

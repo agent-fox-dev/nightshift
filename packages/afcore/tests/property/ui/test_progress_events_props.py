@@ -18,7 +18,7 @@ from hypothesis import strategies as st
 from rich.console import Console
 from rich.theme import Theme
 
-_STYLE_ROLES = ("header", "success", "error", "warning", "info", "tool", "muted")
+_STYLE_ROLES = ("header", "muted")
 
 _ARCHETYPES = [
     "coder",

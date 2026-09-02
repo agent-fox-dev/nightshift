@@ -26,7 +26,7 @@ EXPECTED_FOX_ART = r"""   /\_/\   _
  ( > ^ < ) ) )
   \_^/\_/--'"""
 
-_STYLE_ROLES = ("header", "success", "error", "warning", "info", "tool", "muted")
+_STYLE_ROLES = ("header", "muted")
 
 
 def _capture_banner(
@@ -106,7 +106,7 @@ class TestBannerVersionModel:
         with patch("afcore.ui.display._get_git_revision", return_value="abc1234"):
             output = _capture_banner(ThemeConfig())
 
-        expected = f"agent-fox v{__version__} (abc1234).  model: claude-sonnet-4-6"
+        expected = f"nightshift v{__version__} (abc1234).  model: claude-sonnet-4-6"
         assert expected in output, f"Expected {expected!r} in banner output, got:\n{output}"
 
     def test_version_and_model_line_without_revision(self) -> None:
@@ -114,7 +114,7 @@ class TestBannerVersionModel:
         with patch("afcore.ui.display._get_git_revision", return_value=None):
             output = _capture_banner(ThemeConfig())
 
-        expected = f"agent-fox v{__version__}  model: claude-sonnet-4-6"
+        expected = f"nightshift v{__version__}  model: claude-sonnet-4-6"
         assert expected in output, f"Expected {expected!r} in banner output, got:\n{output}"
 
 
@@ -144,7 +144,7 @@ class TestBannerVersionModelStyling:
         output = _capture_banner(ThemeConfig(), force_terminal=True)
 
         # Check that the version line appears in styled output with ANSI codes
-        assert f"agent-fox v{__version__}" in output
+        assert f"nightshift v{__version__}" in output
         assert "\x1b[" in output, "Expected ANSI escape codes for header styling"
 
 

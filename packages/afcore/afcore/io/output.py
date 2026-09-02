@@ -127,7 +127,7 @@ class OutputManager:
             # the same Rich theme styles for colored output.
             cfg = theme.config
             styles: dict[str, str] = {}
-            for role in ("header", "success", "error", "warning", "info", "tool", "muted"):
+            for role in ("header", "muted"):
                 val = getattr(cfg, role, "")
                 if val:
                     styles[role] = val

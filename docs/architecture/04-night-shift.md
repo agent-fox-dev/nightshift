@@ -127,7 +127,7 @@ injected into both the coder and reviewer prompts in subsequent stages.
 ### Stage 2: In-Memory Spec Construction
 
 The fix pipeline generates a lightweight in-memory spec from the issue rather
-than writing spec files to disk. This avoids polluting `.agent-fox/specs/`
+than writing spec files to disk. This avoids polluting `.specs/`
 with ephemeral repair specifications.
 
 **`InMemorySpec`** captures the minimal information needed to drive a

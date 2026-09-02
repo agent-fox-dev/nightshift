@@ -89,7 +89,7 @@ _ORCHESTRATOR_FIELDS = {
 }
 
 _THEME_FIELDS = {
-    "playful": st.booleans(),
+    "header": st.sampled_from(["bold #ff8c00", "bold blue", "bold green"]),
 }
 
 
