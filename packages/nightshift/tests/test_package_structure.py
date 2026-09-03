@@ -91,7 +91,7 @@ class TestDirectDependencies:
         config = _load_nightshift_toml()
         deps = config["project"]["dependencies"]
         assert any("duckdb" in d for d in deps)
-        assert any("duckdb" in d and "1.5.4" in d for d in deps)
+        assert any("duckdb" in d and "1.5.5" in d for d in deps)
 
 
 class TestCliEntryPoint:
