@@ -82,7 +82,7 @@ class CoderReviewerLoop:
 
         tier = resolve_model_tier(p._config, "coder", mode="fix")
         variant = resolve_model_variant(p._config, "coder", mode="fix")
-        model_id: str | None = resolve_model(tier, variant=variant)
+        model_id: str | None = resolve_model(tier, variant=variant, models_config=p._config.models)
 
         review_feedback: FixReviewResult | None = None
 

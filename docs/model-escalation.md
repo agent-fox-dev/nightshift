@@ -13,6 +13,10 @@ Three tiers are defined, ordered lowest to highest:
 | STANDARD | claude-sonnet-4-6 |
 | ADVANCED | claude-opus-4-6 |
 
+These defaults are hardcoded in `afcore.core.models` but can be overridden
+without a release via the `[models]` section in `config.toml` — see
+[docs/config-reference.md#models](config-reference.md#models).
+
 The ADVANCED tier supports two variants, ordered by capability:
 
 | Variant | Model ID |

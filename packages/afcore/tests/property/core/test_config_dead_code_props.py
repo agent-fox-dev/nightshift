@@ -97,8 +97,9 @@ class TestSilentIgnoreOldKeys:
         assert config.orchestrator.max_retries == default_config.orchestrator.max_retries
         assert config.orchestrator.max_budget_usd == default_config.orchestrator.max_budget_usd
 
-        # The models field must not exist
-        assert "models" not in AgentFoxConfig.model_fields
+        # Old models sub-keys (coding, memory_extraction) are silently ignored by ModelsConfig(extra="ignore")
+        assert config.models.registry == {}
+        assert config.models.tier_defaults == {}
 
 
 # ---------------------------------------------------------------------------

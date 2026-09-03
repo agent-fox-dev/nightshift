@@ -474,7 +474,10 @@ class FixPipeline:
         node_id = f"fix-issue-{spec.issue_number}:0:{archetype}"
 
         config = self._config
-        resolved_model_id = model_id or resolve_model(resolve_model_tier(config, archetype, mode=mode))
+        resolved_model_id = model_id or resolve_model(
+            resolve_model_tier(config, archetype, mode=mode),
+            models_config=config.models,
+        )
         resolved_security = resolve_security_config(config, archetype, mode=mode)
         params = resolve_session_params(
             config,
@@ -551,7 +554,7 @@ class FixPipeline:
             from afcore.engine.sdk_params import resolve_model_tier
 
             tier = resolve_model_tier(self._config, archetype)
-            return resolve_model(tier)
+            return resolve_model(tier, models_config=self._config.models)
         except Exception:
             return "claude-sonnet-4-6"
 

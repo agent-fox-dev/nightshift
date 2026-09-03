@@ -21,6 +21,7 @@ _EXPECTED_VISIBLE_SECTIONS = frozenset(
         "backend",
         "carry_patch",
         "hub",
+        "models",
         "orchestrator",
         "platform",
         "workspace",

@@ -51,12 +51,16 @@ class TestFieldAbsence:
         """
         assert not hasattr(config_mod, "ModelConfig")
 
-    def test_agent_fox_config_no_models(self) -> None:
-        """TS-130-4: AgentFoxConfig has no models field.
+    def test_agent_fox_config_has_models_config(self) -> None:
+        """TS-130-4: AgentFoxConfig has a models field of type ModelsConfig (not the old ModelConfig).
 
-        Requirement: 130-REQ-2.2
+        Requirement: 130-REQ-2.2 (updated: models field is now intentional ModelsConfig, not dead code)
         """
-        assert "models" not in AgentFoxConfig.model_fields
+        from afcore.core.config import ModelsConfig
+
+        assert "models" in AgentFoxConfig.model_fields
+        assert AgentFoxConfig.model_fields["models"].annotation is ModelsConfig
+        assert not hasattr(__import__("afcore.core.config", fromlist=["config"]), "ModelConfig")
 
 
 # ---------------------------------------------------------------------------
@@ -67,12 +71,12 @@ class TestFieldAbsence:
 class TestConfigGenMetadata:
     """Verify stale metadata entries are removed from config_gen."""
 
-    def test_visible_sections_no_models(self) -> None:
-        """TS-130-5: _VISIBLE_SECTIONS does not include 'models'.
+    def test_visible_sections_includes_models(self) -> None:
+        """TS-130-5: _VISIBLE_SECTIONS now includes 'models' (intentional ModelsConfig section).
 
-        Requirements: 130-REQ-2.3, 130-REQ-2.4
+        Requirements: 130-REQ-2.3, 130-REQ-2.4 (updated: models is now a first-class config section)
         """
-        assert "models" not in _VISIBLE_SECTIONS
+        assert "models" in _VISIBLE_SECTIONS
 
     def test_promoted_defaults_no_quality_gate(self) -> None:
         """TS-130-6: _PROMOTED_DEFAULTS excludes quality_gate.
@@ -174,14 +178,15 @@ class TestTemplateContent:
         template = generate_default_config()
         assert "quality_gate" not in template
 
-    def test_template_no_models_section(self) -> None:
-        """TS-130-13: Generated template has no [models] section.
+    def test_template_has_models_section_commented(self) -> None:
+        """TS-130-13: Generated template includes a commented [models] section (ModelsConfig).
 
-        Requirement: 130-REQ-2.3
+        Requirement: 130-REQ-2.3 (updated: models is now intentional, appears commented in template)
         """
         template = generate_default_config()
-        assert "[models]" not in template
-        assert "# [models]" not in template
+        assert "# [models]" in template
+        assert "memory_extraction" not in template
+        assert "coding" not in template
 
 
 # ---------------------------------------------------------------------------
@@ -201,14 +206,16 @@ class TestOldConfigSilentIgnore:
         config = AgentFoxConfig.model_validate(raw)
         assert config.orchestrator.max_retries == 2
 
-    def test_old_models_section_silently_ignored(self) -> None:
-        """TS-130-E2: TOML with [models] section parses silently.
+    def test_old_models_section_fields_silently_ignored(self) -> None:
+        """TS-130-E2: TOML with old [models] fields (coding, memory_extraction) parses silently.
 
-        Requirement: 130-REQ-2.E1
+        The new ModelsConfig has extra='ignore', so old sub-keys are dropped.
+        Requirement: 130-REQ-2.E1 (updated: models is now parsed by ModelsConfig, unknown fields ignored)
         """
         raw = tomllib.loads('[models]\ncoding = "ADVANCED"\nmemory_extraction = "SIMPLE"')
         config = AgentFoxConfig.model_validate(raw)
-        assert not hasattr(config, "models") or "models" not in AgentFoxConfig.model_fields
+        assert config.models.registry == {}
+        assert config.models.tier_defaults == {}
 
     def test_old_skeptic_silently_ignored(self) -> None:
         """TS-130-E3: TOML with archetypes.skeptic parses silently.
@@ -287,7 +294,8 @@ class TestSmoke:
             encoding="utf-8",
         )
         config = load_config(config_toml)
-        assert not hasattr(config, "models") or "models" not in AgentFoxConfig.model_fields
+        assert config.models.registry == {}
+        assert config.models.tier_defaults == {}
         assert "quality_gate" not in OrchestratorConfig.model_fields
         assert config.orchestrator.max_retries == 2
 
@@ -299,6 +307,6 @@ class TestSmoke:
         """
         template = generate_default_config()
         assert "quality_gate" not in template
-        assert "[models]" not in template
+        assert "# [models]" in template
         assert "memory_extraction" not in template
         assert "max_budget_usd" in template

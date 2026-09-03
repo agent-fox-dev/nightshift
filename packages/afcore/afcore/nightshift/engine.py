@@ -513,7 +513,8 @@ class NightShiftEngine:
         from afcore.core.config import PricingConfig
         from afcore.core.models import calculate_cost, resolve_model
 
-        model_id = resolve_model("ADVANCED")
+        models_config = getattr(self._config, "models", None)
+        model_id = resolve_model("ADVANCED", models_config=models_config)
         pricing = getattr(self._config, "pricing", PricingConfig())
         return calculate_cost(
             getattr(metrics, "input_tokens", 0),

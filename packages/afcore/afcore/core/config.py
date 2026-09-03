@@ -337,6 +337,87 @@ class PricingConfig(BaseModel):
     )
 
 
+class ModelsConfig(BaseModel):
+    """Config-driven model registry and tier-default overrides.
+
+    Allows users to register new model IDs and remap tier defaults without
+    a package release.  Entries in ``registry`` and ``tier_defaults`` overlay
+    the hardcoded :data:`MODEL_REGISTRY` and :data:`TIER_DEFAULTS` in
+    ``afcore.core.models``.
+
+    Usage in config.toml::
+
+        [models.tier_defaults]
+        ADVANCED = "claude-fable-5-1"
+
+        [models.registry.claude-fable-5-1]
+        tier = "ADVANCED"
+        variant = "standard"
+
+    Requirements: 01-REQ-5.1
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    registry: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Additional model registry entries keyed by model ID. "
+            "Each value is a {tier, variant?} table. "
+            "TOML: [models.registry.<model-id>]"
+        ),
+    )
+    tier_defaults: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Override the default model ID for a tier. "
+            "Keys must be SIMPLE, STANDARD, or ADVANCED. "
+            "Values must exist in the merged registry (hardcoded + registry above). "
+            "TOML: [models.tier_defaults]"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_and_coerce_registry(self) -> ModelsConfig:
+        """Parse registry dicts into ModelEntryConfig objects and cross-validate tier_defaults."""
+        from afcore.core.models import MODEL_REGISTRY, ModelEntryConfig, ModelTier
+
+        # Parse and validate each registry entry
+        parsed: dict[str, Any] = {}
+        for mid, raw in self.registry.items():
+            if isinstance(raw, dict):
+                try:
+                    parsed[mid] = ModelEntryConfig(**raw)
+                except Exception as exc:
+                    raise ConfigError(
+                        f"Invalid [models.registry.{mid}]: {exc}",
+                        model=mid,
+                    ) from exc
+            else:
+                parsed[mid] = raw
+        object.__setattr__(self, "registry", parsed)
+
+        # Build effective model ID set: hardcoded + user entries
+        effective_ids = set(MODEL_REGISTRY.keys()) | set(parsed.keys())
+
+        for tier_name, mid in self.tier_defaults.items():
+            try:
+                ModelTier(tier_name)
+            except ValueError:
+                valid_tiers = [t.value for t in ModelTier]
+                raise ConfigError(
+                    f"Invalid tier '{tier_name}' in [models.tier_defaults]. Valid tiers: {valid_tiers}",
+                ) from None
+            if mid not in effective_ids:
+                raise ConfigError(
+                    f"[models.tier_defaults] {tier_name} = '{mid}' refers to an unknown model ID. "
+                    f"Add it to [models.registry.{mid}] first.",
+                    model=mid,
+                )
+
+        return self
+
+
 class CachePolicy(StrEnum):
     """Prompt caching strategy for API calls.
 
@@ -482,6 +563,7 @@ class AgentFoxConfig(BaseModel):
     platform: PlatformConfig = Field(default_factory=PlatformConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     archetypes: ArchetypesConfig = Field(default_factory=ArchetypesConfig)
+    models: ModelsConfig = Field(default_factory=ModelsConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     caching: CachingConfig = Field(default_factory=CachingConfig)
     night_shift: NightShiftConfig = Field(default_factory=NightShiftConfig)

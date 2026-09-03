@@ -263,6 +263,7 @@ class TestSchemaExtraction:
             "platform",
             "knowledge",
             "archetypes",
+            "models",
             "pricing",
             "caching",
             "night_shift",

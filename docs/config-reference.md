@@ -24,6 +24,9 @@ with default values for reference.
   - [knowledge.provider](#knowledgeprovider)
 - [archetypes](#archetypes)
   - [archetypes.overrides](#archetypesoverrides)
+- [models](#models)
+  - [models.registry](#modelsregistry)
+  - [models.tier_defaults](#modelstier_defaults)
 - [pricing](#pricing)
 - [night_shift](#night_shift)
 - [workspace](#workspace)
@@ -192,6 +195,57 @@ model_tier = "ADVANCED"
 [archetypes.overrides.reviewer.modes.fix-review]
 model_tier = "ADVANCED"
 max_turns = 120
+```
+
+---
+
+## models
+
+Config-driven model registry and tier-default overrides. Allows you to adopt
+new Anthropic model IDs or reassign tier mappings without waiting for a
+nightshift release. Entries here overlay the hardcoded defaults — omitting a
+model or tier leaves the built-in value unchanged.
+
+### models.registry
+
+Additional model entries keyed by model ID. Each entry declares the tier and
+optional variant for that model.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tier` | str | required | Model tier: `SIMPLE`, `STANDARD`, or `ADVANCED` |
+| `variant` | str\|null | `null` | Variant label: `fast`, `standard`, `extended`, or any custom string |
+
+### models.tier_defaults
+
+Maps tier names to model IDs. Values must exist in the merged registry
+(hardcoded built-ins plus any entries in `models.registry` above). A
+misconfigured value raises `ConfigError` at startup.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `SIMPLE` | str | Default model for the SIMPLE tier |
+| `STANDARD` | str | Default model for the STANDARD tier |
+| `ADVANCED` | str | Default model for the ADVANCED tier |
+
+```toml
+# Adopt claude-fable-5-1 as the new ADVANCED default without a release
+
+[models.registry.claude-fable-5-1]
+tier = "ADVANCED"
+variant = "standard"
+
+[models.tier_defaults]
+ADVANCED = "claude-fable-5-1"
+```
+
+You can also redirect a tier to an existing built-in without adding a registry
+entry:
+
+```toml
+# Use Sonnet as the ADVANCED default (cheap experiments)
+[models.tier_defaults]
+ADVANCED = "claude-sonnet-4-6"
 ```
 
 ---

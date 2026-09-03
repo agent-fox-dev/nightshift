@@ -35,6 +35,7 @@ _VISIBLE_SECTIONS: set[str] = {
     "backend",
     "carry_patch",
     "hub",
+    "models",
     "orchestrator",
     "platform",
     "night_shift",

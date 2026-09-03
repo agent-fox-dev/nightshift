@@ -242,3 +242,69 @@ class TestConfigSymlinkRejection:
         config = load_config(path=config_file)
 
         assert config.orchestrator.max_retries == 5
+
+
+class TestModelsConfig:
+    """TS-01-12: Config-driven model registry loading and validation.
+
+    Requirements: 01-REQ-5.1
+    """
+
+    def test_models_defaults_to_empty(self, tmp_path: Path) -> None:
+        """An empty config produces an empty ModelsConfig (no user overrides)."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("")
+        config = load_config(path=config_file)
+        assert config.models.registry == {}
+        assert config.models.tier_defaults == {}
+
+    def test_registry_entry_parsed_from_toml(self, tmp_path: Path) -> None:
+        """A [models.registry.<id>] table is parsed into the config."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[models.registry.claude-fable-5-1]\ntier = "ADVANCED"\nvariant = "standard"\n')
+        config = load_config(path=config_file)
+        assert "claude-fable-5-1" in config.models.registry
+
+    def test_tier_defaults_override_parsed_from_toml(self, tmp_path: Path) -> None:
+        """[models.tier_defaults] is parsed and cross-validated successfully."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            "[models.registry.claude-fable-5-1]\n"
+            'tier = "ADVANCED"\n'
+            'variant = "standard"\n'
+            "\n"
+            "[models.tier_defaults]\n"
+            'ADVANCED = "claude-fable-5-1"\n'
+        )
+        config = load_config(path=config_file)
+        assert config.models.tier_defaults["ADVANCED"] == "claude-fable-5-1"
+
+    def test_tier_default_pointing_to_unknown_model_raises(self, tmp_path: Path) -> None:
+        """tier_defaults pointing to an unregistered model ID raises ConfigError."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[models.tier_defaults]\nADVANCED = "claude-does-not-exist"\n')
+        with pytest.raises((ConfigError, Exception)):
+            load_config(path=config_file)
+
+    def test_invalid_tier_key_in_tier_defaults_raises(self, tmp_path: Path) -> None:
+        """tier_defaults with unrecognized tier key raises ConfigError."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            '[models.registry.some-model]\ntier = "ADVANCED"\n\n[models.tier_defaults]\nBOGUS = "some-model"\n'
+        )
+        with pytest.raises((ConfigError, Exception)):
+            load_config(path=config_file)
+
+    def test_invalid_registry_entry_tier_raises(self, tmp_path: Path) -> None:
+        """A registry entry with an unrecognized tier raises on load."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[models.registry.some-model]\ntier = "ULTRA"\n')
+        with pytest.raises((ConfigError, Exception)):
+            load_config(path=config_file)
+
+    def test_tier_default_pointing_to_hardcoded_model_needs_no_registry(self, tmp_path: Path) -> None:
+        """tier_defaults can point to a hardcoded model ID without a registry entry."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[models.tier_defaults]\nSIMPLE = "claude-haiku-4-5"\n')
+        config = load_config(path=config_file)
+        assert config.models.tier_defaults["SIMPLE"] == "claude-haiku-4-5"

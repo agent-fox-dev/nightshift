@@ -17,8 +17,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 if TYPE_CHECKING:
-    from afcore.core.config import PricingConfig
+    from afcore.core.config import ModelsConfig, PricingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -63,24 +65,58 @@ TIER_DEFAULTS: dict[ModelTier, str] = {
 }
 
 
-def resolve_model(name: str, *, variant: str | None = None) -> str:
+class ModelEntryConfig(BaseModel):
+    """User-configurable model registry entry for [models.registry.<id>] TOML tables.
+
+    Pydantic-compatible twin of :class:`ModelEntry` that accepts unvalidated
+    tier/variant strings from TOML and converts them on demand.
+
+    Requirements: 01-REQ-5.1
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    tier: str = Field(description="Model tier: SIMPLE, STANDARD, or ADVANCED")
+    variant: str | None = Field(default=None, description="Model variant: fast, standard, or extended")
+
+    @model_validator(mode="after")
+    def _validate_tier(self) -> ModelEntryConfig:
+        try:
+            ModelTier(self.tier)
+        except ValueError:
+            valid = [t.value for t in ModelTier]
+            raise ValueError(f"Invalid model tier '{self.tier}'. Valid values: {valid}") from None
+        return self
+
+    def to_model_entry(self, model_id: str) -> ModelEntry:
+        """Convert to a frozen :class:`ModelEntry` dataclass."""
+        return ModelEntry(model_id=model_id, tier=ModelTier(self.tier), variant=self.variant)
+
+
+def resolve_model(name: str, *, variant: str | None = None, models_config: ModelsConfig | None = None) -> str:
     """Resolve a tier name or model ID to a model ID string.
 
     Accepts either a tier name (e.g. "SIMPLE", "STANDARD", "ADVANCED")
     or a specific model ID (e.g. "claude-sonnet-4-6").
 
     When *variant* is ``None`` (the default), returns the model ID from
-    :data:`TIER_DEFAULTS` for the requested tier — identical to pre-variant
-    behavior.
+    the effective tier-defaults for the requested tier — identical to
+    pre-variant behavior.
 
-    When *variant* is provided, scans :data:`MODEL_REGISTRY` for a
+    When *variant* is provided, scans the effective registry for a
     ``(tier, variant)`` match.  If no match is found, falls back to the
     tier default and emits a DEBUG-level log.  No exception is ever raised
     for an unmatched or unrecognized variant string.
 
+    When *models_config* is provided, user-supplied registry entries and
+    tier-defaults from ``[models]`` in ``config.toml`` are overlaid on top
+    of the hardcoded :data:`MODEL_REGISTRY` and :data:`TIER_DEFAULTS`.
+
     Args:
         name: A tier name (e.g. ``"ADVANCED"``) or a model ID string.
         variant: Optional variant label (e.g. ``"extended"``).
+        models_config: Optional config-driven model overrides. When provided,
+            user entries overlay the hardcoded registry and tier defaults.
 
     Returns:
         A model ID string (e.g. ``"claude-opus-4-6[1m]"``).
@@ -89,9 +125,24 @@ def resolve_model(name: str, *, variant: str | None = None) -> str:
         ConfigError: If *name* is not a recognized tier or model ID.
 
     Requirements: 14-REQ-7.1, 14-REQ-7.2, 14-REQ-7.3, 14-REQ-7.4,
-                  14-REQ-9.1, 14-REQ-9.2, 14-REQ-9.3
+                  14-REQ-9.1, 14-REQ-9.2, 14-REQ-9.3, 01-REQ-5.1
     """
     from afcore.core.errors import ConfigError
+
+    # Build effective registry and tier-defaults, overlaying user config.
+    if models_config is not None and (models_config.registry or models_config.tier_defaults):
+        effective_registry: dict[str, ModelEntry] = dict(MODEL_REGISTRY)
+        for mid, entry_cfg in models_config.registry.items():
+            effective_registry[mid] = entry_cfg.to_model_entry(mid)
+        effective_tier_defaults: dict[ModelTier, str] = dict(TIER_DEFAULTS)
+        for tier_name, mid in models_config.tier_defaults.items():
+            try:
+                effective_tier_defaults[ModelTier(tier_name)] = mid
+            except ValueError:
+                pass  # validated at config load time; skip silently here
+    else:
+        effective_registry = MODEL_REGISTRY
+        effective_tier_defaults = TIER_DEFAULTS
 
     # Try as a tier name first
     try:
@@ -101,11 +152,11 @@ def resolve_model(name: str, *, variant: str | None = None) -> str:
 
     if tier is not None:
         if variant is None:
-            # Backward-compatible path: return TIER_DEFAULTS model ID.
-            return TIER_DEFAULTS[tier]
+            # Backward-compatible path: return tier-default model ID.
+            return effective_tier_defaults[tier]
 
-        # Scan MODEL_REGISTRY for an entry matching (tier, variant).
-        for entry in MODEL_REGISTRY.values():
+        # Scan effective registry for an entry matching (tier, variant).
+        for entry in effective_registry.values():
             if entry.tier == tier and entry.variant == variant:
                 return entry.model_id
 
@@ -114,15 +165,15 @@ def resolve_model(name: str, *, variant: str | None = None) -> str:
             "No model found for tier=%s variant=%s; falling back to tier default %s",
             tier,
             variant,
-            TIER_DEFAULTS[tier],
+            effective_tier_defaults[tier],
         )
-        return TIER_DEFAULTS[tier]
+        return effective_tier_defaults[tier]
 
     # Try as a direct model ID
-    if name in MODEL_REGISTRY:
+    if name in effective_registry:
         return name
 
-    valid_options = sorted(MODEL_REGISTRY.keys())
+    valid_options = sorted(effective_registry.keys())
     raise ConfigError(
         f"Unknown model '{name}'. Valid options: {', '.join(valid_options)}",
         model=name,

@@ -51,14 +51,15 @@ class TestConfigToleranceExtraModelFields:
     )
     def test_config_tolerance_extra_model_fields(self, tmp_path: Path, field_name: str) -> None:
         """Config with extra [models] field loads and is silently ignored."""
-        from afcore.core.config import AgentFoxConfig, load_config
+        from afcore.core.config import load_config
 
         config_file = tmp_path / f"config_{field_name}.toml"
         config_file.write_text(f'[models]\n{field_name} = "STANDARD"\n')
 
-        # Must not raise — entire [models] section is silently ignored
+        # Must not raise — unknown fields in [models] are silently ignored by ModelsConfig(extra="ignore")
         config = load_config(path=config_file)
         assert config is not None
 
-        # The models field no longer exists on AgentFoxConfig
-        assert "models" not in AgentFoxConfig.model_fields, "AgentFoxConfig should not have a 'models' field"
+        # Unknown old sub-fields are silently dropped; registry and tier_defaults stay empty
+        assert config.models.registry == {}
+        assert config.models.tier_defaults == {}
