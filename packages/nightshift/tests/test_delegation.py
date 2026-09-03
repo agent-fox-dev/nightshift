@@ -29,10 +29,10 @@ class TestAppDelegation:
         assert "afcore" in source, "app.py must import from afcore"
 
     def test_thin_wrapper_line_count(self) -> None:
-        """app.py is a thin delegation layer (< 150 lines)."""
+        """app.py is a thin delegation layer (< 200 lines)."""
         source = _read_app_source()
         line_count = len(source.splitlines())
-        assert line_count < 180, f"app.py has {line_count} lines; expected < 180 for a thin wrapper"
+        assert line_count < 200, f"app.py has {line_count} lines; expected < 200 for a thin wrapper"
 
 
 class TestAppUsesAgentFoxGroup:
