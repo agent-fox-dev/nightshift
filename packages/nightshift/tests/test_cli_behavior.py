@@ -2,7 +2,7 @@
 
 Test Spec: TS-07-8, TS-07-9, TS-07-10, TS-07-11, TS-07-12, TS-07-13,
            TS-07-14, TS-07-15, TS-07-16, TS-07-17, TS-07-18, TS-07-19,
-           TS-07-20, TS-07-E4, TS-07-E5, TS-07-P1, TS-07-P3
+           TS-07-20, TS-07-E4, TS-07-E5, TS-07-P1, TS-07-P3, TS-07-INIT
 Requirements: 07-REQ-2.5, 07-REQ-3.1 through 07-REQ-3.12
 """
 
@@ -15,6 +15,8 @@ import subprocess
 import sys
 import time
 from importlib.metadata import version as get_version
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -549,3 +551,109 @@ class TestEnvVarSemantics:
             env=env,
         )
         assert result.returncode == 0
+
+
+class TestInitFlag:
+    """TS-07-INIT: nightshift --init creates config and provisions labels then exits 0.
+
+    Covers all 7 acceptance criteria from issue #6.
+    """
+
+    def test_init_appears_in_help(self, cli_runner: CliRunner) -> None:
+        """AC-6: --init is listed in nightshift --help output."""
+        from nightshift.app import main
+
+        result = cli_runner.invoke(main, ["--help"])
+        assert result.exit_code == 0
+        assert "--init" in result.output
+
+    def test_init_exits_zero_no_platform(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """AC-4, AC-5: exits 0 when create_platform_safe returns None."""
+        from nightshift.app import main
+
+        with patch("afcore.nightshift.platform_factory.create_platform_safe", return_value=None):
+            with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+                result = cli_runner.invoke(main, ["--init"])
+        assert result.exit_code == 0
+
+    def test_init_creates_config_when_absent(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """AC-1: creates .nightshift/config.toml with all sections when the file is absent."""
+        from nightshift.app import main
+
+        with patch("afcore.nightshift.platform_factory.create_platform_safe", return_value=None):
+            with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+                result = cli_runner.invoke(main, ["--init"])
+                config_path = Path(".nightshift") / "config.toml"
+                assert config_path.exists(), "config.toml should be created by --init"
+                content = config_path.read_text()
+
+        assert result.exit_code == 0
+        assert "platform" in content.lower()
+        assert "backend" in content.lower()
+
+    def test_init_skips_existing_config(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """AC-2: does not overwrite an existing config; prints 'skipping' notice."""
+        from nightshift.app import main
+
+        with patch("afcore.nightshift.platform_factory.create_platform_safe", return_value=None):
+            with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+                config_path = Path(".nightshift") / "config.toml"
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                config_path.write_text("# sentinel\n")
+
+                result = cli_runner.invoke(main, ["--init"])
+
+                assert config_path.read_text() == "# sentinel\n", "Existing config must not be modified"
+
+        assert result.exit_code == 0
+        assert "skipping" in result.output.lower()
+
+    def test_init_warns_about_unconfigured_platform(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """AC-4: prints a warning mentioning the platform token when no platform is available."""
+        from nightshift.app import main
+
+        with patch("afcore.nightshift.platform_factory.create_platform_safe", return_value=None):
+            with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+                result = cli_runner.invoke(main, ["--init"])
+
+        assert result.exit_code == 0
+        assert "platform" in result.output.lower() or "GITHUB_PAT" in result.output
+
+    def test_init_provisions_all_required_labels(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """AC-3: calls create_label once for every entry in REQUIRED_LABELS."""
+        from afissues.labels import REQUIRED_LABELS
+        from nightshift.app import main
+
+        mock_platform = AsyncMock()
+        with patch("afcore.nightshift.platform_factory.create_platform_safe", return_value=mock_platform):
+            with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+                result = cli_runner.invoke(main, ["--init"])
+
+        assert result.exit_code == 0
+        assert mock_platform.create_label.call_count == len(REQUIRED_LABELS)
+        called_names = {call.args[0] for call in mock_platform.create_label.call_args_list}
+        for spec in REQUIRED_LABELS:
+            assert spec.name in called_names, f"create_label not called for label '{spec.name}'"
+
+    def test_init_exits_zero_with_platform(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """AC-5: exits 0 when platform is configured and all labels are provisioned."""
+        from nightshift.app import main
+
+        mock_platform = AsyncMock()
+        with patch("afcore.nightshift.platform_factory.create_platform_safe", return_value=mock_platform):
+            with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+                result = cli_runner.invoke(main, ["--init"])
+
+        assert result.exit_code == 0
+
+    def test_init_does_not_start_daemon(self, cli_runner: CliRunner, tmp_path: Path) -> None:
+        """AC-7: the daemon loop is never started after --init."""
+        from nightshift.app import main
+
+        with patch("afcore.nightshift.platform_factory.create_platform_safe", return_value=None):
+            with patch("nightshift.app._run_daemon") as mock_daemon:
+                with cli_runner.isolated_filesystem(temp_dir=tmp_path):
+                    result = cli_runner.invoke(main, ["--init"])
+
+        assert result.exit_code == 0
+        mock_daemon.assert_not_called()

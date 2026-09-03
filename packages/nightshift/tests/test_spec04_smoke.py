@@ -1,6 +1,6 @@
 """Smoke tests for nightshift CLI (migrated from af).
 
-Test Spec: TS-07-SMOKE-4, TS-07-SMOKE-5, TS-07-11
+Test Spec: TS-07-SMOKE-4, TS-07-SMOKE-5, TS-07-11, TS-07-SMOKE-6
 Requirements: 07-REQ-3.3, 07-REQ-3.4, 07-REQ-4.4
 Migrated from: packages/af/tests/integration/test_spec04_smoke.py (07-REQ-8.1)
 
@@ -13,6 +13,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from importlib.metadata import version as get_version
+from pathlib import Path
 
 import pytest
 
@@ -105,3 +106,44 @@ class TestHelpOutputSubprocess:
         )
         assert result.returncode == 0
         assert flag in result.stdout
+
+
+class TestSmoke6InitFlag:
+    """TS-07-SMOKE-6: nightshift --init exits 0 and creates the config file."""
+
+    @pytest.mark.smoke
+    def test_init_exits_zero(self, tmp_path: Path) -> None:
+        """nightshift --init exits 0 when run in an empty directory."""
+        result = subprocess.run(
+            [sys.executable, "-m", "nightshift", "--init"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(tmp_path),
+        )
+        assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+    @pytest.mark.smoke
+    def test_init_creates_config_file(self, tmp_path: Path) -> None:
+        """nightshift --init creates .nightshift/config.toml in the working directory."""
+        subprocess.run(
+            [sys.executable, "-m", "nightshift", "--init"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(tmp_path),
+        )
+        config_path = tmp_path / ".nightshift" / "config.toml"
+        assert config_path.exists(), ".nightshift/config.toml must be created by --init"
+
+    @pytest.mark.smoke
+    def test_init_listed_in_help(self) -> None:
+        """nightshift --help lists --init flag."""
+        result = subprocess.run(
+            [sys.executable, "-m", "nightshift", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0
+        assert "--init" in result.stdout
