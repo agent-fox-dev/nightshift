@@ -1,12 +1,12 @@
 [project]
 name = "nightshift"
-version = "0.9.1"
+version = "1.0.0"
 description = "Standalone CLI for the AgentFox Night Shift fix daemon"
 requires-python = ">=3.12"
 dependencies = [
-    "afaudit>=0.9.1",
-    "afcore>=0.9.1",
-    "afhub>=0.9.1",
+    "afaudit>=1.0.0",
+    "afcore>=1.0.0",
+    "afhub>=1.0.0",
     "click>=8.1",
     "rich>=15.0",
     "duckdb>=1.5.5",

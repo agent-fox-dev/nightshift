@@ -28,10 +28,10 @@ class TestPyprojectToml:
         with open(AFAUDIT_PKG / "pyproject.toml", "rb") as f:
             return tomllib.load(f)
 
-    def test_version_is_4_0_2(self) -> None:
-        """Version must be 0.9.1."""
+    def test_version_is_1_0_0(self) -> None:
+        """Version must be 1.0.0."""
         toml = self._load_toml()
-        assert toml["project"]["version"] == "0.9.1"
+        assert toml["project"]["version"] == "1.0.0"
 
     def test_requires_python(self) -> None:
         """requires-python must be >=3.12."""

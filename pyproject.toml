@@ -1,10 +1,10 @@
 [project]
 name = "nightshift-workspace"
-version = "0.9.1"
+version = "1.0.0"
 description = "Night Shift autonomous fix daemon"
 requires-python = ">=3.12"
 dependencies = [
-    "nightshift>=0.9.1",
+    "nightshift>=1.0.0",
 ]
 
 [dependency-groups]
