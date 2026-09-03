@@ -1302,3 +1302,232 @@ class TestSessionNoExtractActivity:
             content = f.read()
 
         assert "_extract_activity" not in content, "_extract_activity must not appear in session.py after refactor"
+
+
+# ---------------------------------------------------------------------------
+# TS-26-AC2: PreToolUse hook replaces can_use_tool for permission enforcement
+# Requirements: 26-REQ-2.3 (fixes #8)
+# ---------------------------------------------------------------------------
+
+
+def _make_sdk_result():
+    """Return a minimal successful SDK ResultMessage."""
+    from claude_agent_sdk.types import ResultMessage as SDKResultMessage
+
+    return SDKResultMessage(
+        subtype="success",
+        is_error=False,
+        result="done",
+        duration_ms=100,
+        duration_api_ms=80,
+        num_turns=1,
+        session_id="test",
+        total_cost_usd=0.01,
+        usage={"input_tokens": 10, "output_tokens": 5},
+    )
+
+
+def _make_fake_client(captured_options: list):
+    """Return a fake ClaudeSDKClient factory that captures options."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    async def _gen():
+        yield _make_sdk_result()
+
+    def _factory(options):
+        captured_options.append(options)
+        mock_client = AsyncMock()
+        mock_client.query = AsyncMock()
+        mock_client.receive_response = MagicMock(return_value=_gen())
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        return mock_client
+
+    return _factory
+
+
+class TestPreToolUseHookReplacesCanUseTool:
+    """AC-2 through AC-4: permission_callback is wired via PreToolUse hook, not can_use_tool.
+
+    When permission_callback is provided to execute(), ClaudeAgentOptions must:
+      - have can_use_tool=None (so no CanUseToolShadowedWarning is emitted)
+      - have a PreToolUse entry in options.hooks with at least one HookMatcher
+    When permission_callback is None, no PreToolUse entry is registered.
+    """
+
+    @pytest.mark.asyncio
+    async def test_can_use_tool_is_none_when_permission_callback_given(self) -> None:
+        """AC-2: can_use_tool must be None even when permission_callback is provided."""
+        from unittest.mock import patch
+
+        captured_options: list = []
+
+        async def _cb(tool_name: str, tool_input: dict) -> bool:
+            return True
+
+        backend = ClaudeBackend()
+        with patch("afcore.session.backends.claude.ClaudeSDKClient", side_effect=_make_fake_client(captured_options)):
+            async for _ in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_callback=_cb,
+            ):
+                pass
+
+        assert len(captured_options) == 1
+        options = captured_options[0]
+        assert options.can_use_tool is None, (
+            "can_use_tool must be None when permission_callback is provided — "
+            "bypassPermissions shadows can_use_tool completely"
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_tool_use_hook_registered_when_permission_callback_given(self) -> None:
+        """AC-2: A PreToolUse hook is registered in options.hooks when permission_callback is provided."""
+        from unittest.mock import patch
+
+        captured_options: list = []
+
+        async def _cb(tool_name: str, tool_input: dict) -> bool:
+            return True
+
+        backend = ClaudeBackend()
+        with patch("afcore.session.backends.claude.ClaudeSDKClient", side_effect=_make_fake_client(captured_options)):
+            async for _ in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_callback=_cb,
+            ):
+                pass
+
+        assert len(captured_options) == 1
+        options = captured_options[0]
+        assert options.hooks is not None, "hooks must not be None when permission_callback is provided"
+        assert "PreToolUse" in options.hooks, "options.hooks must contain 'PreToolUse' key"
+        matchers = options.hooks["PreToolUse"]
+        assert len(matchers) >= 1, "at least one HookMatcher must be registered for PreToolUse"
+        assert len(matchers[0].hooks) >= 1, "HookMatcher must contain at least one hook function"
+
+    @pytest.mark.asyncio
+    async def test_no_pre_tool_use_hook_when_permission_callback_is_none(self) -> None:
+        """AC-4: No PreToolUse hook is registered when permission_callback is None."""
+        from unittest.mock import patch
+
+        captured_options: list = []
+
+        backend = ClaudeBackend()
+        with patch("afcore.session.backends.claude.ClaudeSDKClient", side_effect=_make_fake_client(captured_options)):
+            async for _ in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_callback=None,
+            ):
+                pass
+
+        assert len(captured_options) == 1
+        options = captured_options[0]
+        assert options.hooks is None or "PreToolUse" not in options.hooks
+
+    @pytest.mark.asyncio
+    async def test_no_can_use_tool_shadowed_warning_emitted(self) -> None:
+        """AC-3: No CanUseToolShadowedWarning is emitted when permission_callback is provided."""
+        import warnings
+        from unittest.mock import patch
+
+        from claude_agent_sdk.types import CanUseToolShadowedWarning
+
+        captured_options: list = []
+
+        async def _cb(tool_name: str, tool_input: dict) -> bool:
+            return True
+
+        backend = ClaudeBackend()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with patch(
+                "afcore.session.backends.claude.ClaudeSDKClient", side_effect=_make_fake_client(captured_options)
+            ):
+                async for _ in backend.execute(
+                    "test",
+                    system_prompt="sys",
+                    model="claude-sonnet-4-6",
+                    cwd="/tmp",
+                    permission_callback=_cb,
+                ):
+                    pass
+
+        shadowed = [w for w in caught if issubclass(w.category, CanUseToolShadowedWarning)]
+        assert shadowed == [], (
+            f"CanUseToolShadowedWarning must not be emitted; got: {[str(w.message) for w in shadowed]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_pre_tool_use_hook_allows_approved_tool(self) -> None:
+        """AC-1: PreToolUse hook returns {} (allow) when permission_callback returns True."""
+        from claude_agent_sdk.types import HookContext
+
+        captured_options: list = []
+
+        async def _approving_cb(tool_name: str, tool_input: dict) -> bool:
+            return True
+
+        backend = ClaudeBackend()
+        from unittest.mock import patch
+
+        with patch("afcore.session.backends.claude.ClaudeSDKClient", side_effect=_make_fake_client(captured_options)):
+            async for _ in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_callback=_approving_cb,
+            ):
+                pass
+
+        options = captured_options[0]
+        hook_fn = options.hooks["PreToolUse"][0].hooks[0]
+
+        hook_input = {"tool_name": "Bash", "tool_input": {"command": "git status"}}
+        ctx = HookContext(signal=None)
+        result = await hook_fn(hook_input, None, ctx)
+
+        # Allow = empty dict or dict without a "block" decision
+        assert result == {} or result.get("decision") != "block", f"Expected allow result, got: {result}"
+
+    @pytest.mark.asyncio
+    async def test_pre_tool_use_hook_blocks_denied_tool(self) -> None:
+        """AC-1: PreToolUse hook returns a block decision when permission_callback returns False."""
+        from claude_agent_sdk.types import HookContext
+
+        captured_options: list = []
+
+        async def _denying_cb(tool_name: str, tool_input: dict) -> bool:
+            return False
+
+        backend = ClaudeBackend()
+        from unittest.mock import patch
+
+        with patch("afcore.session.backends.claude.ClaudeSDKClient", side_effect=_make_fake_client(captured_options)):
+            async for _ in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_callback=_denying_cb,
+            ):
+                pass
+
+        options = captured_options[0]
+        hook_fn = options.hooks["PreToolUse"][0].hooks[0]
+
+        hook_input = {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}
+        ctx = HookContext(signal=None)
+        result = await hook_fn(hook_input, None, ctx)
+
+        assert result.get("decision") == "block", f"Expected block decision, got: {result}"

@@ -20,11 +20,8 @@ from claude_agent_sdk.types import (
 )
 from claude_agent_sdk.types import (
     HookMatcher,
-    PermissionResultAllow,
-    PermissionResultDeny,
     TextBlock,
     ThinkingBlock,
-    ToolPermissionContext,
     ToolUseBlock,
 )
 from claude_agent_sdk.types import (
@@ -106,22 +103,6 @@ class ClaudeBackend:
                 "ClaudeBackend: cache_policy=%s (CLI manages caching internally)",
                 cache_policy,
             )
-        # Build the can_use_tool callback if a permission_callback is provided
-        can_use_tool = None
-        if permission_callback is not None:
-            _cb = permission_callback  # capture for closure
-
-            async def _can_use_tool_wrapper(
-                tool_name: str,
-                tool_input: dict[str, Any],
-                _ctx: ToolPermissionContext,
-            ) -> PermissionResultAllow | PermissionResultDeny:
-                allowed = await _cb(tool_name, tool_input)
-                if allowed:
-                    return PermissionResultAllow()
-                return PermissionResultDeny(message="Denied by permission callback")
-
-            can_use_tool = _can_use_tool_wrapper
 
         # Build extra_args for parameters not directly supported by ClaudeAgentOptions
         # (56-REQ-2.2)
@@ -129,13 +110,18 @@ class ClaudeBackend:
         if max_budget_usd:
             extra_args["max-budget-usd"] = str(max_budget_usd)
 
-        # Build core options — max_turns is a native ClaudeAgentOptions field
+        # Build core options — max_turns is a native ClaudeAgentOptions field.
+        # Note: can_use_tool is intentionally NOT set here. Setting
+        # permission_mode="bypassPermissions" and can_use_tool simultaneously
+        # causes the SDK to emit CanUseToolShadowedWarning and silently skip
+        # the callback — bypassPermissions pre-approves every tool call before
+        # can_use_tool is consulted. Allowlist enforcement is wired via a
+        # PreToolUse hook below instead (fixes #8).
         options = ClaudeAgentOptions(
             cwd=cwd,
             model=model,
             system_prompt=system_prompt,
             permission_mode="bypassPermissions",
-            can_use_tool=can_use_tool,
             extra_args=extra_args,
             **({"max_turns": max_turns} if max_turns is not None else {}),  # type: ignore[arg-type]
         )
@@ -167,9 +153,33 @@ class ClaudeBackend:
             except TypeError as exc:
                 logger.warning("SDK does not support 'context_management' parameter, omitting: %s", exc)
 
-        # Register hooks for Notification (activity tracking) and
-        # PostToolUseFailure (tool error tracking).
+        # Register hooks for PreToolUse (allowlist enforcement), Notification
+        # (activity tracking), and PostToolUseFailure (tool error tracking).
+        # Using PreToolUse hooks is the correct mechanism when
+        # permission_mode="bypassPermissions" — can_use_tool is shadowed in
+        # that mode and must not be used (fixes #8).
         hooks: dict[str, list[HookMatcher]] = {}
+        if permission_callback is not None:
+            _cb = permission_callback  # capture for closure
+
+            async def _pre_tool_use_hook(
+                hook_input: Any,
+                tool_use_id: Any,  # noqa: ARG001
+                context: Any,  # noqa: ARG001
+            ) -> dict[str, Any]:
+                if isinstance(hook_input, dict):
+                    tool_name = hook_input.get("tool_name", "")
+                    tool_input_data = hook_input.get("tool_input", {})
+                else:
+                    tool_name = getattr(hook_input, "tool_name", "")
+                    tool_input_data = getattr(hook_input, "tool_input", {})
+                allowed = await _cb(tool_name, tool_input_data)
+                if allowed:
+                    return {}
+                return {"decision": "block", "reason": "Denied by permission callback"}
+
+            hooks["PreToolUse"] = [HookMatcher(hooks=[_pre_tool_use_hook])]
+
         if activity_callback is not None:
             hooks["Notification"] = [
                 HookMatcher(
