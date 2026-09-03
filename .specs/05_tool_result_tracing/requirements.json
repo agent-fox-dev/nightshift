@@ -1,0 +1,550 @@
+{
+  "spec_id": "05",
+  "spec_name": "tool_result_tracing",
+  "schema_version": 1,
+  "introduction": "The tool result tracing system extends the `AgentTraceSink` audit infrastructure to capture tool outputs returned to the model after execution, completing the full model call audit trail in `.agent-fox/audit/agent_{run_id}.jsonl`.",
+  "glossary": {
+    "AgentTraceSink": "The audit sink that writes structured trace events to a per-run JSONL file in the audit directory",
+    "ClaudeBackend": "The backend implementation that drives the Claude model via the claude_agent_sdk, handling hooks and tool lifecycle",
+    "HookMatcher": "A claude_agent_sdk type that wraps one or more hook callables for registration in the hooks dict",
+    "PostToolUse": "The claude_agent_sdk hook event fired after a tool successfully executes and returns a response",
+    "PostToolUseFailure": "The existing claude_agent_sdk hook event fired when a tool execution raises an exception",
+    "PostToolUseHookInput": "The dataclass provided by claude_agent_sdk to PostToolUse hook handlers, containing tool_name, tool_input, tool_response, and tool_use_id",
+    "SinkDispatcher": "The multiplexer that fans out sink method calls to all registered sinks",
+    "_dispatch_optional": "A SinkDispatcher helper that calls a named method on each registered sink only if that sink implements it",
+    "_execute_query": "The function in session.py that orchestrates a single query execution, passing callbacks to the backend",
+    "_write_event": "A private AgentTraceSink helper that serializes and appends a trace event dict to the run's JSONL file",
+    "afaudit": "The internal Python package (packages/afaudit/) that provides AgentTraceSink, SinkDispatcher, and related audit infrastructure",
+    "audit JSONL file": "The per-run file at .agent-fox/audit/agent_{run_id}.jsonl where all trace events are appended",
+    "node_id": "An identifier for the agent node within a run, used to correlate trace events",
+    "run_id": "A unique identifier for a single agent session run, used to name the audit JSONL file",
+    "tool.result": "The trace event type written to the audit JSONL file to record a tool's output",
+    "tool.use": "The existing trace event type written to the audit JSONL file to record a tool invocation and its input",
+    "tool_error_callback": "An existing callable passed to ClaudeBackend.execute() that is invoked when a tool execution fails",
+    "tool_response": "The output value returned by a tool to the model, typed as Any in the SDK and serialized to JSON for storage",
+    "tool_result_callback": "A callable passed to ClaudeBackend.execute() that is invoked with tool result data after each successful tool execution",
+    "tool_use_id": "The unique identifier assigned by the SDK to a specific tool invocation, correlating tool.use and tool.result events",
+    "truncate_tool_input": "An existing utility function that truncates a string to a maximum length with a trailing marker"
+  },
+  "requirements": [
+    {
+      "id": "05-REQ-1",
+      "title": "AgentTraceSink.record_tool_result method",
+      "user_story": {
+        "role": "operator",
+        "goal": "see what each tool returned to the model in the audit trace",
+        "benefit": "I can reconstruct the full conversation including tool feedback without re-running the session"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-1.1",
+          "ears_pattern": "event_driven",
+          "system": "AgentTraceSink",
+          "action": "serialize tool_response via json.dumps with default=str, truncate to 50000 chars using the same pattern as `truncate_tool_input`, then call `_write_event` with event_type 'tool.result' and the assembled data dict",
+          "return_contract": "returns None; the audit JSONL file gains one appended line containing the tool.result event JSON",
+          "trigger": "record_tool_result is called on AgentTraceSink with run_id, node_id, tool_name, tool_use_id, and tool_response"
+        },
+        {
+          "id": "05-REQ-1.2",
+          "ears_pattern": "ubiquitous",
+          "system": "AgentTraceSink",
+          "action": "write tool.result events with the schema: event_type, run_id, timestamp (ISO 8601), node_id, tool_name, tool_use_id, and tool_response (JSON-serialized string, max 50000 chars)",
+          "return_contract": null
+        },
+        {
+          "id": "05-REQ-1.3",
+          "ears_pattern": "event_driven",
+          "system": "AgentTraceSink",
+          "action": "truncate the serialized tool_response to exactly 50000 characters and append ' [truncated]' to the stored value",
+          "return_contract": "the tool_response field in the written event is exactly 50000 chars followed by ' [truncated]'",
+          "trigger": "a tool_response string exceeds 50000 characters after JSON serialization"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "AgentTraceSink",
+          "action": "use the default=str fallback in json.dumps to coerce the value to a string representation without raising, then proceed with truncation and write",
+          "return_contract": "returns None; event is still written with a string-coerced tool_response value",
+          "error_condition": "tool_response is None or an unexpected type that json.dumps cannot serialize normally"
+        },
+        {
+          "id": "05-REQ-1.E2",
+          "ears_pattern": "unwanted",
+          "system": "AgentTraceSink",
+          "action": "serialize the empty value normally (e.g. '\"\"' or '{}' or '[]') and write the event without special-casing",
+          "return_contract": "returns None; event is written with the serialized empty value",
+          "error_condition": "tool_response is an empty string or empty dict/list"
+        },
+        {
+          "id": "05-REQ-1.E3",
+          "ears_pattern": "unwanted",
+          "system": "AgentTraceSink",
+          "action": "allow the exception to propagate to the caller; no silent swallowing at this layer",
+          "return_contract": "raises IOError to the caller",
+          "error_condition": "the underlying `_write_event` call raises an IOError (e.g. disk full)"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-2",
+      "title": "SinkDispatcher.record_tool_result dispatch",
+      "user_story": {
+        "role": "platform engineer",
+        "goal": "have tool result recording fan out to all registered sinks that support it",
+        "benefit": "future sinks can opt in to tool result recording without changes to the dispatch layer"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-2.1",
+          "ears_pattern": "event_driven",
+          "system": "SinkDispatcher",
+          "action": "call `_dispatch_optional` with method name 'record_tool_result' and all provided keyword arguments, forwarding them to every registered sink that implements the method",
+          "return_contract": "returns None; sinks that implement record_tool_result receive the call, sinks that do not implement it are silently skipped",
+          "trigger": "record_tool_result is called on SinkDispatcher with keyword arguments run_id, node_id, tool_name, tool_use_id, and tool_response"
+        },
+        {
+          "id": "05-REQ-2.2",
+          "ears_pattern": "state_driven",
+          "system": "SinkDispatcher",
+          "action": "complete the dispatch call without error via `_dispatch_optional`'s existing skip-if-absent behavior",
+          "return_contract": "returns None with no exception raised",
+          "state": "no sink registered in SinkDispatcher implements record_tool_result"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "SinkDispatcher",
+          "action": "follow the existing `_dispatch_optional` error handling behavior (log and continue or propagate, consistent with how other optional dispatch errors are handled)",
+          "return_contract": "behavior is consistent with existing _dispatch_optional error semantics",
+          "error_condition": "one registered sink's record_tool_result raises an exception during dispatch"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-3",
+      "title": "ClaudeBackend.execute tool_result_callback parameter",
+      "user_story": {
+        "role": "platform engineer",
+        "goal": "pass a callback into ClaudeBackend.execute that is invoked after each successful tool call",
+        "benefit": "the session layer can record tool results without coupling the backend to audit infrastructure"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-3.1",
+          "ears_pattern": "event_driven",
+          "system": "ClaudeBackend",
+          "action": "register a PostToolUse hook via hooks['PostToolUse'] = [HookMatcher(hooks=[_build_tool_result_hook(tool_result_callback)])] following the same pattern as the existing tool_error_callback / PostToolUseFailure registration",
+          "return_contract": "returns None at registration time; the hook is invoked by the SDK after each successful tool execution",
+          "trigger": "ClaudeBackend.execute() is called with a non-None tool_result_callback"
+        },
+        {
+          "id": "05-REQ-3.2",
+          "ears_pattern": "event_driven",
+          "system": "ClaudeBackend",
+          "action": "invoke tool_result_callback with the tool_name, tool_use_id, and tool_response extracted from the PostToolUseHookInput",
+          "return_contract": "returns None; callback is called synchronously within the hook handler",
+          "trigger": "the PostToolUse SDK hook fires with a PostToolUseHookInput containing tool_name, tool_use_id, and tool_response"
+        },
+        {
+          "id": "05-REQ-3.3",
+          "ears_pattern": "state_driven",
+          "system": "ClaudeBackend",
+          "action": "skip PostToolUse hook registration entirely; no hooks['PostToolUse'] key is set",
+          "return_contract": "returns None; no PostToolUse hook is registered",
+          "state": "tool_result_callback is None"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "ClaudeBackend",
+          "action": "catch the exception inside the hook handler, log a WARNING with the error details, and allow the SDK to continue session execution without interruption",
+          "return_contract": "session execution continues; a WARNING is emitted to the log; the exception is not re-raised",
+          "error_condition": "the tool_result_callback raises an exception during the PostToolUse hook invocation"
+        },
+        {
+          "id": "05-REQ-3.E2",
+          "ears_pattern": "unwanted",
+          "system": "ClaudeBackend",
+          "action": "catch any AttributeError or KeyError when extracting fields, log a WARNING, and return from the hook without calling tool_result_callback",
+          "return_contract": "session execution continues; a WARNING is emitted; tool_result_callback is not called for the malformed event",
+          "error_condition": "the PostToolUseHookInput received by the hook has an unexpected shape or missing fields"
+        },
+        {
+          "id": "05-REQ-3.E3",
+          "ears_pattern": "ubiquitous",
+          "system": "ClaudeBackend",
+          "action": "never register a PostToolUse hook for backends other than ClaudeBackend (deepagents, google_adk); the tool_result_callback parameter is exclusive to ClaudeBackend.execute()",
+          "return_contract": null
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-4",
+      "title": "session.py _execute_query wires tool_result_callback",
+      "user_story": {
+        "role": "operator",
+        "goal": "have tool results automatically recorded in the audit trace during a session",
+        "benefit": "I get a complete audit trail without any manual configuration beyond enabling --audit"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "session.py",
+          "action": "construct a tool_result_callback lambda/closure that calls sink_dispatcher.record_tool_result(run_id=run_id, node_id=node_id, tool_name=tool_name, tool_use_id=tool_use_id, tool_response=tool_response) and pass it to ClaudeBackend.execute() as the tool_result_callback argument",
+          "return_contract": "returns None at wiring time; tool results are recorded in the audit JSONL file after each tool execution",
+          "trigger": "_execute_query() is called with an active SinkDispatcher that has AgentTraceSink registered"
+        },
+        {
+          "id": "05-REQ-4.2",
+          "ears_pattern": "state_driven",
+          "system": "session.py",
+          "action": "pass tool_result_callback=None to ClaudeBackend.execute(), mirroring the existing pattern for tool_error_callback when audit is inactive",
+          "return_contract": "returns None; no PostToolUse hook is registered and no tool.result events are written",
+          "state": "--audit is not active and AgentTraceSink is not registered in SinkDispatcher"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "session.py",
+          "action": "the exception propagates to the ClaudeBackend hook handler (05-REQ-3.E1), which catches it, logs a WARNING, and continues; _execute_query itself does not add additional error handling for this path",
+          "return_contract": "session execution continues; WARNING is logged by the hook handler layer",
+          "error_condition": "sink_dispatcher.record_tool_result raises an exception inside the tool_result_callback"
+        },
+        {
+          "id": "05-REQ-4.E2",
+          "ears_pattern": "unwanted",
+          "system": "session.py",
+          "action": "raise a ValueError at callback construction time (before execute() is called) with a descriptive message indicating which identifier is missing",
+          "return_contract": "raises ValueError before ClaudeBackend.execute() is called",
+          "error_condition": "run_id or node_id is not available in the _execute_query closure scope when the callback is constructed"
+        }
+      ]
+    },
+    {
+      "id": "05-REQ-5",
+      "title": "End-to-end tool result audit trail when --audit is active",
+      "user_story": {
+        "role": "operator",
+        "goal": "see a complete sequence of tool.use followed by tool.result events in the audit file",
+        "benefit": "I can reconstruct exactly what the model sent to each tool and what it received back"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "05-REQ-5.1",
+          "ears_pattern": "complex_event",
+          "system": "audit infrastructure",
+          "action": "append a tool.result event to the audit JSONL file with matching tool_name and tool_use_id, appearing after the corresponding tool.use event in the file",
+          "return_contract": "the audit JSONL file contains a tool.result line with non-empty tool_response, tool_name matching the tool.use event, and tool_use_id matching the tool.use event",
+          "trigger": "a tool executes successfully during a session",
+          "condition": "--audit is active and AgentTraceSink is registered in SinkDispatcher"
+        },
+        {
+          "id": "05-REQ-5.2",
+          "ears_pattern": "complex_event",
+          "system": "audit infrastructure",
+          "action": "write one tool.result event per tool invocation, each with a unique tool_use_id correlating to its tool.use event",
+          "return_contract": "the audit JSONL file contains exactly one tool.result event for each tool.use event, with matching tool_use_id values",
+          "trigger": "a session completes with multiple tool calls",
+          "condition": "--audit is active"
+        },
+        {
+          "id": "05-REQ-5.3",
+          "ears_pattern": "complex_event",
+          "system": "audit infrastructure",
+          "action": "write no tool.result events to any file",
+          "return_contract": "no tool.result lines appear in any file; no audit JSONL file is created solely for tool results",
+          "trigger": "a session completes",
+          "condition": "--audit is NOT active"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "05-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "audit infrastructure",
+          "action": "truncate the tool_response field to exactly 50000 characters and append ' [truncated]' before writing the tool.result event",
+          "return_contract": "the tool_response field in the written event is exactly 50000 chars + ' [truncated]'; the session is not interrupted",
+          "error_condition": "a tool returns a response larger than 50000 characters when JSON-serialized"
+        },
+        {
+          "id": "05-REQ-5.E2",
+          "ears_pattern": "unwanted",
+          "system": "audit infrastructure",
+          "action": "write a tool.error event via the existing tool_error_callback path; do not write a tool.result event for the failed invocation",
+          "return_contract": "the audit JSONL file contains a tool.error event but no tool.result event for the failed tool call",
+          "error_condition": "a tool execution fails (PostToolUseFailure fires instead of PostToolUse)"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "05-PROP-1",
+      "title": "tool.result event appears after tool.use in audit file",
+      "for_any": "tool invocation during an --audit session",
+      "invariant": "the `tool.result` event with a given `tool_use_id` appears after the `tool.use` event with the same `tool_use_id` in the `audit JSONL file`",
+      "validates": [
+        "05-REQ-5.1",
+        "05-REQ-1.1"
+      ]
+    },
+    {
+      "id": "05-PROP-2",
+      "title": "tool_use_id correlation between tool.use and tool.result",
+      "for_any": "pair of tool.use and tool.result events in the audit JSONL file",
+      "invariant": "the `tool_use_id` field in the `tool.result` event equals the `tool_use_id` field in the corresponding `tool.use` event",
+      "validates": [
+        "05-REQ-5.1",
+        "05-REQ-5.2"
+      ]
+    },
+    {
+      "id": "05-PROP-3",
+      "title": "tool_response never exceeds truncation limit",
+      "for_any": "tool.result event written to the audit JSONL file",
+      "invariant": "the length of the tool_response string in the written event is at most 50000 + len(' [truncated]') characters",
+      "validates": [
+        "05-REQ-1.3",
+        "05-REQ-5.E1"
+      ]
+    },
+    {
+      "id": "05-PROP-4",
+      "title": "No tool.result events when --audit is inactive",
+      "for_any": "session run without --audit",
+      "invariant": "no file in the filesystem contains a line with event_type equal to 'tool.result' attributable to that run",
+      "validates": [
+        "05-REQ-5.3",
+        "05-REQ-4.2"
+      ]
+    },
+    {
+      "id": "05-PROP-5",
+      "title": "Hook failure does not terminate session",
+      "for_any": "exception raised inside the PostToolUse hook handler",
+      "invariant": "the session continues to completion and subsequent tool calls are executed; the exception is logged as a WARNING and not re-raised",
+      "validates": [
+        "05-REQ-3.E1"
+      ]
+    },
+    {
+      "id": "05-PROP-6",
+      "title": "One tool.result per tool.use",
+      "for_any": "session with N successful tool invocations under --audit",
+      "invariant": "the `audit JSONL file` contains exactly N `tool.result` events",
+      "validates": [
+        "05-REQ-5.2"
+      ]
+    },
+    {
+      "id": "05-PROP-7",
+      "title": "json.dumps default=str never raises on tool_response",
+      "for_any": "value of tool_response passed to AgentTraceSink.record_tool_result",
+      "invariant": "json.dumps(tool_response, default=str) completes without raising a TypeError regardless of the runtime type of tool_response",
+      "validates": [
+        "05-REQ-1.E1"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "05-PATH-1",
+      "title": "Happy path: tool result recorded in audit JSONL during --audit session",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "launches nightshift daemon with --audit flag, starting a session"
+        },
+        {
+          "actor": "session.py (_execute_query)",
+          "action": "constructs a tool_result_callback closure capturing run_id, node_id, and sink_dispatcher, then passes it to ClaudeBackend.execute()"
+        },
+        {
+          "actor": "ClaudeBackend",
+          "action": "registers a PostToolUse hook via HookMatcher wrapping the tool_result_callback, alongside the existing PostToolUseFailure and PreToolUse hooks"
+        },
+        {
+          "actor": "claude_agent_sdk",
+          "action": "executes a tool and fires the PostToolUse hook with a PostToolUseHookInput containing tool_name, tool_use_id, and tool_response"
+        },
+        {
+          "actor": "ClaudeBackend (PostToolUse hook handler)",
+          "action": "extracts tool_name, tool_use_id, and tool_response from PostToolUseHookInput and invokes tool_result_callback with those values"
+        },
+        {
+          "actor": "session.py (tool_result_callback closure)",
+          "action": "calls sink_dispatcher.record_tool_result(run_id=run_id, node_id=node_id, tool_name=tool_name, tool_use_id=tool_use_id, tool_response=tool_response)"
+        },
+        {
+          "actor": "SinkDispatcher",
+          "action": "calls _dispatch_optional('record_tool_result', ...) which forwards the call to AgentTraceSink.record_tool_result()"
+        },
+        {
+          "actor": "AgentTraceSink",
+          "action": "JSON-serializes tool_response with default=str, truncates to 50000 chars if needed, then calls _write_event with event_type='tool.result' and the assembled data dict"
+        },
+        {
+          "actor": "audit JSONL file",
+          "action": "receives one appended line containing the tool.result event JSON, completing the audit trail for that tool invocation"
+        }
+      ]
+    },
+    {
+      "id": "05-PATH-2",
+      "title": "Hook failure path: serialization error does not interrupt session",
+      "steps": [
+        {
+          "actor": "claude_agent_sdk",
+          "action": "fires PostToolUse hook after a tool execution"
+        },
+        {
+          "actor": "ClaudeBackend (PostToolUse hook handler)",
+          "action": "invokes tool_result_callback, which raises an exception (e.g. IOError from _write_event)"
+        },
+        {
+          "actor": "ClaudeBackend (PostToolUse hook handler)",
+          "action": "catches the exception, emits a WARNING log entry with the error details, and returns from the hook without re-raising"
+        },
+        {
+          "actor": "claude_agent_sdk",
+          "action": "continues session execution as if the hook succeeded; subsequent tool calls and model turns proceed normally"
+        }
+      ]
+    },
+    {
+      "id": "05-PATH-3",
+      "title": "No --audit: tool_result_callback is None, no hook registered",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "launches nightshift daemon without --audit flag"
+        },
+        {
+          "actor": "session.py (_execute_query)",
+          "action": "determines AgentTraceSink is not registered in SinkDispatcher and passes tool_result_callback=None to ClaudeBackend.execute()"
+        },
+        {
+          "actor": "ClaudeBackend",
+          "action": "skips PostToolUse hook registration because tool_result_callback is None"
+        },
+        {
+          "actor": "claude_agent_sdk",
+          "action": "executes tools normally; PostToolUse hook is never fired to any handler"
+        }
+      ]
+    },
+    {
+      "id": "05-PATH-4",
+      "title": "Large tool response truncated before writing",
+      "steps": [
+        {
+          "actor": "claude_agent_sdk",
+          "action": "fires PostToolUse hook with a tool_response that serializes to more than 50000 characters"
+        },
+        {
+          "actor": "ClaudeBackend (PostToolUse hook handler)",
+          "action": "invokes tool_result_callback with the raw tool_response value"
+        },
+        {
+          "actor": "AgentTraceSink (record_tool_result)",
+          "action": "JSON-serializes tool_response to a string exceeding 50000 chars, then truncates to exactly 50000 chars and appends ' [truncated]'"
+        },
+        {
+          "actor": "audit JSONL file",
+          "action": "receives the tool.result event with the truncated tool_response field, preventing trace file bloat"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "05-ERR-1",
+      "condition": "tool_result_callback raises any exception during the PostToolUse hook invocation",
+      "behavior": "ClaudeBackend hook handler catches the exception, emits a WARNING log entry with the error details, and returns from the hook without re-raising; session execution continues normally",
+      "requirement_id": "05-REQ-3.E1"
+    },
+    {
+      "id": "05-ERR-2",
+      "condition": "PostToolUseHookInput has an unexpected shape or missing fields when the hook handler tries to extract tool_name, tool_use_id, or tool_response",
+      "behavior": "ClaudeBackend hook handler catches AttributeError or KeyError, logs a WARNING, and returns without calling tool_result_callback",
+      "requirement_id": "05-REQ-3.E2"
+    },
+    {
+      "id": "05-ERR-3",
+      "condition": "tool_response is None or an unserializable type",
+      "behavior": "AgentTraceSink.record_tool_result uses json.dumps with default=str to coerce the value to a string without raising; the event is written with the coerced string value",
+      "requirement_id": "05-REQ-1.E1"
+    },
+    {
+      "id": "05-ERR-4",
+      "condition": "_write_event raises an IOError (e.g. disk full) inside AgentTraceSink.record_tool_result",
+      "behavior": "the IOError propagates to the caller (the tool_result_callback closure), which propagates it to the ClaudeBackend hook handler (05-ERR-1), which catches it and logs a WARNING",
+      "requirement_id": "05-REQ-1.E3"
+    },
+    {
+      "id": "05-ERR-5",
+      "condition": "run_id or node_id is not available in the _execute_query closure scope when tool_result_callback is constructed",
+      "behavior": "session.py raises a ValueError before ClaudeBackend.execute() is called, with a descriptive message indicating which identifier is missing",
+      "requirement_id": "05-REQ-4.E2"
+    },
+    {
+      "id": "05-ERR-6",
+      "condition": "a tool execution fails and PostToolUseFailure fires instead of PostToolUse",
+      "behavior": "the existing tool_error_callback path writes a tool.error event; no tool.result event is written for the failed invocation",
+      "requirement_id": "05-REQ-5.E2"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "claude_agent_sdk",
+      "version": "installed at .venv/",
+      "symbols": [
+        {
+          "name": "PostToolUseHookInput",
+          "import_path": "claude_agent_sdk.types",
+          "signature": "hook_event_name: Literal['PostToolUse'], tool_name: str, tool_input: dict[str, Any], tool_response: Any, tool_use_id: str",
+          "notes": "Confirmed in types.py:321. Inherits from BaseHookInput and _SubagentContextMixin."
+        },
+        {
+          "name": "HookMatcher",
+          "import_path": "claude_agent_sdk.types",
+          "signature": "HookMatcher(hooks: list[...])",
+          "notes": "Already used in ClaudeBackend for PostToolUseFailure and PreToolUse hook registration."
+        },
+        {
+          "name": "PostToolUse hook key",
+          "import_path": "claude_agent_sdk.types",
+          "signature": "Literal['PostToolUse']",
+          "notes": "Hook event name union member at line 264. Registered as hooks['PostToolUse'] = [HookMatcher(...)]."
+        }
+      ]
+    },
+    {
+      "package": "afaudit",
+      "version": "1.0.0",
+      "symbols": [
+        {
+          "name": "AgentTraceSink._write_event",
+          "import_path": "afaudit.trace",
+          "signature": "(event_type: str, run_id: str, data: dict) -> None",
+          "notes": "Private helper method. Reused by record_tool_result to append the tool.result event to the audit JSONL file."
+        },
+        {
+          "name": "SinkDispatcher._dispatch_optional",
+          "import_path": "afaudit.sink",
+          "signature": "(method: str, **kwargs) -> None",
+          "notes": "Calls the named method on each registered sink only if the sink implements it. Used for trace-specific dispatch."
+        }
+      ]
+    }
+  ]
+}

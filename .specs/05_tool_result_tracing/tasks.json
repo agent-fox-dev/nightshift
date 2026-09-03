@@ -1,0 +1,683 @@
+{
+  "spec_id": "05",
+  "spec_name": "tool_result_tracing",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "uv run pytest -q tests/afaudit/ tests/test_claude_backend.py tests/test_session.py tests/test_tool_result_tracing_smoke.py",
+    "all_tests": "uv run pytest -q",
+    "linter": "uv run ruff check . && uv run mypy ."
+  },
+  "dependencies": [
+    {
+      "depends_on_spec": "04",
+      "from_group": 1,
+      "to_group": 1,
+      "relationship": "AgentTraceSink is the target sink activated by spec 04's --audit flag; spec 04 adds it to the SinkDispatcher",
+      "sentinel": false
+    }
+  ],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write failing tests for AgentTraceSink.record_tool_result and SinkDispatcher dispatch",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write test: record_tool_result writes tool.result event to JSONL",
+          "details": [
+            "In tests/afaudit/test_agent_trace_sink.py, add a test that instantiates AgentTraceSink with a temp audit dir",
+            "Call record_tool_result(run_id=..., node_id=..., tool_name=..., tool_use_id=..., tool_response=...)",
+            "Assert the JSONL file contains a line with event_type='tool.result', matching tool_name, tool_use_id, and non-empty tool_response"
+          ],
+          "test_spec_refs": [
+            "TS-05-1"
+          ],
+          "requirement_refs": [
+            "05-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write test: tool_response is JSON-serialized and truncated at 50 000 chars",
+          "details": [
+            "Add a test that passes a tool_response string longer than 50 000 characters",
+            "Assert the stored tool_response field is exactly 50 000 chars followed by ' [truncated]'",
+            "Also add a test with a dict tool_response to verify json.dumps(default=str) serialization"
+          ],
+          "test_spec_refs": [
+            "TS-05-2",
+            "TS-05-3"
+          ],
+          "requirement_refs": [
+            "05-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write test: SinkDispatcher.record_tool_result fans out to registered sinks",
+          "details": [
+            "In tests/afaudit/test_sink_dispatcher.py, add a test that registers a mock sink implementing record_tool_result",
+            "Call dispatcher.record_tool_result(**kwargs) and assert the mock sink's method was called with the correct kwargs",
+            "Add a second test with a sink that does NOT implement record_tool_result to confirm _dispatch_optional skips it without error"
+          ],
+          "test_spec_refs": [
+            "TS-05-4",
+            "TS-05-5"
+          ],
+          "requirement_refs": [
+            "05-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Verify all AgentTraceSink and SinkDispatcher tests exist and fail before implementation",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All new tests are present and currently fail (ImportError or AttributeError expected): uv run pytest -q tests/afaudit/test_agent_trace_sink.py tests/afaudit/test_sink_dispatcher.py",
+          "No linter warnings introduced: uv run ruff check packages/afaudit/"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write failing tests for ClaudeBackend tool_result_callback and session wiring",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write test: ClaudeBackend.execute accepts tool_result_callback parameter",
+          "details": [
+            "In tests/test_claude_backend.py, add a test that calls ClaudeBackend.execute() with a tool_result_callback=mock_fn",
+            "Assert that when a PostToolUse hook fires, mock_fn is called with tool_name, tool_use_id, and tool_response",
+            "Assert that when tool_result_callback=None, no PostToolUse hook is registered (hooks dict does not contain 'PostToolUse')"
+          ],
+          "test_spec_refs": [
+            "TS-05-6",
+            "TS-05-7"
+          ],
+          "requirement_refs": [
+            "05-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write test: PostToolUse hook failure logs WARNING and does not interrupt session",
+          "details": [
+            "Add a test where tool_result_callback raises an exception",
+            "Assert that the session execution continues (no exception propagated)",
+            "Assert that a WARNING-level log message is emitted containing the error details"
+          ],
+          "test_spec_refs": [
+            "TS-05-8"
+          ],
+          "requirement_refs": [
+            "05-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write test: session._execute_query passes tool_result_callback to backend",
+          "details": [
+            "In tests/test_session.py, add a test that mocks ClaudeBackend.execute and asserts it is called with a tool_result_callback when --audit is active",
+            "Assert the callback calls sink_dispatcher.record_tool_result with the correct run_id, node_id, tool_name, tool_use_id, and tool_response"
+          ],
+          "test_spec_refs": [
+            "TS-05-9",
+            "TS-05-10"
+          ],
+          "requirement_refs": [
+            "05-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Write smoke test: end-to-end tool result appears in audit JSONL",
+          "details": [
+            "In tests/test_tool_result_tracing_smoke.py, write TS-05-SMOKE-1 that runs a minimal session with --audit active using a fake tool",
+            "Assert agent_{run_id}.jsonl contains both a tool.use and a subsequent tool.result event with matching tool_use_id",
+            "Assert tool_response field is a non-empty string"
+          ],
+          "test_spec_refs": [
+            "TS-05-11",
+            "TS-05-12",
+            "TS-05-13"
+          ],
+          "requirement_refs": [
+            "05-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.5",
+          "title": "Verify all ClaudeBackend and session tests exist and fail before implementation",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All new tests are present and currently fail: uv run pytest -q tests/test_claude_backend.py tests/test_session.py tests/test_tool_result_tracing_smoke.py",
+          "No linter warnings introduced: uv run ruff check ."
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "standard",
+      "title": "Implement AgentTraceSink.record_tool_result",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Add record_tool_result method to AgentTraceSink in packages/afaudit/trace.py",
+          "details": [
+            "Add method signature: def record_tool_result(self, *, run_id: str, node_id: str, tool_name: str, tool_use_id: str, tool_response: str) -> None",
+            "Call self._write_event('tool.result', run_id, {'node_id': node_id, 'tool_name': tool_name, 'tool_use_id': tool_use_id, 'tool_response': tool_response})",
+            "Ensure the method is keyword-only (all params after *)"
+          ],
+          "test_spec_refs": [
+            "TS-05-1"
+          ],
+          "requirement_refs": [
+            "05-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Implement tool_response JSON serialization and 50 000-char truncation",
+          "details": [
+            "In the helper layer (e.g. packages/afaudit/utils.py or alongside truncate_tool_input), add or reuse a serialize_and_truncate_tool_response(value: Any, max_len: int = 50_000) -> str function",
+            "Serialize via json.dumps(value, default=str)",
+            "Truncate to max_len chars appending ' [truncated]' if the serialized string exceeds max_len",
+            "Call this helper in record_tool_result before passing tool_response to _write_event"
+          ],
+          "test_spec_refs": [
+            "TS-05-2",
+            "TS-05-3"
+          ],
+          "requirement_refs": [
+            "05-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Verify AgentTraceSink.record_tool_result tests pass",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "Tests TS-05-1, TS-05-2, TS-05-3 pass: uv run pytest -q tests/afaudit/test_agent_trace_sink.py",
+          "No linter or type errors: uv run ruff check packages/afaudit/ && uv run mypy packages/afaudit/",
+          "Requirements 05-REQ-1 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "standard",
+      "title": "Implement SinkDispatcher.record_tool_result dispatch",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Add record_tool_result to SinkDispatcher in packages/afaudit/sink.py",
+          "details": [
+            "Add method: def record_tool_result(self, **kwargs) -> None",
+            "Implement body as: self._dispatch_optional('record_tool_result', **kwargs)",
+            "Follow the exact same pattern as existing optional-dispatch trace methods in SinkDispatcher"
+          ],
+          "test_spec_refs": [
+            "TS-05-4",
+            "TS-05-5"
+          ],
+          "requirement_refs": [
+            "05-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Verify SinkDispatcher dispatch tests pass",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "Tests TS-05-4, TS-05-5 pass: uv run pytest -q tests/afaudit/test_sink_dispatcher.py",
+          "No linter or type errors: uv run ruff check packages/afaudit/ && uv run mypy packages/afaudit/",
+          "Requirements 05-REQ-2 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Implement ClaudeBackend.execute tool_result_callback and PostToolUse hook",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Add tool_result_callback parameter to ClaudeBackend.execute()",
+          "details": [
+            "In the ClaudeBackend.execute() signature, add tool_result_callback: Callable | None = None following the same pattern as tool_error_callback",
+            "Update any type annotations or Protocol definitions if ClaudeBackend.execute() is typed via an interface"
+          ],
+          "test_spec_refs": [
+            "TS-05-6",
+            "TS-05-7"
+          ],
+          "requirement_refs": [
+            "05-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Build and register _post_tool_use_hook in ClaudeBackend.execute()",
+          "details": [
+            "Add a _build_tool_result_hook(callback) factory function that returns an async hook accepting PostToolUseHookInput",
+            "Inside the hook, call callback(tool_name=hook_input.tool_name, tool_use_id=hook_input.tool_use_id, tool_response=hook_input.tool_response)",
+            "Wrap the callback invocation in try/except; on exception log a WARNING and return without re-raising",
+            "Register the hook: if tool_result_callback is not None: hooks['PostToolUse'] = [HookMatcher(hooks=[_build_tool_result_hook(tool_result_callback)])]"
+          ],
+          "test_spec_refs": [
+            "TS-05-6",
+            "TS-05-7",
+            "TS-05-8"
+          ],
+          "requirement_refs": [
+            "05-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Verify ClaudeBackend hook tests pass",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "Tests TS-05-6, TS-05-7, TS-05-8 pass: uv run pytest -q tests/test_claude_backend.py",
+          "No linter or type errors: uv run ruff check . && uv run mypy .",
+          "Requirements 05-REQ-3 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Wire tool_result_callback in session.py _execute_query",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Add tool_result_callback construction and passing in _execute_query()",
+          "details": [
+            "In session.py::_execute_query(), after the existing tool_error_callback construction, add a parallel tool_result_callback",
+            "The callback should call sink_dispatcher.record_tool_result(run_id=run_id, node_id=node_id, tool_name=tool_name, tool_use_id=tool_use_id, tool_response=tool_response)",
+            "Pass tool_result_callback=tool_result_callback to the backend's execute() call alongside tool_error_callback"
+          ],
+          "test_spec_refs": [
+            "TS-05-9",
+            "TS-05-10"
+          ],
+          "requirement_refs": [
+            "05-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Confirm other backends (deepagents, google_adk) do not receive tool_result_callback",
+          "details": [
+            "Verify that only ClaudeBackend.execute() is called with tool_result_callback in session.py",
+            "Confirm deepagents and google_adk backend execute() calls are not modified",
+            "Add a comment in session.py noting that tool_result_callback is ClaudeBackend-specific"
+          ],
+          "test_spec_refs": [
+            "TS-05-9"
+          ],
+          "requirement_refs": [
+            "05-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Verify session wiring tests pass",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "Tests TS-05-9, TS-05-10 pass: uv run pytest -q tests/test_session.py",
+          "No linter or type errors: uv run ruff check . && uv run mypy .",
+          "Requirements 05-REQ-4 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "checkpoint",
+      "title": "Integration checkpoint: full test suite passes after all implementation",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Run full test suite and confirm all spec tests pass",
+          "details": [
+            "Execute the full test suite to confirm no regressions from the new implementation",
+            "Confirm TS-05-1 through TS-05-13 all pass",
+            "Confirm existing tests for afaudit, ClaudeBackend, and session.py are unaffected"
+          ],
+          "test_spec_refs": [
+            "TS-05-1",
+            "TS-05-2",
+            "TS-05-3",
+            "TS-05-4",
+            "TS-05-5",
+            "TS-05-6",
+            "TS-05-7",
+            "TS-05-8",
+            "TS-05-9",
+            "TS-05-10",
+            "TS-05-11",
+            "TS-05-12",
+            "TS-05-13"
+          ],
+          "requirement_refs": [
+            "05-REQ-1",
+            "05-REQ-2",
+            "05-REQ-3",
+            "05-REQ-4",
+            "05-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Confirm no stub or dead-code markers remain in new code",
+          "details": [
+            "Search for raise NotImplementedError, pass in non-abstract methods, and bare return None in newly added functions",
+            "Confirm _build_tool_result_hook, record_tool_result, and serialize_and_truncate_tool_response have full implementations",
+            "Confirm no TODO comments remain in the changed files"
+          ],
+          "test_spec_refs": [
+            "TS-05-1",
+            "TS-05-4",
+            "TS-05-6"
+          ],
+          "requirement_refs": [
+            "05-REQ-1",
+            "05-REQ-2",
+            "05-REQ-3",
+            "05-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Verify checkpoint: all spec tests pass and no regressions",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "All spec tests pass: uv run pytest -q",
+          "No linter warnings: uv run ruff check .",
+          "No type errors: uv run mypy .",
+          "Requirements 05-REQ-1 through 05-REQ-5 acceptance criteria met"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "wiring_verification",
+      "title": "Verify end-to-end tool result tracing wiring",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Trace execution path from PostToolUse hook through to audit JSONL write",
+          "details": [
+            "Confirm that _build_tool_result_hook callback \u2192 tool_result_callback in session.py \u2192 sink_dispatcher.record_tool_result \u2192 AgentTraceSink.record_tool_result \u2192 _write_event \u2192 JSONL file",
+            "Verify no intermediate step is a stub or no-op",
+            "Confirm the tool_use_id flows through all layers without mutation"
+          ],
+          "test_spec_refs": [
+            "TS-05-SMOKE-1",
+            "TS-05-11",
+            "TS-05-12"
+          ],
+          "requirement_refs": [
+            "05-REQ-3",
+            "05-REQ-4",
+            "05-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Verify tool_result_callback call-site is wired in production session.py",
+          "details": [
+            "Confirm _execute_query() in session.py actually passes tool_result_callback to ClaudeBackend.execute() in production code (not just in tests)",
+            "Confirm deepagents and google_adk backend execute() calls do not receive tool_result_callback",
+            "Confirm the callback is None when --audit is not active, preventing any PostToolUse hook registration"
+          ],
+          "test_spec_refs": [
+            "TS-05-9",
+            "TS-05-10",
+            "TS-05-13"
+          ],
+          "requirement_refs": [
+            "05-REQ-4",
+            "05-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Run smoke tests with real components",
+          "details": [
+            "Execute TS-05-SMOKE-1: run a minimal session with --audit active and a fake tool, assert tool.result event appears in agent_{run_id}.jsonl after tool.use",
+            "Assert tool_use_id in tool.result matches the tool_use_id in the preceding tool.use event",
+            "Assert tool_response is a non-empty JSON-serialized string"
+          ],
+          "test_spec_refs": [
+            "TS-05-11",
+            "TS-05-12",
+            "TS-05-13"
+          ],
+          "requirement_refs": [
+            "05-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.4",
+          "title": "Stub and dead-code audit on all new Python files",
+          "details": [
+            "Search for raise NotImplementedError in packages/afaudit/trace.py, packages/afaudit/sink.py, and the ClaudeBackend file",
+            "Search for bare pass in non-abstract method bodies in the same files",
+            "Search for bare return None in record_tool_result, _build_tool_result_hook, and serialize_and_truncate_tool_response",
+            "Confirm no TODO or FIXME markers remain in changed files"
+          ],
+          "test_spec_refs": [
+            "TS-05-1",
+            "TS-05-4",
+            "TS-05-6"
+          ],
+          "requirement_refs": [
+            "05-REQ-1",
+            "05-REQ-2",
+            "05-REQ-3",
+            "05-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.5",
+          "title": "Confirm all smoke tests pass and wiring is complete",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Smoke test TS-05-SMOKE-1 passes: uv run pytest -q tests/test_tool_result_tracing_smoke.py",
+          "Full test suite passes with no regressions: uv run pytest -q",
+          "No linter warnings: uv run ruff check .",
+          "No type errors: uv run mypy .",
+          "No stub markers (raise NotImplementedError, bare pass, bare return None) found in new code: grep -rn 'raise NotImplementedError\\|^\\s*pass$' packages/afaudit/trace.py packages/afaudit/sink.py",
+          "Requirements 05-REQ-5 end-to-end acceptance criteria met: tool.result event present in JSONL after tool.use with matching tool_use_id"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "05-REQ-1",
+      "test_spec_id": "TS-05-1",
+      "task_id": "3.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-1",
+      "test_spec_id": "TS-05-2",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-1",
+      "test_spec_id": "TS-05-3",
+      "task_id": "3.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-2",
+      "test_spec_id": "TS-05-4",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-2",
+      "test_spec_id": "TS-05-5",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3",
+      "test_spec_id": "TS-05-6",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3",
+      "test_spec_id": "TS-05-7",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-3",
+      "test_spec_id": "TS-05-8",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-4",
+      "test_spec_id": "TS-05-9",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-4",
+      "test_spec_id": "TS-05-10",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5",
+      "test_spec_id": "TS-05-11",
+      "task_id": "8.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5",
+      "test_spec_id": "TS-05-12",
+      "task_id": "8.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "05-REQ-5",
+      "test_spec_id": "TS-05-13",
+      "task_id": "8.3",
+      "test_path": null
+    }
+  ]
+}

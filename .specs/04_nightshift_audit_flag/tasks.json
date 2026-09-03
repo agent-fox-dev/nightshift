@@ -1,0 +1,886 @@
+{
+  "spec_id": "04",
+  "spec_name": "nightshift_audit_flag",
+  "schema_version": 1,
+  "test_commands": {
+    "spec_tests": "uv run pytest -q tests/test_audit_flag.py tests/test_audit_events.py tests/test_sink_wiring.py tests/test_zero_overhead.py tests/test_spec_events.py tests/test_audit_smoke.py",
+    "all_tests": "uv run pytest -q",
+    "linter": "ruff check nightshift/ afaudit/ && mypy nightshift/ afaudit/"
+  },
+  "dependencies": [],
+  "task_groups": [
+    {
+      "id": 1,
+      "kind": "tests",
+      "title": "Write failing tests for CLI --audit flag and AuditEventType enum",
+      "subtasks": [
+        {
+          "id": "1.1",
+          "title": "Write tests for --audit flag declaration on nightshift CLI",
+          "details": [
+            "Add test asserting `--audit` is a recognized Click option on the nightshift daemon command",
+            "Add test asserting `--audit` defaults to False when not provided",
+            "Add test asserting `--audit` sets a truthy value in the invocation context when passed"
+          ],
+          "test_spec_refs": [
+            "TS-04-1",
+            "TS-04-2",
+            "TS-04-3"
+          ],
+          "requirement_refs": [
+            "04-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.2",
+          "title": "Write tests for new AuditEventType enum values",
+          "details": [
+            "Add test asserting `AuditEventType.SPEC_INMEMORY_CREATED` equals `'spec.inmemory_created'`",
+            "Add test asserting `AuditEventType.SPEC_AFSPEC_CREATED` equals `'spec.afspec_created'`",
+            "Add test asserting both new values are members of the `AuditEventType` StrEnum and do not conflict with existing values"
+          ],
+          "test_spec_refs": [
+            "TS-04-7",
+            "TS-04-8",
+            "TS-04-9"
+          ],
+          "requirement_refs": [
+            "04-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.3",
+          "title": "Write smoke test for --audit end-to-end file creation",
+          "details": [
+            "Add smoke test `TS-04-SMOKE-1` that invokes a minimal nightshift daemon run with `--audit` against a temp directory",
+            "Assert that `agent_{run_id}.jsonl` and `audit_{run_id}.jsonl` are created under `.agent-fox/audit/`",
+            "Assert that `agent_{run_id}.jsonl` contains at least one `session.init` event with non-empty `system_prompt` and `task_prompt`"
+          ],
+          "test_spec_refs": [
+            "TS-04-17",
+            "TS-04-18"
+          ],
+          "requirement_refs": [
+            "04-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "1.4",
+          "title": "Verify all new tests exist and fail before implementation",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "1.V",
+        "checks": [
+          "All new tests are present and fail (no implementation yet): uv run pytest -q tests/test_audit_flag.py tests/test_audit_events.py tests/test_audit_smoke.py",
+          "No linter warnings introduced: ruff check nightshift/ afaudit/"
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "kind": "tests",
+      "title": "Write failing tests for audit sink wiring and zero-overhead behavior",
+      "subtasks": [
+        {
+          "id": "2.1",
+          "title": "Write tests for audit sink wiring in _run_daemon when --audit is set",
+          "details": [
+            "Add test asserting `AgentTraceSink` is added to the `SinkDispatcher` when `--audit` is True",
+            "Add test asserting `AuditJsonlSink` is added to the `SinkDispatcher` when `--audit` is True",
+            "Add test asserting `generate_run_id()` is called and the result is stored in `ctx.obj['audit_run_id']` when `--audit` is True"
+          ],
+          "test_spec_refs": [
+            "TS-04-4",
+            "TS-04-5",
+            "TS-04-6"
+          ],
+          "requirement_refs": [
+            "04-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.2",
+          "title": "Write tests for zero-overhead behavior when --audit is not set",
+          "details": [
+            "Add test asserting neither `AgentTraceSink` nor `AuditJsonlSink` appears in the dispatcher's sink list when `--audit` is False",
+            "Add test asserting no `agent_*.jsonl` or `audit_*.jsonl` files are created in `.agent-fox/audit/` when `--audit` is False"
+          ],
+          "test_spec_refs": [
+            "TS-04-19",
+            "TS-04-20"
+          ],
+          "requirement_refs": [
+            "04-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.3",
+          "title": "Write tests for unwritable audit directory error handling",
+          "details": [
+            "Add test that patches `.agent-fox/audit/` to be unwritable and asserts a WARNING-level log message is emitted",
+            "Add test asserting the daemon does not crash and exits with code 0 when the audit directory is unwritable and `--audit` is set",
+            "Add test asserting neither `AgentTraceSink` nor `AuditJsonlSink` is added to the dispatcher when the audit dir is unwritable"
+          ],
+          "test_spec_refs": [
+            "TS-04-4",
+            "TS-04-6"
+          ],
+          "requirement_refs": [
+            "04-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "2.4",
+          "title": "Verify all sink wiring and zero-overhead tests exist and fail before implementation",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "2.V",
+        "checks": [
+          "All new tests are present and fail (no implementation yet): uv run pytest -q tests/test_sink_wiring.py tests/test_zero_overhead.py",
+          "No linter warnings introduced: ruff check nightshift/"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "tests",
+      "title": "Write failing tests for SPEC_INMEMORY_CREATED and SPEC_AFSPEC_CREATED emit",
+      "subtasks": [
+        {
+          "id": "3.1",
+          "title": "Write tests for SPEC_INMEMORY_CREATED event emission in process_issue()",
+          "details": [
+            "Add test asserting `emit_audit_event` is called with `AuditEventType.SPEC_INMEMORY_CREATED` after `build_in_memory_spec()` succeeds",
+            "Add test asserting the payload contains `issue_number`, `title`, `branch_name`, `task_prompt`, and `system_context` keys",
+            "Add test asserting `system_context` is truncated to at most 10 000 characters in the payload"
+          ],
+          "test_spec_refs": [
+            "TS-04-10",
+            "TS-04-11",
+            "TS-04-12"
+          ],
+          "requirement_refs": [
+            "04-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.2",
+          "title": "Write tests for SPEC_AFSPEC_CREATED event emission in _assemble_afspec_context()",
+          "details": [
+            "Add test asserting `emit_audit_event` is called with `AuditEventType.SPEC_AFSPEC_CREATED` after `build_afspec_from_triage()` succeeds",
+            "Add test asserting the payload contains `issue_number`, `spec_id`, `requirements_count`, `test_cases_count`, `subtasks_count`, and `rendered` keys",
+            "Add test asserting `rendered` is the output of `render_combined(spec)` truncated to at most 50 000 characters",
+            "Add test asserting `requirements_count >= 1` when the afspec has at least one requirement"
+          ],
+          "test_spec_refs": [
+            "TS-04-13",
+            "TS-04-14",
+            "TS-04-15",
+            "TS-04-16"
+          ],
+          "requirement_refs": [
+            "04-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.3",
+          "title": "Write tests for best-effort emit (exception swallowing) in both emit sites",
+          "details": [
+            "Add test asserting that if `emit_audit_event` raises an exception in `process_issue()`, the exception is caught and logged at DEBUG level without propagating",
+            "Add test asserting that if `emit_audit_event` raises an exception in `_assemble_afspec_context()`, the exception is caught and logged at DEBUG level without propagating",
+            "Confirm `process_issue()` and `_assemble_afspec_context()` continue normal execution after a failed emit"
+          ],
+          "test_spec_refs": [
+            "TS-04-10",
+            "TS-04-13"
+          ],
+          "requirement_refs": [
+            "04-REQ-4",
+            "04-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "3.4",
+          "title": "Verify all emit tests exist and fail before implementation",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "3.V",
+        "checks": [
+          "All new tests are present and fail (no implementation yet): uv run pytest -q tests/test_spec_events.py",
+          "No linter warnings introduced: ruff check nightshift/ afaudit/"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "kind": "standard",
+      "title": "Extend AuditEventType with new enum values",
+      "subtasks": [
+        {
+          "id": "4.1",
+          "title": "Add SPEC_INMEMORY_CREATED to AuditEventType in afaudit/events.py",
+          "details": [
+            "Open `packages/afaudit/afaudit/events.py` and locate the `AuditEventType` StrEnum",
+            "Add `SPEC_INMEMORY_CREATED = 'spec.inmemory_created'` as a new member",
+            "Ensure the value does not conflict with any existing enum member (e.g. CARRY_PATCH_* values from carry_patch_pipeline_monitor)"
+          ],
+          "test_spec_refs": [
+            "TS-04-7",
+            "TS-04-8"
+          ],
+          "requirement_refs": [
+            "04-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.2",
+          "title": "Add SPEC_AFSPEC_CREATED to AuditEventType in afaudit/events.py",
+          "details": [
+            "Add `SPEC_AFSPEC_CREATED = 'spec.afspec_created'` as a new member of `AuditEventType`",
+            "Verify the full enum serializes correctly by running a quick import check",
+            "Update any `__all__` or re-export lists in `afaudit/events.py` if present"
+          ],
+          "test_spec_refs": [
+            "TS-04-8",
+            "TS-04-9"
+          ],
+          "requirement_refs": [
+            "04-REQ-3"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "4.3",
+          "title": "Verify new AuditEventType values pass tests and linter",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "4.V",
+        "checks": [
+          "Tests TS-04-7, TS-04-8, TS-04-9 pass: uv run pytest -q tests/test_audit_events.py",
+          "No linter or type errors: ruff check packages/afaudit/ && mypy packages/afaudit/",
+          "04-REQ-3 acceptance criteria met: both enum values exist with correct string representations"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "standard",
+      "title": "Add --audit Click flag to nightshift CLI",
+      "subtasks": [
+        {
+          "id": "5.1",
+          "title": "Declare --audit Click option on the nightshift daemon command",
+          "details": [
+            "Open `nightshift/app.py` and locate the Click command that invokes `_run_daemon()`",
+            "Add `@click.option('--audit', is_flag=True, default=False, help='Enable full audit logging to .agent-fox/audit/.')` decorator above the command function",
+            "Add `audit: bool` parameter to the command function signature"
+          ],
+          "test_spec_refs": [
+            "TS-04-1",
+            "TS-04-2"
+          ],
+          "requirement_refs": [
+            "04-REQ-1"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.2",
+          "title": "Store audit flag in ctx.obj and pass to _run_daemon",
+          "details": [
+            "In the CLI command body, set `ctx.obj['audit_run_id'] = ''` as the default (empty string when `--audit` is not set)",
+            "When `audit=True`, call `generate_run_id()` from `afaudit.events` and store the result in `ctx.obj['audit_run_id']`",
+            "Pass the `audit` flag and `audit_run_id` to `_run_daemon()` (add parameters to its signature if not already present)"
+          ],
+          "test_spec_refs": [
+            "TS-04-3",
+            "TS-04-6"
+          ],
+          "requirement_refs": [
+            "04-REQ-1",
+            "04-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "5.3",
+          "title": "Verify CLI flag tests pass and linter is clean",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "5.V",
+        "checks": [
+          "Tests TS-04-1, TS-04-2, TS-04-3 pass: uv run pytest -q tests/test_audit_flag.py",
+          "No linter or type errors: ruff check nightshift/ && mypy nightshift/",
+          "04-REQ-1 acceptance criteria met: --audit flag is declared with correct defaults"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "kind": "standard",
+      "title": "Wire AgentTraceSink and AuditJsonlSink into _run_daemon",
+      "subtasks": [
+        {
+          "id": "6.1",
+          "title": "Attach AgentTraceSink to SinkDispatcher when --audit is set",
+          "details": [
+            "In `nightshift/app.py::_run_daemon()`, after `init_knowledge()` returns the `SinkDispatcher`, check if `audit_run_id` is non-empty",
+            "If so, instantiate `AgentTraceSink(audit_dir=AUDIT_DIR, run_id=audit_run_id)` from `afaudit.trace`",
+            "Call `sink.add(agent_trace_sink)` to register it with the dispatcher",
+            "Wrap the instantiation and `add` call in a try/except; on `OSError` or `PermissionError`, log a WARNING and skip attaching the sink"
+          ],
+          "test_spec_refs": [
+            "TS-04-4",
+            "TS-04-5"
+          ],
+          "requirement_refs": [
+            "04-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.2",
+          "title": "Attach AuditJsonlSink to SinkDispatcher when --audit is set",
+          "details": [
+            "In the same guarded block, instantiate `AuditJsonlSink(audit_dir=AUDIT_DIR, run_id=audit_run_id)` from `afaudit.events`",
+            "Call `sink.add(audit_jsonl_sink)` to register it with the dispatcher",
+            "Ensure both sinks share the same `audit_run_id` that was generated in the CLI command",
+            "Confirm `DuckDBSink` remains in the dispatcher regardless of the `--audit` flag"
+          ],
+          "test_spec_refs": [
+            "TS-04-4",
+            "TS-04-5"
+          ],
+          "requirement_refs": [
+            "04-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.3",
+          "title": "Implement unwritable audit directory fallback with WARNING log",
+          "details": [
+            "Ensure the try/except around sink instantiation catches `OSError`, `PermissionError`, and any `IOError` subclass",
+            "Log a WARNING-level message: `'--audit enabled but audit directory is not writable; audit sinks disabled'`",
+            "Confirm the daemon continues to start normally (no re-raise, no sys.exit) after the warning"
+          ],
+          "test_spec_refs": [
+            "TS-04-6"
+          ],
+          "requirement_refs": [
+            "04-REQ-2"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "6.4",
+          "title": "Verify sink wiring tests pass and linter is clean",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "6.V",
+        "checks": [
+          "Tests TS-04-4, TS-04-5, TS-04-6 pass: uv run pytest -q tests/test_sink_wiring.py",
+          "No linter or type errors: ruff check nightshift/ && mypy nightshift/",
+          "04-REQ-2 acceptance criteria met: both sinks added when --audit set, WARNING logged on unwritable dir"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "standard",
+      "title": "Emit SPEC_INMEMORY_CREATED audit event in FixPipeline.process_issue()",
+      "subtasks": [
+        {
+          "id": "7.1",
+          "title": "Build SPEC_INMEMORY_CREATED payload after build_in_memory_spec() call",
+          "details": [
+            "In `fix_pipeline.py::FixPipeline.process_issue()`, locate the `build_in_memory_spec(issue, issue_body)` call",
+            "Immediately after the call (on success), construct the payload dict: `{'issue_number': issue.number, 'title': spec.title, 'branch_name': spec.branch_name, 'task_prompt': spec.task_prompt, 'system_context': spec.system_context[:10_000]}`",
+            "Ensure `system_context` is truncated to exactly 10 000 characters using slice notation"
+          ],
+          "test_spec_refs": [
+            "TS-04-10",
+            "TS-04-11",
+            "TS-04-12"
+          ],
+          "requirement_refs": [
+            "04-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.2",
+          "title": "Call emit_audit_event for SPEC_INMEMORY_CREATED with best-effort error handling",
+          "details": [
+            "Wrap the `emit_audit_event(sink, run_id, AuditEventType.SPEC_INMEMORY_CREATED, payload=payload)` call in a try/except block",
+            "On any exception, log at DEBUG level: `'Failed to emit spec.inmemory_created audit event: %s'` and continue",
+            "Ensure `run_id` used here is the same `audit_run_id` passed to `process_issue()` via its existing optional `run_id` parameter"
+          ],
+          "test_spec_refs": [
+            "TS-04-10",
+            "TS-04-12"
+          ],
+          "requirement_refs": [
+            "04-REQ-4"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "7.3",
+          "title": "Verify SPEC_INMEMORY_CREATED emit tests pass and linter is clean",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "7.V",
+        "checks": [
+          "Tests TS-04-10, TS-04-11, TS-04-12 pass: uv run pytest -q tests/test_spec_events.py::test_inmemory_created",
+          "No linter or type errors: ruff check nightshift/ && mypy nightshift/",
+          "04-REQ-4 acceptance criteria met: event emitted with correct payload and truncation"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "kind": "standard",
+      "title": "Emit SPEC_AFSPEC_CREATED audit event in FixPipeline._assemble_afspec_context()",
+      "subtasks": [
+        {
+          "id": "8.1",
+          "title": "Build SPEC_AFSPEC_CREATED payload after build_afspec_from_triage() call",
+          "details": [
+            "In `fix_pipeline.py::FixPipeline._assemble_afspec_context()`, locate the `build_afspec_from_triage(triage, issue_number)` call inside the try block",
+            "After the call succeeds, call `render_combined(spec)` from `afspec.render` and truncate the result to 50 000 characters",
+            "Construct the payload dict: `{'issue_number': issue_number, 'spec_id': spec.prd.frontmatter.spec_id if spec.prd else '', 'requirements_count': len(spec.requirements.requirements) if spec.requirements else 0, 'test_cases_count': len(spec.test_spec.test_cases) if spec.test_spec else 0, 'subtasks_count': sum(len(g.subtasks) for g in spec.tasks.task_groups) if spec.tasks else 0, 'rendered': rendered[:50_000]}`"
+          ],
+          "test_spec_refs": [
+            "TS-04-13",
+            "TS-04-14",
+            "TS-04-15",
+            "TS-04-16"
+          ],
+          "requirement_refs": [
+            "04-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.2",
+          "title": "Call emit_audit_event for SPEC_AFSPEC_CREATED with best-effort error handling",
+          "details": [
+            "Wrap the `emit_audit_event(sink, run_id, AuditEventType.SPEC_AFSPEC_CREATED, payload=payload)` call in a try/except block inside the outer try block (before the fallback except)",
+            "On any exception, log at DEBUG level: `'Failed to emit spec.afspec_created audit event: %s'` and continue",
+            "Ensure the emit does NOT occur in the fallback/except branch — only emit on successful `build_afspec_from_triage()` return"
+          ],
+          "test_spec_refs": [
+            "TS-04-13",
+            "TS-04-15"
+          ],
+          "requirement_refs": [
+            "04-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "8.3",
+          "title": "Verify SPEC_AFSPEC_CREATED emit tests pass and linter is clean",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "8.V",
+        "checks": [
+          "Tests TS-04-13, TS-04-14, TS-04-15, TS-04-16 pass: uv run pytest -q tests/test_spec_events.py::test_afspec_created",
+          "No linter or type errors: ruff check nightshift/ && mypy nightshift/",
+          "04-REQ-5 acceptance criteria met: event emitted only on success, rendered truncated to 50 000 chars"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "kind": "checkpoint",
+      "title": "Integration checkpoint: all unit tests pass, zero-overhead verified",
+      "subtasks": [
+        {
+          "id": "9.1",
+          "title": "Run full test suite and confirm all spec tests pass",
+          "details": [
+            "Execute `uv run pytest -q` from the repository root and confirm all tests in the audit flag spec pass",
+            "Confirm no regressions in existing tests for `afaudit`, `nightshift`, or `fix_pipeline`"
+          ],
+          "test_spec_refs": [
+            "TS-04-1",
+            "TS-04-2",
+            "TS-04-3",
+            "TS-04-4",
+            "TS-04-5",
+            "TS-04-6",
+            "TS-04-7",
+            "TS-04-8",
+            "TS-04-9",
+            "TS-04-10",
+            "TS-04-11",
+            "TS-04-12",
+            "TS-04-13",
+            "TS-04-14",
+            "TS-04-15"
+          ],
+          "requirement_refs": [
+            "04-REQ-1",
+            "04-REQ-2",
+            "04-REQ-3",
+            "04-REQ-4",
+            "04-REQ-5",
+            "04-REQ-6",
+            "04-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.2",
+          "title": "Verify zero-overhead: no audit files created when --audit is not set",
+          "details": [
+            "Run a simulated daemon invocation without `--audit` and assert `.agent-fox/audit/` contains no `agent_*.jsonl` or `audit_*.jsonl` files",
+            "Assert the `SinkDispatcher` sink list contains only `DuckDBSink` (no `AgentTraceSink` or `AuditJsonlSink`)",
+            "Confirm `ctx.obj['audit_run_id']` is an empty string"
+          ],
+          "test_spec_refs": [
+            "TS-04-19",
+            "TS-04-20"
+          ],
+          "requirement_refs": [
+            "04-REQ-7"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "9.3",
+          "title": "Verify checkpoint: all tests pass and linter is clean",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "9.V",
+        "checks": [
+          "All spec tests pass: uv run pytest -q",
+          "No linter or type errors: ruff check nightshift/ afaudit/ && mypy nightshift/ afaudit/",
+          "04-REQ-7 acceptance criteria met: zero files created and zero sinks added when --audit is not set"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "wiring_verification",
+      "title": "End-to-end wiring verification and smoke tests",
+      "subtasks": [
+        {
+          "id": "10.1",
+          "title": "Trace execution path from --audit CLI flag through sink attachment to JSONL file creation",
+          "details": [
+            "Confirm `nightshift/app.py` CLI command reads `--audit`, calls `generate_run_id()`, and stores result in `ctx.obj['audit_run_id']`",
+            "Confirm `_run_daemon()` receives `audit_run_id`, instantiates `AgentTraceSink` and `AuditJsonlSink`, and calls `sink.add()` for each",
+            "Confirm no stubs remain: search for `raise NotImplementedError`, `pass` in non-abstract methods, or `return None` in the wiring path",
+            "Confirm `DuckDBSink` is still present in the dispatcher after audit sinks are added"
+          ],
+          "test_spec_refs": [
+            "TS-04-SMOKE-1",
+            "TS-04-17",
+            "TS-04-18"
+          ],
+          "requirement_refs": [
+            "04-REQ-1",
+            "04-REQ-2",
+            "04-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.2",
+          "title": "Trace execution path from process_issue() through emit_audit_event to audit JSONL",
+          "details": [
+            "Confirm `FixPipeline.process_issue()` calls `build_in_memory_spec()` and then `emit_audit_event` with `SPEC_INMEMORY_CREATED`",
+            "Confirm `FixPipeline._assemble_afspec_context()` calls `build_afspec_from_triage()` and then `emit_audit_event` with `SPEC_AFSPEC_CREATED` only on success",
+            "Confirm both emit calls use the same `run_id` as the sinks registered in `_run_daemon()`",
+            "Confirm best-effort wrapping: both emit calls are inside try/except blocks with DEBUG-level logging on failure"
+          ],
+          "test_spec_refs": [
+            "TS-04-SMOKE-1",
+            "TS-04-10",
+            "TS-04-13"
+          ],
+          "requirement_refs": [
+            "04-REQ-4",
+            "04-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.3",
+          "title": "Run smoke test TS-04-SMOKE-1 with real components",
+          "details": [
+            "Execute smoke test `TS-04-SMOKE-1` against a real (or integration-level) nightshift daemon run with `--audit` set",
+            "Assert `agent_{run_id}.jsonl` exists and contains at least one `session.init` event with non-empty `system_prompt` and `task_prompt`",
+            "Assert `audit_{run_id}.jsonl` exists and contains at least one `spec.inmemory_created` event where `payload.issue_number` matches the processed issue",
+            "Assert `audit_{run_id}.jsonl` contains a `spec.afspec_created` event where `payload.requirements_count >= 1` and `payload.rendered` is non-empty"
+          ],
+          "test_spec_refs": [
+            "TS-04-SMOKE-1",
+            "TS-04-17",
+            "TS-04-18"
+          ],
+          "requirement_refs": [
+            "04-REQ-6"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.4",
+          "title": "Stub and dead-code audit across all modified files",
+          "details": [
+            "Search `nightshift/app.py` and `nightshift/fix_pipeline.py` for `raise NotImplementedError`, bare `pass` in non-abstract methods, and `return None` in non-trivial paths",
+            "Search `packages/afaudit/afaudit/events.py` for any placeholder or TODO comments around the new enum values",
+            "Confirm all emit call sites are reachable from production code paths (not only from tests)",
+            "Confirm `--audit` flag is wired into the production CLI entry point, not just declared"
+          ],
+          "test_spec_refs": [
+            "TS-04-SMOKE-1",
+            "TS-04-16",
+            "TS-04-19"
+          ],
+          "requirement_refs": [
+            "04-REQ-1",
+            "04-REQ-2",
+            "04-REQ-4",
+            "04-REQ-5"
+          ],
+          "state": "pending",
+          "optional": false
+        },
+        {
+          "id": "10.5",
+          "title": "Confirm all smoke tests pass and full test suite is green",
+          "details": [],
+          "test_spec_refs": [],
+          "requirement_refs": [],
+          "state": "pending",
+          "optional": false
+        }
+      ],
+      "verification": {
+        "id": "10.V",
+        "checks": [
+          "Smoke test TS-04-SMOKE-1 passes: uv run pytest -q -k SMOKE",
+          "Full test suite passes: uv run pytest -q",
+          "No linter or type errors: ruff check nightshift/ afaudit/ && mypy nightshift/ afaudit/",
+          "No stub markers found: grep -r 'raise NotImplementedError\\|# TODO' nightshift/app.py nightshift/fix_pipeline.py packages/afaudit/afaudit/events.py returns no results in modified code",
+          "04-REQ-1 through 04-REQ-7 acceptance criteria all met as verified by test results"
+        ]
+      }
+    }
+  ],
+  "traceability": [
+    {
+      "requirement_id": "04-REQ-1",
+      "test_spec_id": "TS-04-1",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-1",
+      "test_spec_id": "TS-04-2",
+      "task_id": "5.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-1",
+      "test_spec_id": "TS-04-3",
+      "task_id": "5.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2",
+      "test_spec_id": "TS-04-4",
+      "task_id": "6.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2",
+      "test_spec_id": "TS-04-5",
+      "task_id": "6.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-2",
+      "test_spec_id": "TS-04-6",
+      "task_id": "6.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-3",
+      "test_spec_id": "TS-04-7",
+      "task_id": "4.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-3",
+      "test_spec_id": "TS-04-8",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-3",
+      "test_spec_id": "TS-04-9",
+      "task_id": "4.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4",
+      "test_spec_id": "TS-04-10",
+      "task_id": "7.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4",
+      "test_spec_id": "TS-04-11",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-4",
+      "test_spec_id": "TS-04-12",
+      "task_id": "7.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5",
+      "test_spec_id": "TS-04-13",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5",
+      "test_spec_id": "TS-04-14",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5",
+      "test_spec_id": "TS-04-15",
+      "task_id": "8.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-5",
+      "test_spec_id": "TS-04-16",
+      "task_id": "8.1",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-6",
+      "test_spec_id": "TS-04-17",
+      "task_id": "10.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-6",
+      "test_spec_id": "TS-04-18",
+      "task_id": "10.3",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-7",
+      "test_spec_id": "TS-04-19",
+      "task_id": "9.2",
+      "test_path": null
+    },
+    {
+      "requirement_id": "04-REQ-7",
+      "test_spec_id": "TS-04-20",
+      "task_id": "9.2",
+      "test_path": null
+    }
+  ]
+}

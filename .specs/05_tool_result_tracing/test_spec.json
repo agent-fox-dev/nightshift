@@ -1,0 +1,748 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/test_spec.v1.json",
+  "spec_id": "05",
+  "spec_name": "tool_result_tracing",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-05-1",
+      "requirement_id": "05-REQ-1.1",
+      "kind": "unit",
+      "description": "Calling record_tool_result on AgentTraceSink serializes tool_response via json.dumps with default=str, truncates if needed, and appends a tool.result event line to the audit JSONL file.",
+      "preconditions": [
+        "A temporary audit directory exists at .agent-fox/audit/",
+        "An AgentTraceSink instance is initialized with a valid run_id pointing to agent_{run_id}.jsonl in the audit directory",
+        "The audit JSONL file exists and is writable"
+      ],
+      "input": {
+        "node_id": "node-1",
+        "run_id": "run-abc123",
+        "tool_name": "bash",
+        "tool_response": {
+          "exit_code": 0,
+          "stdout": "hello world"
+        },
+        "tool_use_id": "tuid-001"
+      },
+      "expected": {
+        "audit_jsonl": "One new line appended to agent_run-abc123.jsonl containing a JSON object with event_type='tool.result', run_id='run-abc123', node_id='node-1', tool_name='bash', tool_use_id='tuid-001', and tool_response equal to the JSON-serialized string of the input dict"
+      },
+      "assertion_pseudocode": "sink = AgentTraceSink(audit_dir); sink.record_tool_result(run_id='run-abc123', node_id='node-1', tool_name='bash', tool_use_id='tuid-001', tool_response={'stdout': 'hello world', 'exit_code': 0}); lines = read_jsonl('agent_run-abc123.jsonl'); event = parse_json(lines[-1]); assert event['event_type'] == 'tool.result'; assert event['run_id'] == 'run-abc123'; assert event['node_id'] == 'node-1'; assert event['tool_name'] == 'bash'; assert event['tool_use_id'] == 'tuid-001'; assert event['tool_response'] == json_dumps({'stdout': 'hello world', 'exit_code': 0}, default=str)"
+    },
+    {
+      "id": "TS-05-2",
+      "requirement_id": "05-REQ-1.2",
+      "kind": "unit",
+      "description": "Every tool.result event written by AgentTraceSink contains all required schema fields: event_type, run_id, timestamp (ISO 8601), node_id, tool_name, tool_use_id, and tool_response as a string.",
+      "preconditions": [
+        "A temporary audit directory exists at .agent-fox/audit/",
+        "An AgentTraceSink instance is initialized with a valid run_id"
+      ],
+      "input": {
+        "node_id": "node-2",
+        "run_id": "run-schema-test",
+        "tool_name": "read_file",
+        "tool_response": "file contents here",
+        "tool_use_id": "tuid-002"
+      },
+      "expected": {
+        "event_fields": "Parsed JSON line has keys: event_type='tool.result', run_id (str), timestamp (ISO 8601 parseable string), node_id (str), tool_name (str), tool_use_id (str), tool_response (str)"
+      },
+      "assertion_pseudocode": "sink.record_tool_result(run_id='run-schema-test', node_id='node-2', tool_name='read_file', tool_use_id='tuid-002', tool_response='file contents here'); event = parse_last_jsonl_line('agent_run-schema-test.jsonl'); assert event['event_type'] == 'tool.result'; assert isinstance(event['timestamp'], str); assert datetime.fromisoformat(event['timestamp']) is not None; assert event['tool_name'] == 'read_file'; assert event['tool_use_id'] == 'tuid-002'; assert isinstance(event['tool_response'], str)"
+    },
+    {
+      "id": "TS-05-3",
+      "requirement_id": "05-REQ-1.3",
+      "kind": "unit",
+      "description": "When tool_response serializes to more than 50000 characters, AgentTraceSink truncates the stored value to exactly 50000 chars and appends ' [truncated]'.",
+      "preconditions": [
+        "A temporary audit directory exists at .agent-fox/audit/",
+        "An AgentTraceSink instance is initialized with a valid run_id"
+      ],
+      "input": {
+        "node_id": "node-3",
+        "run_id": "run-trunc",
+        "tool_name": "bash",
+        "tool_response": "A string that when JSON-serialized exceeds 50000 characters (e.g. 'x' * 60000)",
+        "tool_use_id": "tuid-003"
+      },
+      "expected": {
+        "suffix": "The tool_response field ends with ' [truncated]'",
+        "tool_response_length": "The tool_response field in the written event is exactly 50000 + len(' [truncated]') = 50011 characters"
+      },
+      "assertion_pseudocode": "long_response = 'x' * 60000; sink.record_tool_result(run_id='run-trunc', node_id='node-3', tool_name='bash', tool_use_id='tuid-003', tool_response=long_response); event = parse_last_jsonl_line('agent_run-trunc.jsonl'); stored = event['tool_response']; assert stored.endswith(' [truncated]'); assert len(stored) == 50000 + len(' [truncated]')"
+    },
+    {
+      "id": "TS-05-4",
+      "requirement_id": "05-REQ-2.1",
+      "kind": "unit",
+      "description": "Calling record_tool_result on SinkDispatcher forwards the call via _dispatch_optional to every registered sink that implements the method.",
+      "preconditions": [
+        "A SinkDispatcher instance is created",
+        "A mock sink implementing record_tool_result is registered in the dispatcher",
+        "A second mock sink NOT implementing record_tool_result is also registered"
+      ],
+      "input": {
+        "node_id": "node-4",
+        "run_id": "run-dispatch",
+        "tool_name": "bash",
+        "tool_response": "output",
+        "tool_use_id": "tuid-004"
+      },
+      "expected": {
+        "implementing_sink": "record_tool_result is called once on the sink that implements it with the exact kwargs",
+        "non_implementing_sink": "No AttributeError or call is made on the sink that does not implement record_tool_result"
+      },
+      "assertion_pseudocode": "implementing_sink = MockSink(has_record_tool_result=True); non_implementing_sink = MockSink(has_record_tool_result=False); dispatcher = SinkDispatcher([implementing_sink, non_implementing_sink]); dispatcher.record_tool_result(run_id='run-dispatch', node_id='node-4', tool_name='bash', tool_use_id='tuid-004', tool_response='output'); assert implementing_sink.record_tool_result_calls == [{'run_id': 'run-dispatch', 'node_id': 'node-4', 'tool_name': 'bash', 'tool_use_id': 'tuid-004', 'tool_response': 'output'}]; assert non_implementing_sink.record_tool_result_calls == []"
+    },
+    {
+      "id": "TS-05-5",
+      "requirement_id": "05-REQ-2.2",
+      "kind": "unit",
+      "description": "Calling record_tool_result on a SinkDispatcher with no sinks implementing the method completes without raising any exception.",
+      "preconditions": [
+        "A SinkDispatcher instance is created with one or more sinks that do NOT implement record_tool_result"
+      ],
+      "input": {
+        "node_id": "node-5",
+        "run_id": "run-no-sink",
+        "tool_name": "bash",
+        "tool_response": "output",
+        "tool_use_id": "tuid-005"
+      },
+      "expected": {
+        "result": "No exception is raised; the method returns None"
+      },
+      "assertion_pseudocode": "non_implementing_sink = MockSink(has_record_tool_result=False); dispatcher = SinkDispatcher([non_implementing_sink]); result = dispatcher.record_tool_result(run_id='run-no-sink', node_id='node-5', tool_name='bash', tool_use_id='tuid-005', tool_response='output'); assert result is None"
+    },
+    {
+      "id": "TS-05-6",
+      "requirement_id": "05-REQ-3.1",
+      "kind": "unit",
+      "description": "When ClaudeBackend.execute() is called with a non-None tool_result_callback, a PostToolUse hook is registered via HookMatcher following the same pattern as PostToolUseFailure.",
+      "preconditions": [
+        "A ClaudeBackend instance is available",
+        "A mock tool_result_callback callable is prepared",
+        "The hooks dict is inspectable before SDK execution begins"
+      ],
+      "input": {
+        "tool_result_callback": "a non-None callable"
+      },
+      "expected": {
+        "hooks_dict": "hooks['PostToolUse'] is set to a list containing one HookMatcher instance wrapping the built hook function"
+      },
+      "assertion_pseudocode": "callback = lambda **kw: None; captured_hooks = {}; with patch_hooks_capture(captured_hooks): backend.execute(..., tool_result_callback=callback); assert 'PostToolUse' in captured_hooks; assert len(captured_hooks['PostToolUse']) == 1; assert isinstance(captured_hooks['PostToolUse'][0], HookMatcher)"
+    },
+    {
+      "id": "TS-05-7",
+      "requirement_id": "05-REQ-3.2",
+      "kind": "unit",
+      "description": "When the PostToolUse SDK hook fires, the hook handler invokes tool_result_callback with tool_name, tool_use_id, and tool_response extracted from PostToolUseHookInput.",
+      "preconditions": [
+        "A ClaudeBackend PostToolUse hook handler is built via _build_tool_result_hook(callback)",
+        "A mock PostToolUseHookInput is prepared with known tool_name, tool_use_id, and tool_response values"
+      ],
+      "input": {
+        "hook_input": {
+          "hook_event_name": "PostToolUse",
+          "tool_input": {
+            "path": "/tmp/test.txt"
+          },
+          "tool_name": "read_file",
+          "tool_response": "file content",
+          "tool_use_id": "tuid-007"
+        }
+      },
+      "expected": {
+        "callback_called_with": "tool_result_callback is called once with tool_name='read_file', tool_use_id='tuid-007', tool_response='file content'"
+      },
+      "assertion_pseudocode": "received = []; callback = lambda tool_name, tool_use_id, tool_response: received.append({'tool_name': tool_name, 'tool_use_id': tool_use_id, 'tool_response': tool_response}); hook = _build_tool_result_hook(callback); hook_input = MockPostToolUseHookInput(tool_name='read_file', tool_use_id='tuid-007', tool_response='file content'); hook(hook_input); assert len(received) == 1; assert received[0] == {'tool_name': 'read_file', 'tool_use_id': 'tuid-007', 'tool_response': 'file content'}"
+    },
+    {
+      "id": "TS-05-8",
+      "requirement_id": "05-REQ-3.3",
+      "kind": "unit",
+      "description": "When ClaudeBackend.execute() is called with tool_result_callback=None, no PostToolUse hook is registered in the hooks dict.",
+      "preconditions": [
+        "A ClaudeBackend instance is available",
+        "The hooks dict is inspectable before SDK execution begins"
+      ],
+      "input": {
+        "tool_result_callback": null
+      },
+      "expected": {
+        "hooks_dict": "hooks does not contain the key 'PostToolUse'"
+      },
+      "assertion_pseudocode": "captured_hooks = {}; with patch_hooks_capture(captured_hooks): backend.execute(..., tool_result_callback=None); assert 'PostToolUse' not in captured_hooks"
+    },
+    {
+      "id": "TS-05-9",
+      "requirement_id": "05-REQ-4.1",
+      "kind": "integration",
+      "description": "When _execute_query() is called with an active SinkDispatcher containing AgentTraceSink, it constructs a tool_result_callback that calls sink_dispatcher.record_tool_result with run_id, node_id, tool_name, tool_use_id, and tool_response, and passes it to ClaudeBackend.execute().",
+      "preconditions": [
+        "A SinkDispatcher with a registered AgentTraceSink is available",
+        "run_id and node_id are set in the _execute_query closure scope",
+        "ClaudeBackend.execute() is mocked to capture the tool_result_callback argument"
+      ],
+      "input": {
+        "audit_active": true,
+        "node_id": "node-wire",
+        "run_id": "run-wire"
+      },
+      "expected": {
+        "callback_behavior": "Invoking the callback with tool_name='bash', tool_use_id='tuid-wire', tool_response='out' results in sink_dispatcher.record_tool_result being called with those exact kwargs plus run_id and node_id",
+        "callback_passed": "ClaudeBackend.execute() receives a non-None tool_result_callback"
+      },
+      "assertion_pseudocode": "mock_backend = MockClaudeBackend(); dispatcher = SinkDispatcher([AgentTraceSink(...)]); _execute_query(backend=mock_backend, sink_dispatcher=dispatcher, run_id='run-wire', node_id='node-wire', ...); captured_cb = mock_backend.last_execute_kwargs['tool_result_callback']; assert captured_cb is not None; with patch(dispatcher, 'record_tool_result') as mock_rtr: captured_cb(tool_name='bash', tool_use_id='tuid-wire', tool_response='out'); assert mock_rtr.called_with(run_id='run-wire', node_id='node-wire', tool_name='bash', tool_use_id='tuid-wire', tool_response='out')"
+    },
+    {
+      "id": "TS-05-10",
+      "requirement_id": "05-REQ-4.2",
+      "kind": "integration",
+      "description": "When --audit is not active and AgentTraceSink is not registered, _execute_query passes tool_result_callback=None to ClaudeBackend.execute().",
+      "preconditions": [
+        "A SinkDispatcher with NO AgentTraceSink registered is available",
+        "ClaudeBackend.execute() is mocked to capture the tool_result_callback argument"
+      ],
+      "input": {
+        "audit_active": false
+      },
+      "expected": {
+        "callback_passed": "ClaudeBackend.execute() receives tool_result_callback=None"
+      },
+      "assertion_pseudocode": "mock_backend = MockClaudeBackend(); dispatcher = SinkDispatcher([]); _execute_query(backend=mock_backend, sink_dispatcher=dispatcher, ...); assert mock_backend.last_execute_kwargs['tool_result_callback'] is None"
+    },
+    {
+      "id": "TS-05-11",
+      "requirement_id": "05-REQ-5.1",
+      "kind": "integration",
+      "description": "When --audit is active and a tool executes successfully, the audit JSONL file contains a tool.result event after the corresponding tool.use event with matching tool_name and tool_use_id.",
+      "preconditions": [
+        "A temporary audit directory exists at .agent-fox/audit/",
+        "AgentTraceSink is initialized and registered in SinkDispatcher",
+        "A prior tool.use event with tool_use_id='tuid-e2e' has been written to the audit JSONL file"
+      ],
+      "input": {
+        "node_id": "node-e2e",
+        "run_id": "run-e2e",
+        "tool_name": "bash",
+        "tool_response": "command output",
+        "tool_use_id": "tuid-e2e"
+      },
+      "expected": {
+        "audit_file": "agent_run-e2e.jsonl contains a tool.result event after the tool.use event, with tool_name='bash', tool_use_id='tuid-e2e', and non-empty tool_response"
+      },
+      "assertion_pseudocode": "sink.record_tool_result(run_id='run-e2e', node_id='node-e2e', tool_name='bash', tool_use_id='tuid-e2e', tool_response='command output'); events = [parse_json(line) for line in read_lines('agent_run-e2e.jsonl')]; tool_use_idx = index_of(events, lambda e: e['event_type'] == 'tool.use' and e['tool_use_id'] == 'tuid-e2e'); tool_result_idx = index_of(events, lambda e: e['event_type'] == 'tool.result' and e['tool_use_id'] == 'tuid-e2e'); assert tool_result_idx > tool_use_idx; assert events[tool_result_idx]['tool_name'] == 'bash'; assert events[tool_result_idx]['tool_response'] != ''"
+    },
+    {
+      "id": "TS-05-12",
+      "requirement_id": "05-REQ-5.2",
+      "kind": "integration",
+      "description": "When a session completes with multiple tool calls under --audit, the audit JSONL file contains exactly one tool.result event per tool.use event, each with a matching tool_use_id.",
+      "preconditions": [
+        "A temporary audit directory exists at .agent-fox/audit/",
+        "AgentTraceSink is initialized and registered in SinkDispatcher",
+        "Three tool.use events with distinct tool_use_ids have been written"
+      ],
+      "input": {
+        "tool_calls": [
+          {
+            "tool_name": "bash",
+            "tool_response": "out1",
+            "tool_use_id": "tuid-m1"
+          },
+          {
+            "tool_name": "read_file",
+            "tool_response": "out2",
+            "tool_use_id": "tuid-m2"
+          },
+          {
+            "tool_name": "write_file",
+            "tool_response": "out3",
+            "tool_use_id": "tuid-m3"
+          }
+        ]
+      },
+      "expected": {
+        "correlation": "Each tool.result event's tool_use_id matches one of the tool.use events' tool_use_ids",
+        "tool_result_count": "Exactly 3 tool.result events in the audit JSONL file"
+      },
+      "assertion_pseudocode": "for call in tool_calls: sink.record_tool_result(run_id='run-multi', node_id='node-m', **call); events = [parse_json(line) for line in read_lines('agent_run-multi.jsonl')]; result_events = [e for e in events if e['event_type'] == 'tool.result']; assert len(result_events) == 3; result_ids = {e['tool_use_id'] for e in result_events}; assert result_ids == {'tuid-m1', 'tuid-m2', 'tuid-m3'}"
+    },
+    {
+      "id": "TS-05-13",
+      "requirement_id": "05-REQ-5.3",
+      "kind": "integration",
+      "description": "When --audit is NOT active, no tool.result events are written to any file during a session.",
+      "preconditions": [
+        "A SinkDispatcher with NO AgentTraceSink registered is available",
+        "ClaudeBackend is configured with tool_result_callback=None",
+        "No audit JSONL file exists for the run"
+      ],
+      "input": {
+        "audit_active": false,
+        "tool_calls": [
+          {
+            "tool_name": "bash",
+            "tool_response": "output",
+            "tool_use_id": "tuid-noaudit"
+          }
+        ]
+      },
+      "expected": {
+        "audit_file": "No file at .agent-fox/audit/agent_{run_id}.jsonl is created or modified; no line with event_type='tool.result' exists in any file"
+      },
+      "assertion_pseudocode": "dispatcher = SinkDispatcher([]); backend = ClaudeBackend(); backend.execute(..., tool_result_callback=None); assert not file_exists('.agent-fox/audit/agent_run-noaudit.jsonl') OR (all lines in file do not have event_type == 'tool.result')"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-05-P1",
+      "property_id": "05-PROP-1",
+      "validates": [
+        "05-REQ-5.1",
+        "05-REQ-1.1"
+      ],
+      "description": "For any tool invocation during an --audit session, the tool.result event with a given tool_use_id always appears after the tool.use event with the same tool_use_id in the audit JSONL file.",
+      "for_any_strategy": "Generate random tool_use_id strings (UUID4) and arbitrary tool_response values (strings, dicts, lists); write a tool.use event then call record_tool_result; parse all lines of the JSONL file",
+      "invariant_check": "for each tool_use_id: index_of(tool.result event) > index_of(tool.use event) in the ordered list of parsed JSONL lines"
+    },
+    {
+      "id": "TS-05-P2",
+      "property_id": "05-PROP-2",
+      "validates": [
+        "05-REQ-5.1",
+        "05-REQ-5.2"
+      ],
+      "description": "For any pair of tool.use and tool.result events in the audit JSONL file, the tool_use_id field in the tool.result event equals the tool_use_id field in the corresponding tool.use event.",
+      "for_any_strategy": "Generate sequences of 1-10 tool invocations, each with a unique UUID4 tool_use_id; write tool.use events then call record_tool_result for each; parse the JSONL file",
+      "invariant_check": "for each tool_use_id in the set of written IDs: exactly one tool.result event exists with that tool_use_id, and its tool_use_id == the tool_use_id of the corresponding tool.use event"
+    },
+    {
+      "id": "TS-05-P3",
+      "property_id": "05-PROP-3",
+      "validates": [
+        "05-REQ-1.3",
+        "05-REQ-5.E1"
+      ],
+      "description": "For any tool.result event written to the audit JSONL file, the length of the tool_response string never exceeds 50000 + len(' [truncated]') characters.",
+      "for_any_strategy": "Generate tool_response values of varying sizes: strings of length 0, 1, 49999, 50000, 50001, 100000, and random lengths between 0 and 100000; also generate dicts and lists of varying sizes",
+      "invariant_check": "for each generated tool_response: after calling record_tool_result and parsing the written event, assert len(event['tool_response']) <= 50000 + len(' [truncated]')"
+    },
+    {
+      "id": "TS-05-P4",
+      "property_id": "05-PROP-4",
+      "validates": [
+        "05-REQ-5.3",
+        "05-REQ-4.2"
+      ],
+      "description": "For any session run without --audit, no file in the filesystem contains a line with event_type equal to 'tool.result' attributable to that run.",
+      "for_any_strategy": "Generate random run_ids and simulate 1-5 tool executions per run with tool_result_callback=None; scan all files in .agent-fox/audit/ after each simulated run",
+      "invariant_check": "for each simulated run: no file in .agent-fox/audit/ contains a JSON line with event_type == 'tool.result' and run_id matching the simulated run_id"
+    },
+    {
+      "id": "TS-05-P5",
+      "property_id": "05-PROP-5",
+      "validates": [
+        "05-REQ-3.E1"
+      ],
+      "description": "For any exception raised inside the PostToolUse hook handler, the session continues to completion and subsequent tool calls are executed; the exception is logged as WARNING and not re-raised.",
+      "for_any_strategy": "Generate random exception types (RuntimeError, IOError, ValueError, TypeError) with random messages; build a hook handler with a callback that raises the generated exception; invoke the hook handler",
+      "invariant_check": "for each generated exception: hook(hook_input) returns without raising; at least one WARNING log entry is emitted; a subsequent call to hook(hook_input2) also completes without raising"
+    },
+    {
+      "id": "TS-05-P6",
+      "property_id": "05-PROP-6",
+      "validates": [
+        "05-REQ-5.2"
+      ],
+      "description": "For any session with N successful tool invocations under --audit, the audit JSONL file contains exactly N tool.result events.",
+      "for_any_strategy": "Generate N in range 0-20; simulate N successful tool invocations by calling record_tool_result N times with distinct tool_use_ids; parse the JSONL file",
+      "invariant_check": "count of lines with event_type == 'tool.result' in the JSONL file == N"
+    },
+    {
+      "id": "TS-05-P7",
+      "property_id": "05-PROP-7",
+      "validates": [
+        "05-REQ-1.E1"
+      ],
+      "description": "For any value of tool_response passed to AgentTraceSink.record_tool_result, json.dumps(tool_response, default=str) completes without raising a TypeError regardless of the runtime type.",
+      "for_any_strategy": "Generate diverse tool_response values: None, bool, int, float, str, list, dict, set, bytes, custom class instances, datetime objects, nested structures with mixed types",
+      "invariant_check": "for each generated value: json.dumps(value, default=str) does not raise TypeError; the result is a non-empty string"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-05-E1",
+      "requirement_id": "05-REQ-1.E1",
+      "kind": "unit",
+      "description": "When tool_response is None or an unserializable custom type, AgentTraceSink.record_tool_result uses json.dumps default=str to coerce the value and still writes the event without raising.",
+      "preconditions": [
+        "A temporary audit directory exists at .agent-fox/audit/",
+        "An AgentTraceSink instance is initialized with a valid run_id"
+      ],
+      "input": {
+        "node_id": "node-e1",
+        "run_id": "run-none-resp",
+        "tool_name": "bash",
+        "tool_response": null,
+        "tool_use_id": "tuid-e1"
+      },
+      "expected": {
+        "event_written": "A tool.result event is appended to agent_run-none-resp.jsonl with tool_response equal to the string 'null' (JSON serialization of None)",
+        "no_exception": "No TypeError or other exception is raised"
+      },
+      "assertion_pseudocode": "sink = AgentTraceSink(audit_dir); sink.record_tool_result(run_id='run-none-resp', node_id='node-e1', tool_name='bash', tool_use_id='tuid-e1', tool_response=None); event = parse_last_jsonl_line('agent_run-none-resp.jsonl'); assert event['event_type'] == 'tool.result'; assert event['tool_response'] == 'null'; also test with CustomUnserializableObject: sink.record_tool_result(..., tool_response=CustomObj()); event2 = parse_last_jsonl_line(...); assert isinstance(event2['tool_response'], str)"
+    },
+    {
+      "id": "TS-05-E2",
+      "requirement_id": "05-REQ-1.E2",
+      "kind": "unit",
+      "description": "When tool_response is an empty string, empty dict, or empty list, AgentTraceSink serializes it normally and writes the event without special-casing.",
+      "preconditions": [
+        "A temporary audit directory exists at .agent-fox/audit/",
+        "An AgentTraceSink instance is initialized with a valid run_id"
+      ],
+      "input": {
+        "cases": [
+          {
+            "expected_serialized": "\"\"",
+            "tool_response": ""
+          },
+          {
+            "expected_serialized": "{}",
+            "tool_response": {}
+          },
+          {
+            "expected_serialized": "[]",
+            "tool_response": []
+          }
+        ]
+      },
+      "expected": {
+        "event_written": "For each case, a tool.result event is written with tool_response equal to the JSON-serialized empty value"
+      },
+      "assertion_pseudocode": "for (response, expected_str) in [('', '\"\"'), ({}, '{}'), ([], '[]')]: sink.record_tool_result(run_id='run-empty', node_id='node-e2', tool_name='bash', tool_use_id='tuid-e2', tool_response=response); event = parse_last_jsonl_line('agent_run-empty.jsonl'); assert event['tool_response'] == expected_str"
+    },
+    {
+      "id": "TS-05-E3",
+      "requirement_id": "05-REQ-1.E3",
+      "kind": "unit",
+      "description": "When _write_event raises an IOError (e.g. disk full), AgentTraceSink.record_tool_result propagates the IOError to the caller without swallowing it.",
+      "preconditions": [
+        "An AgentTraceSink instance is initialized",
+        "_write_event is patched to raise IOError('disk full')"
+      ],
+      "input": {
+        "node_id": "node-e3",
+        "run_id": "run-ioerr",
+        "tool_name": "bash",
+        "tool_response": "output",
+        "tool_use_id": "tuid-e3"
+      },
+      "expected": {
+        "exception_message": "The IOError message is 'disk full'",
+        "exception_type": "IOError is raised from record_tool_result"
+      },
+      "assertion_pseudocode": "sink = AgentTraceSink(audit_dir); with patch(sink, '_write_event', raises=IOError('disk full')): try: sink.record_tool_result(run_id='run-ioerr', node_id='node-e3', tool_name='bash', tool_use_id='tuid-e3', tool_response='output'); assert False, 'Expected IOError'; except IOError as e: assert str(e) == 'disk full'"
+    },
+    {
+      "id": "TS-05-E4",
+      "requirement_id": "05-REQ-2.E1",
+      "kind": "unit",
+      "description": "When one registered sink's record_tool_result raises an exception during SinkDispatcher dispatch, the behavior is consistent with existing _dispatch_optional error semantics (log and continue or propagate).",
+      "preconditions": [
+        "A SinkDispatcher instance is created",
+        "A mock sink whose record_tool_result raises RuntimeError('sink failure') is registered",
+        "A second mock sink that implements record_tool_result successfully is also registered"
+      ],
+      "input": {
+        "node_id": "node-e4",
+        "run_id": "run-sink-err",
+        "tool_name": "bash",
+        "tool_response": "output",
+        "tool_use_id": "tuid-e4"
+      },
+      "expected": {
+        "behavior": "The behavior matches the existing _dispatch_optional error semantics; the second sink's record_tool_result is called (if _dispatch_optional continues on error) or the exception propagates (if _dispatch_optional re-raises)"
+      },
+      "assertion_pseudocode": "failing_sink = MockSink(record_tool_result=raises(RuntimeError('sink failure'))); good_sink = MockSink(record_tool_result=records_call); dispatcher = SinkDispatcher([failing_sink, good_sink]); try: dispatcher.record_tool_result(run_id='run-sink-err', node_id='node-e4', tool_name='bash', tool_use_id='tuid-e4', tool_response='output'); except Exception: pass; # verify behavior matches _dispatch_optional contract for other optional methods"
+    },
+    {
+      "id": "TS-05-E5",
+      "requirement_id": "05-REQ-3.E1",
+      "kind": "unit",
+      "description": "When tool_result_callback raises an exception inside the PostToolUse hook handler, the handler catches it, logs a WARNING, and does not re-raise, allowing session execution to continue.",
+      "preconditions": [
+        "A ClaudeBackend PostToolUse hook handler is built via _build_tool_result_hook(callback)",
+        "The callback is configured to raise RuntimeError('callback failed')",
+        "A logging capture fixture is active"
+      ],
+      "input": {
+        "hook_input": {
+          "tool_name": "bash",
+          "tool_response": "output",
+          "tool_use_id": "tuid-e5"
+        }
+      },
+      "expected": {
+        "no_exception": "No exception propagates out of the hook handler",
+        "return_value": "The hook handler returns normally (returns None)",
+        "warning_logged": "A WARNING-level log entry is emitted containing the error details ('callback failed')"
+      },
+      "assertion_pseudocode": "callback = lambda **kw: raise RuntimeError('callback failed'); hook = _build_tool_result_hook(callback); hook_input = MockPostToolUseHookInput(tool_name='bash', tool_use_id='tuid-e5', tool_response='output'); with capture_logs() as logs: result = hook(hook_input); assert result is None; warning_logs = [l for l in logs if l.level == 'WARNING']; assert len(warning_logs) >= 1; assert 'callback failed' in warning_logs[0].message"
+    },
+    {
+      "id": "TS-05-E6",
+      "requirement_id": "05-REQ-3.E2",
+      "kind": "unit",
+      "description": "When PostToolUseHookInput has missing or unexpected fields, the hook handler catches AttributeError or KeyError, logs a WARNING, and does not call tool_result_callback.",
+      "preconditions": [
+        "A ClaudeBackend PostToolUse hook handler is built via _build_tool_result_hook(callback)",
+        "A malformed hook input object is prepared that raises AttributeError when tool_name is accessed",
+        "A logging capture fixture is active"
+      ],
+      "input": {
+        "hook_input": "MalformedHookInput with no tool_name attribute"
+      },
+      "expected": {
+        "callback_not_called": "tool_result_callback is never invoked",
+        "no_exception": "No exception propagates out of the hook handler",
+        "warning_logged": "A WARNING-level log entry is emitted"
+      },
+      "assertion_pseudocode": "call_count = [0]; callback = lambda **kw: call_count.__setitem__(0, call_count[0]+1); hook = _build_tool_result_hook(callback); malformed_input = MalformedHookInput(); with capture_logs() as logs: result = hook(malformed_input); assert result is None; assert call_count[0] == 0; warning_logs = [l for l in logs if l.level == 'WARNING']; assert len(warning_logs) >= 1"
+    },
+    {
+      "id": "TS-05-E7",
+      "requirement_id": "05-REQ-3.E3",
+      "kind": "unit",
+      "description": "Other backends (deepagents, google_adk) do not accept or register a tool_result_callback; the parameter is exclusive to ClaudeBackend.execute().",
+      "preconditions": [
+        "DeepAgentsBackend and GoogleADKBackend classes are importable",
+        "Their execute() method signatures are inspectable"
+      ],
+      "input": {},
+      "expected": {
+        "deepagents": "DeepAgentsBackend.execute() does not have a tool_result_callback parameter",
+        "google_adk": "GoogleADKBackend.execute() does not have a tool_result_callback parameter"
+      },
+      "assertion_pseudocode": "import inspect; deepagents_params = inspect.signature(DeepAgentsBackend.execute).parameters; google_adk_params = inspect.signature(GoogleADKBackend.execute).parameters; assert 'tool_result_callback' not in deepagents_params; assert 'tool_result_callback' not in google_adk_params"
+    },
+    {
+      "id": "TS-05-E8",
+      "requirement_id": "05-REQ-4.E1",
+      "kind": "integration",
+      "description": "When sink_dispatcher.record_tool_result raises inside the tool_result_callback, the exception propagates to the ClaudeBackend hook handler which catches it and logs a WARNING, without interrupting session execution.",
+      "preconditions": [
+        "A SinkDispatcher is patched so record_tool_result raises IOError('disk full')",
+        "A ClaudeBackend PostToolUse hook handler is built with the tool_result_callback closure from _execute_query",
+        "A logging capture fixture is active"
+      ],
+      "input": {
+        "hook_input": {
+          "tool_name": "bash",
+          "tool_response": "output",
+          "tool_use_id": "tuid-e8"
+        }
+      },
+      "expected": {
+        "no_exception": "No exception propagates out of the hook handler",
+        "warning_logged": "A WARNING-level log entry is emitted by the hook handler layer containing the IOError details"
+      },
+      "assertion_pseudocode": "dispatcher = SinkDispatcher([AgentTraceSink(...)]); with patch(dispatcher, 'record_tool_result', raises=IOError('disk full')): callback = build_tool_result_callback(dispatcher, run_id='run-e8', node_id='node-e8'); hook = _build_tool_result_hook(callback); hook_input = MockPostToolUseHookInput(tool_name='bash', tool_use_id='tuid-e8', tool_response='output'); with capture_logs() as logs: result = hook(hook_input); assert result is None; assert any('disk full' in l.message for l in logs if l.level == 'WARNING')"
+    },
+    {
+      "id": "TS-05-E9",
+      "requirement_id": "05-REQ-4.E2",
+      "kind": "unit",
+      "description": "When run_id or node_id is not available in the _execute_query closure scope, a ValueError is raised before ClaudeBackend.execute() is called.",
+      "preconditions": [
+        "A SinkDispatcher with AgentTraceSink is available",
+        "_execute_query is called with run_id=None or node_id=None"
+      ],
+      "input": {
+        "node_id": "node-e9",
+        "run_id": null
+      },
+      "expected": {
+        "exception_message": "The ValueError message indicates which identifier (run_id or node_id) is missing",
+        "exception_type": "ValueError is raised",
+        "timing": "The ValueError is raised before ClaudeBackend.execute() is called"
+      },
+      "assertion_pseudocode": "mock_backend = MockClaudeBackend(); dispatcher = SinkDispatcher([AgentTraceSink(...)]); try: _execute_query(backend=mock_backend, sink_dispatcher=dispatcher, run_id=None, node_id='node-e9', ...); assert False, 'Expected ValueError'; except ValueError as e: assert 'run_id' in str(e).lower() or 'missing' in str(e).lower(); assert mock_backend.execute_called == False"
+    },
+    {
+      "id": "TS-05-E10",
+      "requirement_id": "05-REQ-5.E1",
+      "kind": "integration",
+      "description": "When a tool returns a response larger than 50000 characters when JSON-serialized, the tool_response field in the audit JSONL is truncated to 50000 chars + ' [truncated]' and the session is not interrupted.",
+      "preconditions": [
+        "A temporary audit directory exists at .agent-fox/audit/",
+        "AgentTraceSink is initialized and registered in SinkDispatcher",
+        "--audit is active"
+      ],
+      "input": {
+        "tool_response": "A value that JSON-serializes to more than 50000 characters (e.g. a dict with a 60000-char string value)"
+      },
+      "expected": {
+        "session_continues": "No exception is raised; the session continues normally",
+        "tool_response_field": "The tool_response field in the written tool.result event is exactly 50011 characters (50000 + len(' [truncated]'))"
+      },
+      "assertion_pseudocode": "large_response = {'data': 'x' * 60000}; sink.record_tool_result(run_id='run-large', node_id='node-e10', tool_name='bash', tool_use_id='tuid-e10', tool_response=large_response); event = parse_last_jsonl_line('agent_run-large.jsonl'); stored = event['tool_response']; assert stored.endswith(' [truncated]'); assert len(stored) == 50000 + len(' [truncated]')"
+    },
+    {
+      "id": "TS-05-E11",
+      "requirement_id": "05-REQ-5.E2",
+      "kind": "integration",
+      "description": "When a tool execution fails and PostToolUseFailure fires instead of PostToolUse, a tool.error event is written but no tool.result event is written for that invocation.",
+      "preconditions": [
+        "A temporary audit directory exists at .agent-fox/audit/",
+        "AgentTraceSink is initialized and registered in SinkDispatcher",
+        "--audit is active",
+        "The existing tool_error_callback path is active"
+      ],
+      "input": {
+        "tool_failure": "PostToolUseFailure fires for tool_use_id='tuid-fail'"
+      },
+      "expected": {
+        "no_tool_result_event": "No tool.result event with tool_use_id='tuid-fail' is present in the audit JSONL file",
+        "tool_error_event": "A tool.error event with tool_use_id='tuid-fail' is present in the audit JSONL file"
+      },
+      "assertion_pseudocode": "simulate_tool_failure(tool_use_id='tuid-fail', backend=backend, dispatcher=dispatcher); events = [parse_json(line) for line in read_lines('agent_run-fail.jsonl')]; error_events = [e for e in events if e['event_type'] == 'tool.error' and e.get('tool_use_id') == 'tuid-fail']; result_events = [e for e in events if e['event_type'] == 'tool.result' and e.get('tool_use_id') == 'tuid-fail']; assert len(error_events) >= 1; assert len(result_events) == 0"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-05-SMOKE-1",
+      "execution_path_id": "05-PATH-1",
+      "description": "Happy path end-to-end: a tool executes during an --audit session and a tool.result event is appended to the audit JSONL file with correct fields.",
+      "trigger": "Operator launches nightshift with --audit; a tool is invoked by the model; the PostToolUse hook fires and the full chain from ClaudeBackend through SinkDispatcher to AgentTraceSink writes the event.",
+      "real_components": [
+        "session.py (_execute_query)",
+        "ClaudeBackend (PostToolUse hook handler and _build_tool_result_hook)",
+        "SinkDispatcher (_dispatch_optional)",
+        "AgentTraceSink (record_tool_result and _write_event)",
+        "audit JSONL file (.agent-fox/audit/agent_{run_id}.jsonl)"
+      ],
+      "mockable": [
+        "claude_agent_sdk (PostToolUse hook firing — inject a synthetic PostToolUseHookInput)",
+        "filesystem (use a temporary directory for .agent-fox/audit/)"
+      ],
+      "expected_effects": [
+        "agent_{run_id}.jsonl exists in the temporary audit directory",
+        "The last line of agent_{run_id}.jsonl is valid JSON with event_type='tool.result'",
+        "The event contains tool_name, tool_use_id, node_id, run_id, timestamp, and tool_response fields",
+        "tool_response is a non-empty string (JSON-serialized tool output)",
+        "No exception is raised during the entire chain"
+      ]
+    },
+    {
+      "id": "TS-05-SMOKE-2",
+      "execution_path_id": "05-PATH-2",
+      "description": "Hook failure path: when the tool_result_callback raises an exception inside the PostToolUse hook, the handler catches it, logs a WARNING, and session execution continues.",
+      "trigger": "The PostToolUse hook fires; the tool_result_callback raises an IOError; the ClaudeBackend hook handler catches it and returns normally.",
+      "real_components": [
+        "ClaudeBackend (PostToolUse hook handler and _build_tool_result_hook)",
+        "Python logging infrastructure (WARNING emission)"
+      ],
+      "mockable": [
+        "claude_agent_sdk (inject synthetic PostToolUseHookInput)",
+        "tool_result_callback (patched to raise IOError('disk full'))",
+        "filesystem (not needed for this path)"
+      ],
+      "expected_effects": [
+        "The hook handler returns None without re-raising the IOError",
+        "A WARNING-level log entry is emitted containing the error details",
+        "A subsequent invocation of the hook handler with a valid callback completes successfully"
+      ]
+    },
+    {
+      "id": "TS-05-SMOKE-3",
+      "execution_path_id": "05-PATH-3",
+      "description": "No --audit path: when nightshift runs without --audit, tool_result_callback is None, no PostToolUse hook is registered, and no tool.result events are written.",
+      "trigger": "Operator launches nightshift without --audit; _execute_query passes tool_result_callback=None to ClaudeBackend.execute(); tools execute normally.",
+      "real_components": [
+        "session.py (_execute_query)",
+        "ClaudeBackend (execute method, hook registration logic)",
+        "SinkDispatcher (with no AgentTraceSink registered)"
+      ],
+      "mockable": [
+        "claude_agent_sdk (mock SDK execution to verify hooks dict does not contain PostToolUse)",
+        "filesystem (temporary directory to confirm no tool.result files are created)"
+      ],
+      "expected_effects": [
+        "ClaudeBackend.execute() receives tool_result_callback=None",
+        "The hooks dict passed to the SDK does not contain the key 'PostToolUse'",
+        "No file in .agent-fox/audit/ contains a line with event_type='tool.result'",
+        "Session execution completes normally"
+      ]
+    },
+    {
+      "id": "TS-05-SMOKE-4",
+      "execution_path_id": "05-PATH-4",
+      "description": "Large tool response truncation path: a tool returns a response exceeding 50000 characters; AgentTraceSink truncates it before writing the tool.result event.",
+      "trigger": "The PostToolUse hook fires with a tool_response that JSON-serializes to more than 50000 characters; the full chain executes and the truncated value is written to the audit JSONL file.",
+      "real_components": [
+        "ClaudeBackend (PostToolUse hook handler)",
+        "SinkDispatcher (_dispatch_optional)",
+        "AgentTraceSink (record_tool_result with truncation logic and _write_event)",
+        "audit JSONL file (.agent-fox/audit/agent_{run_id}.jsonl)"
+      ],
+      "mockable": [
+        "claude_agent_sdk (inject synthetic PostToolUseHookInput with large tool_response)",
+        "filesystem (use a temporary directory for .agent-fox/audit/)"
+      ],
+      "expected_effects": [
+        "agent_{run_id}.jsonl contains a tool.result event",
+        "The tool_response field in the event ends with ' [truncated]'",
+        "The length of the tool_response field is exactly 50000 + len(' [truncated]') = 50011 characters",
+        "No exception is raised; the session is not interrupted"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [
+      "05-REQ-1.1",
+      "05-REQ-1.2",
+      "05-REQ-1.3",
+      "05-REQ-1.E1",
+      "05-REQ-1.E2",
+      "05-REQ-1.E3",
+      "05-REQ-2.1",
+      "05-REQ-2.2",
+      "05-REQ-2.E1",
+      "05-REQ-3.1",
+      "05-REQ-3.2",
+      "05-REQ-3.3",
+      "05-REQ-3.E1",
+      "05-REQ-3.E2",
+      "05-REQ-3.E3",
+      "05-REQ-4.1",
+      "05-REQ-4.2",
+      "05-REQ-4.E1",
+      "05-REQ-4.E2",
+      "05-REQ-5.1",
+      "05-REQ-5.2",
+      "05-REQ-5.3",
+      "05-REQ-5.E1",
+      "05-REQ-5.E2"
+    ],
+    "properties_covered": [
+      "05-PROP-1",
+      "05-PROP-2",
+      "05-PROP-3",
+      "05-PROP-4",
+      "05-PROP-5",
+      "05-PROP-6",
+      "05-PROP-7"
+    ],
+    "paths_covered": [
+      "05-PATH-1",
+      "05-PATH-2",
+      "05-PATH-3",
+      "05-PATH-4"
+    ],
+    "gaps": []
+  }
+}

@@ -69,6 +69,13 @@ Tool registration alone has multiple partially-overlapping patterns: the `@tool`
 | Explicit, readable agent loop | No (inside binary) | Partial (graph engine) | Partial (LangGraph) | Yes |
 | Python first-class | Yes | Yes | Yes | Yes |
 | Go first-class | No | No (alpha) | No | Yes |
+| Anthropic provider | Yes (via CLI) | Via LiteLLM | Via langchain-anthropic | Yes (native) |
+| OpenAI provider | Via CLI | Via LiteLLM | Yes (native) | Yes (native) |
+| Google Gemini provider | No | Yes (native) | Via langchain-google | Yes (native) |
+| OpenRouter provider | No | Via LiteLLM | Via langchain-openai compat | Yes (native) |
+| Ollama provider | No | Via LiteLLM | Via langchain-ollama | Yes (native) |
+| Provider-side prompt caching | Partial (Anthropic via CLI) | Gemini only | No | Yes (all 3 that support it) |
+| Request-level dedup cache | No | No | No | Yes |
 | Built-in coding-agent tool library | Via CLI binary | Partial (code_execution) | Via community | Yes |
 | Skills packaging system | Via CLI skills | No | No | Yes |
 | Plugin extension model | No | Via Toolsets+Callbacks | Via Toolkits | Yes |
@@ -86,7 +93,9 @@ No existing SDK simultaneously satisfies all seven requirements. AgentKit is bui
 
 **G1 — Complete agentic loop, both languages.** Implement the full loop (call model, dispatch tools, loop until stop) in Python and Go with no dependency on external agent frameworks.
 
-**G2 — Provider abstraction.** Abstract Anthropic Messages API and OpenAI Chat Completions API behind a thin `ProviderClient` interface. Provider-specific types must not appear in agent logic.
+**G2 — Provider abstraction.** Abstract Anthropic Messages API, OpenAI Chat Completions API, Google Gemini API, OpenRouter, and Ollama behind a thin `ProviderClient` interface. Provider-specific types must not appear in agent logic. All five providers are first-class — not adapters or workarounds.
+
+**G2a — Smart caching.** Implement a multi-level caching subsystem: provider-side prompt caching (Anthropic cache-control headers, Google Gemini implicit caching, OpenAI prompt caching), request-level deduplication (identical `complete()` calls within a session window skip the network round-trip), and tool-schema caching (schemas serialized once per session, not per turn). The caching layer is transparent — callers see correct results; `Usage.cache_read_tokens` / `Usage.cache_write_tokens` surface the savings.
 
 **G3 — Built-in local tool library.** Provide file read/write/edit/delete/move/find/stat/append, grep (with ripgrep acceleration), shell command execution (with allowlist enforcement), and SSRF-protected HTTP fetch.
 
@@ -237,13 +246,51 @@ The `steering.md` convention used in the existing nightshift codebase is a degen
 ### 6.2 Model Provider Abstraction
 
 - **REQ-PROV-01:** A `ProviderClient` Protocol/interface with a single required method: `complete(messages, tools, config) -> CompleteResponse`.
-- **REQ-PROV-02:** Implementations for Anthropic Messages API (claude-3-5-sonnet-latest, claude-opus-4, claude-haiku-4 family) and OpenAI Chat Completions API (gpt-4o, gpt-4o-mini, o1, o3 family).
+- **REQ-PROV-02:** Five first-class provider implementations:
+  - **Anthropic** — Messages API; models: `claude-opus-4`, `claude-sonnet-4-5`, `claude-haiku-4-5` and any future `claude-*` IDs (model string passed through unchanged). Supports `cache_control` headers for prompt caching, streaming, server-side compaction (`compact-2026-01-12` beta).
+  - **OpenAI** — Chat Completions API; models: `gpt-4o`, `gpt-4o-mini`, `o1`, `o3`, `o4-mini` and any `gpt-*` / `o*` IDs. Supports `store: true` for prompt caching and the Responses API for multi-turn state where available.
+  - **Google Gemini** — `google.generativeai` / Vertex AI endpoint; models: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.0-flash-lite`. Supports function calling, implicit prompt caching, and `context_cache` for explicit cache creation. Tool calling uses Gemini's `FunctionDeclaration` schema (translated from canonical `Tool` schema by the provider layer).
+  - **OpenRouter** — OpenAI-compatible endpoint at `https://openrouter.ai/api/v1`; any model string OpenRouter exposes (e.g. `anthropic/claude-opus-4`, `google/gemini-2.5-pro`, `meta-llama/llama-4-maverick`). Provider accepts `base_url` and `api_key` overrides. Passes `HTTP-Referer` and `X-Title` headers per OpenRouter convention. Caching behaviour depends on the underlying model; `cache_read_tokens` propagated where exposed.
+  - **Ollama** — Native Ollama REST API (`/api/chat`) at a configurable `base_url` (default `http://localhost:11434`); any model pulled locally (e.g. `llama3.3`, `qwen2.5-coder`, `mistral-small3.2`). Supports streaming via NDJSON chunks. No prompt caching at the provider level; request-level deduplication cache applies. Tool calling requires a model that supports it (Ollama `tools` field).
 - **REQ-PROV-03:** Each provider translates canonical `Message`/`ContentBlock` types to and from the provider wire format. No provider-specific types in agent logic.
 - **REQ-PROV-04:** Each provider implements a streaming variant: `stream_complete()` returning an async generator of canonical `StreamEvent` objects.
-- **REQ-PROV-05:** Each provider populates `Usage` on every response, including `cache_read_tokens` and `cache_write_tokens` where the provider exposes them.
+- **REQ-PROV-05:** Each provider populates `Usage` on every response, including `cache_read_tokens` and `cache_write_tokens` where the provider exposes them. Providers that do not expose cache token counts set these fields to zero.
 - **REQ-PROV-06:** Built-in `RetryMiddleware` handles transient errors (HTTP 429, 500, 502, 503) with exponential backoff.
 - **REQ-PROV-07:** The Anthropic provider supports the server-side compaction mechanism (`compact-2026-01-12` beta): compaction blocks from the response are passed back unchanged in subsequent turns.
 - **REQ-PROV-08:** Per-agent model selection is supported. Different agents in the same delegation tree can use different models or providers.
+- **REQ-PROV-09:** A `ProviderRegistry` maps provider name strings (`"anthropic"`, `"openai"`, `"google"`, `"openrouter"`, `"ollama"`) to factory functions. The `AgentConfig.provider` field accepts either a provider name string (resolved via registry) or a pre-constructed `ProviderClient` instance. Third-party providers register via the plugin system (`BackendPlugin`).
+
+### 6.2a Smart Caching
+
+AgentKit implements a three-level caching strategy. Levels compose — a request can be a hit at any level independently.
+
+**Level 1 — Provider-side prompt caching (server-side, reduces billable input tokens)**
+
+Each provider with native prompt caching is configured automatically:
+
+- **Anthropic:** Cache breakpoints are injected via `"cache_control": {"type": "ephemeral"}` on the last system message block and on every tool definition block. Breakpoints are recomputed only when the system prompt or tool list changes (structural hash comparison). `Usage.cache_write_tokens` and `Usage.cache_read_tokens` are populated from the response.
+- **Google Gemini:** For sessions with a large, stable system prompt (>32k tokens), AgentKit optionally creates an explicit `CachedContent` resource via the Gemini caching API and references it in subsequent calls. For smaller prompts, implicit caching applies automatically. The `GeminiProvider` exposes a `context_cache_ttl` configuration field (default 60 minutes).
+- **OpenAI:** Prompt caching applies automatically for prompts over 1024 tokens on supported models (gpt-4o, o1, o3). AgentKit structures messages to maximize cache reuse: system message first, stable content before dynamic content. `cache_read_tokens` populated from the response where available.
+- **OpenRouter:** Cache behaviour is delegated to the underlying model. OpenRouter `cache_control` headers passed through if the upstream model supports them.
+- **Ollama:** No provider-level caching. Level 2 (request deduplication) applies.
+
+**Level 2 — Request-level deduplication (in-process, zero-latency hit)**
+
+- **REQ-CACHE-01:** `CachingMiddleware` maintains a bounded LRU cache of `complete()` request fingerprints → `CompleteResponse`. Fingerprint is a SHA-256 hash of: serialised messages, serialised tool schemas, model ID, temperature. Identical requests within the session window return the cached response without a network call.
+- **REQ-CACHE-02:** Cache is scoped per `Session` by default. An optional shared `CacheStore` (in-memory `dict` or a user-supplied store implementing the `CacheStore` Protocol) allows cross-session sharing for workloads that reuse a large common prefix (e.g. a fixed system prompt + tool list).
+- **REQ-CACHE-03:** Maximum cache size defaults to 128 entries per store, configurable via `CachingMiddleware(max_size=N)`. Eviction policy: LRU.
+- **REQ-CACHE-04:** Cached responses are not returned when `temperature > 0` unless `CachingMiddleware(ignore_temperature=True)` is set — non-deterministic responses should not be replayed.
+- **REQ-CACHE-05:** Every cache hit emits a `CacheHitEvent` observable via turn hooks. Every cache miss emits a `CacheMissEvent`. Both include the fingerprint and tier (`"request_dedup"`).
+
+**Level 3 — Tool schema caching (in-process, eliminates repeated serialization)**
+
+- **REQ-CACHE-06:** The canonical `Tool` list is serialized to provider wire format once per session when the tool set is first used, then stored on the session. Subsequent turns reuse the cached serialized form. The cache is invalidated when the tool list changes (tools added or removed at runtime).
+- **REQ-CACHE-07:** MCP tool lists are cached per `MCPServerConnection` and refreshed only on `notifications/tools/list_changed` MCP notification or on explicit `connection.refresh_tools()` call.
+
+**Observability**
+
+- **REQ-CACHE-08:** `Session.cache_stats()` returns `{hits: int, misses: int, provider_cache_read_tokens: int, provider_cache_write_tokens: int, estimated_savings_usd: float}` aggregated across all levels for the session lifetime.
+- **REQ-CACHE-09:** `TracingMiddleware` adds `cache.hit`, `cache.tier`, `cache.fingerprint` as span attributes on every model call span when a cache hit occurs.
 
 ### 6.3 Tool System — Built-in and Custom
 
@@ -772,6 +819,9 @@ orchestrator.RegisterTool(agentkit.SubagentTool(
 - **NFR-PERF-03:** Tool schema serialization (translating canonical `Tool` objects to provider wire format) must be computed once per session and cached — not recomputed on every model call.
 - **NFR-PERF-04:** Parallel tool execution must use true concurrency (`asyncio.gather` in Python, `errgroup` in Go). Sequential fallback is only used when `parallel_tools=False`.
 - **NFR-PERF-05:** The streaming path must not buffer complete model responses before yielding the first token. `TextDeltaEvent` must be emitted as soon as the first streaming delta arrives from the provider.
+- **NFR-PERF-06:** A Level 2 (request deduplication) cache hit must add less than 0.5 ms overhead versus a direct response return. The LRU eviction path must not block the agent loop.
+- **NFR-PERF-07:** Anthropic `cache_control` breakpoint injection must be a pure in-memory operation (hash + dict merge); it must not make any additional API calls. Breakpoint recomputation (on tool list change) must complete within 1 ms for tool sets up to 128 tools.
+- **NFR-PERF-08:** Google `CachedContent` creation is an async network call and must run on a background task before the first model call of the session when `context_cache_ttl` is set. The agent loop must not block waiting for cache creation — it falls back to uncached operation if the cache creation has not completed by the time the first `complete()` call fires.
 
 ### Reliability
 
@@ -794,8 +844,9 @@ orchestrator.RegisterTool(agentkit.SubagentTool(
 - **NFR-COMPAT-01:** Python 3.10, 3.11, 3.12, and 3.13 supported.
 - **NFR-COMPAT-02:** Go 1.21 and later minor versions supported.
 - **NFR-COMPAT-03:** MCP client supports MCP protocol version 2025-03-26 (current) and maintains backward compatibility with 2024-11-05 servers.
-- **NFR-COMPAT-04:** The Anthropic provider supports all current Claude model IDs without hardcoding. The model string is passed through to the API unchanged.
-- **NFR-COMPAT-05:** The OpenAI provider supports the OpenAI-compatible API interface so that self-hosted models (vLLM, Ollama with OpenAI-compatible mode) work with only a `base_url` configuration change.
+- **NFR-COMPAT-04:** The Anthropic, OpenAI, Google, and OpenRouter providers pass the model string through to the API unchanged. No hardcoded model ID lists — new model IDs work without SDK updates.
+- **NFR-COMPAT-05:** The Ollama provider uses the native Ollama REST API (`/api/chat`) rather than the OpenAI-compatible shim. This avoids relying on Ollama's compatibility layer, which does not fully implement streaming tool calls or the `cache_read_tokens` usage field. The `base_url` defaults to `http://localhost:11434` and is overridable. The OpenAI provider still accepts a `base_url` override for vLLM and other OpenAI-compatible self-hosted endpoints separately from the Ollama provider.
+- **NFR-COMPAT-06:** The Google provider supports both the `google.generativeai` SDK path (API key) and the Vertex AI endpoint (service account / ADC). Switching between them requires only a config change (`google_auth: "api_key" | "vertex_ai"`), not a provider swap.
 
 ### Testability
 

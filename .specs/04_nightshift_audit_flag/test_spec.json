@@ -1,0 +1,1016 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/test_spec.v1.json",
+  "spec_id": "04",
+  "spec_name": "nightshift_audit_flag",
+  "schema_version": 1,
+  "test_cases": [
+    {
+      "id": "TS-04-1",
+      "requirement_id": "04-REQ-1.1",
+      "kind": "unit",
+      "description": "When --audit is passed, ctx.obj['audit_run_id'] is set to a non-empty string returned by generate_run_id() and the daemon starts normally.",
+      "preconditions": [
+        "nightshift CLI is installed and importable",
+        "generate_run_id() is available from afaudit.events",
+        ".agent-fox/audit/ directory is writable"
+      ],
+      "input": {
+        "cli_args": [
+          "nightshift",
+          "run",
+          "--audit"
+        ]
+      },
+      "expected": {
+        "ctx_obj_audit_run_id": "non-empty string (UUID-like)",
+        "daemon_started": true,
+        "exit_code": 0
+      },
+      "assertion_pseudocode": "result = invoke_cli(['nightshift', 'run', '--audit'], catch_exceptions=False); assert ctx.obj['audit_run_id'] != ''; assert len(ctx.obj['audit_run_id']) > 0; assert result.exit_code == 0"
+    },
+    {
+      "id": "TS-04-2",
+      "requirement_id": "04-REQ-1.2",
+      "kind": "unit",
+      "description": "When --audit is NOT passed, ctx.obj['audit_run_id'] is set to an empty string and the daemon starts normally with only DuckDBSink in the dispatcher.",
+      "preconditions": [
+        "nightshift CLI is installed and importable",
+        "DuckDBSink is configured as the default sink"
+      ],
+      "input": {
+        "cli_args": [
+          "nightshift",
+          "run"
+        ]
+      },
+      "expected": {
+        "ctx_obj_audit_run_id": "",
+        "daemon_started": true,
+        "dispatcher_sinks": [
+          "DuckDBSink only"
+        ],
+        "exit_code": 0
+      },
+      "assertion_pseudocode": "result = invoke_cli(['nightshift', 'run'], catch_exceptions=False); assert ctx.obj['audit_run_id'] == ''; assert result.exit_code == 0; assert dispatcher_sink_types == ['DuckDBSink']"
+    },
+    {
+      "id": "TS-04-3",
+      "requirement_id": "04-REQ-1.3",
+      "kind": "unit",
+      "description": "The --audit flag is declared with the exact Click signature: is_flag=True, default=False, and the correct help string.",
+      "preconditions": [
+        "nightshift CLI module is importable",
+        "Click command introspection is available"
+      ],
+      "input": {
+        "inspect_target": "nightshift run command Click params"
+      },
+      "expected": {
+        "default": false,
+        "help": "Enable full audit logging to .agent-fox/audit/.",
+        "is_flag": true,
+        "param_name": "--audit"
+      },
+      "assertion_pseudocode": "cmd = get_click_command('nightshift', 'run'); audit_param = find_param(cmd, '--audit'); assert audit_param.is_flag == True; assert audit_param.default == False; assert audit_param.help == 'Enable full audit logging to .agent-fox/audit/.'"
+    },
+    {
+      "id": "TS-04-4",
+      "requirement_id": "04-REQ-2.1",
+      "kind": "unit",
+      "description": "When --audit is active, _run_daemon calls SinkDispatcher.add twice — once with AgentTraceSink and once with AuditJsonlSink — before the engine starts.",
+      "preconditions": [
+        "nightshift _run_daemon is importable",
+        "AUDIT_DIR (.agent-fox/audit/) is writable",
+        "A valid run_id string is available",
+        "SinkDispatcher is initialized with DuckDBSink"
+      ],
+      "input": {
+        "audit": true,
+        "run_id": "test-run-001"
+      },
+      "expected": {
+        "dispatcher_sinks": [
+          "DuckDBSink",
+          "AgentTraceSink",
+          "AuditJsonlSink"
+        ],
+        "no_exception_raised": true
+      },
+      "assertion_pseudocode": "dispatcher = SinkDispatcher([DuckDBSink(...)]); _run_daemon(audit=True, run_id='test-run-001', sink=dispatcher); sink_types = [type(s).__name__ for s in dispatcher.sinks]; assert 'AgentTraceSink' in sink_types; assert 'AuditJsonlSink' in sink_types"
+    },
+    {
+      "id": "TS-04-5",
+      "requirement_id": "04-REQ-2.2",
+      "kind": "unit",
+      "description": "When --audit is NOT active, _run_daemon skips all audit sink attachment and the dispatcher contains only DuckDBSink.",
+      "preconditions": [
+        "nightshift _run_daemon is importable",
+        "SinkDispatcher is initialized with DuckDBSink"
+      ],
+      "input": {
+        "audit": false
+      },
+      "expected": {
+        "agent_jsonl_files_created": false,
+        "audit_jsonl_files_created": false,
+        "dispatcher_sinks": [
+          "DuckDBSink only"
+        ]
+      },
+      "assertion_pseudocode": "dispatcher = SinkDispatcher([DuckDBSink(...)]); _run_daemon(audit=False, sink=dispatcher); sink_types = [type(s).__name__ for s in dispatcher.sinks]; assert sink_types == ['DuckDBSink']; assert no files matching 'agent_*.jsonl' in AUDIT_DIR; assert no files matching 'audit_*.jsonl' in AUDIT_DIR"
+    },
+    {
+      "id": "TS-04-6",
+      "requirement_id": "04-REQ-2.3",
+      "kind": "unit",
+      "description": "When --audit is active, the same run_id is used for AgentTraceSink, AuditJsonlSink, and passed to FixPipeline.process_issue() so all events share the same identifier.",
+      "preconditions": [
+        "nightshift _run_daemon is importable",
+        "AUDIT_DIR is writable",
+        "A mock issue is available for processing",
+        "FixPipeline is instrumented to capture the run_id it receives"
+      ],
+      "input": {
+        "audit": true,
+        "run_id": "shared-run-xyz"
+      },
+      "expected": {
+        "agent_jsonl_filename": "agent_shared-run-xyz.jsonl",
+        "all_events_run_id": "shared-run-xyz",
+        "audit_jsonl_filename": "audit_shared-run-xyz.jsonl",
+        "process_issue_run_id": "shared-run-xyz"
+      },
+      "assertion_pseudocode": "captured_run_ids = []; _run_daemon(audit=True, run_id='shared-run-xyz', ...); assert Path(AUDIT_DIR / 'agent_shared-run-xyz.jsonl').exists(); assert Path(AUDIT_DIR / 'audit_shared-run-xyz.jsonl').exists(); for event in read_jsonl(AUDIT_DIR / 'audit_shared-run-xyz.jsonl'): assert event['run_id'] == 'shared-run-xyz'"
+    },
+    {
+      "id": "TS-04-7",
+      "requirement_id": "04-REQ-3.1",
+      "kind": "unit",
+      "description": "AuditEventType.SPEC_INMEMORY_CREATED equals the string 'spec.inmemory_created'.",
+      "preconditions": [
+        "afaudit package is installed",
+        "afaudit.events module is importable"
+      ],
+      "input": {
+        "import": "from afaudit.events import AuditEventType"
+      },
+      "expected": {
+        "is_str_enum_member": true,
+        "value": "spec.inmemory_created"
+      },
+      "assertion_pseudocode": "from afaudit.events import AuditEventType; assert AuditEventType.SPEC_INMEMORY_CREATED == 'spec.inmemory_created'; assert isinstance(AuditEventType.SPEC_INMEMORY_CREATED, str)"
+    },
+    {
+      "id": "TS-04-8",
+      "requirement_id": "04-REQ-3.2",
+      "kind": "unit",
+      "description": "AuditEventType.SPEC_AFSPEC_CREATED equals the string 'spec.afspec_created'.",
+      "preconditions": [
+        "afaudit package is installed",
+        "afaudit.events module is importable"
+      ],
+      "input": {
+        "import": "from afaudit.events import AuditEventType"
+      },
+      "expected": {
+        "is_str_enum_member": true,
+        "value": "spec.afspec_created"
+      },
+      "assertion_pseudocode": "from afaudit.events import AuditEventType; assert AuditEventType.SPEC_AFSPEC_CREATED == 'spec.afspec_created'; assert isinstance(AuditEventType.SPEC_AFSPEC_CREATED, str)"
+    },
+    {
+      "id": "TS-04-9",
+      "requirement_id": "04-REQ-3.3",
+      "kind": "unit",
+      "description": "All pre-existing AuditEventType enum members retain their original string values after adding the two new members.",
+      "preconditions": [
+        "afaudit package is installed",
+        "A snapshot of pre-existing AuditEventType members and their values is available from the previous version"
+      ],
+      "input": {
+        "import": "from afaudit.events import AuditEventType"
+      },
+      "expected": {
+        "all_preexisting_members_unchanged": true,
+        "new_members_added": [
+          "SPEC_INMEMORY_CREATED",
+          "SPEC_AFSPEC_CREATED"
+        ]
+      },
+      "assertion_pseudocode": "from afaudit.events import AuditEventType; preexisting = SNAPSHOT_OF_ORIGINAL_MEMBERS; for name, value in preexisting.items(): assert AuditEventType[name].value == value; assert 'SPEC_INMEMORY_CREATED' in AuditEventType.__members__; assert 'SPEC_AFSPEC_CREATED' in AuditEventType.__members__"
+    },
+    {
+      "id": "TS-04-10",
+      "requirement_id": "04-REQ-4.1",
+      "kind": "integration",
+      "description": "After process_issue() successfully calls build_in_memory_spec() with --audit active, audit_{run_id}.jsonl contains a spec.inmemory_created event with the correct issue_number in the payload.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "AUDIT_DIR is writable",
+        "AuditJsonlSink is attached to the dispatcher with run_id='test-run-001'",
+        "A mock issue with issue_number=42 is available",
+        "build_in_memory_spec returns a valid InMemorySpec"
+      ],
+      "input": {
+        "audit": true,
+        "issue_number": 42,
+        "run_id": "test-run-001"
+      },
+      "expected": {
+        "audit_jsonl_contains_event": true,
+        "event_type": "spec.inmemory_created",
+        "payload_issue_number": 42
+      },
+      "assertion_pseudocode": "pipeline = FixPipeline(sink=dispatcher, run_id='test-run-001'); pipeline.process_issue(mock_issue_42); events = read_jsonl(AUDIT_DIR / 'audit_test-run-001.jsonl'); inmemory_events = [e for e in events if e['event_type'] == 'spec.inmemory_created']; assert len(inmemory_events) >= 1; assert inmemory_events[0]['payload']['issue_number'] == 42"
+    },
+    {
+      "id": "TS-04-11",
+      "requirement_id": "04-REQ-4.2",
+      "kind": "unit",
+      "description": "When --audit is NOT active, process_issue() does not call emit_audit_event and no audit_*.jsonl file is created.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "Dispatcher contains only DuckDBSink",
+        "run_id is empty string",
+        "AUDIT_DIR exists but should remain empty of audit JSONL files"
+      ],
+      "input": {
+        "audit": false,
+        "issue_number": 42,
+        "run_id": ""
+      },
+      "expected": {
+        "audit_jsonl_files_created": false,
+        "emit_audit_event_called": false
+      },
+      "assertion_pseudocode": "pipeline = FixPipeline(sink=dispatcher_no_audit, run_id=''); pipeline.process_issue(mock_issue_42); assert no files matching 'audit_*.jsonl' in AUDIT_DIR; assert emit_audit_event_mock.call_count == 0"
+    },
+    {
+      "id": "TS-04-12",
+      "requirement_id": "04-REQ-4.3",
+      "kind": "unit",
+      "description": "The system_context field in SPEC_INMEMORY_CREATED payload is truncated to at most 10,000 characters regardless of input length.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "AUDIT_DIR is writable",
+        "AuditJsonlSink is attached to the dispatcher",
+        "build_in_memory_spec returns an InMemorySpec with system_context of 20,000 characters"
+      ],
+      "input": {
+        "run_id": "test-run-trunc",
+        "system_context_length": 20000
+      },
+      "expected": {
+        "payload_system_context_length": 10000
+      },
+      "assertion_pseudocode": "pipeline = FixPipeline(sink=dispatcher, run_id='test-run-trunc'); pipeline.process_issue(mock_issue_with_long_context); events = read_jsonl(AUDIT_DIR / 'audit_test-run-trunc.jsonl'); inmemory_events = [e for e in events if e['event_type'] == 'spec.inmemory_created']; assert len(inmemory_events[0]['payload']['system_context']) <= 10000"
+    },
+    {
+      "id": "TS-04-13",
+      "requirement_id": "04-REQ-5.1",
+      "kind": "integration",
+      "description": "After _assemble_afspec_context() successfully calls build_afspec_from_triage() with --audit active, audit_{run_id}.jsonl contains a spec.afspec_created event with requirements_count >= 1 and non-empty rendered.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "AUDIT_DIR is writable",
+        "AuditJsonlSink is attached to the dispatcher with run_id='test-run-afspec'",
+        "build_afspec_from_triage returns a Spec with at least 1 requirement",
+        "render_combined returns a non-empty markdown string"
+      ],
+      "input": {
+        "audit": true,
+        "issue_number": 7,
+        "run_id": "test-run-afspec"
+      },
+      "expected": {
+        "event_type": "spec.afspec_created",
+        "payload_rendered_non_empty": true,
+        "payload_requirements_count_gte_1": true
+      },
+      "assertion_pseudocode": "pipeline = FixPipeline(sink=dispatcher, run_id='test-run-afspec'); pipeline._assemble_afspec_context(triage, issue_number=7); events = read_jsonl(AUDIT_DIR / 'audit_test-run-afspec.jsonl'); afspec_events = [e for e in events if e['event_type'] == 'spec.afspec_created']; assert len(afspec_events) >= 1; assert afspec_events[0]['payload']['requirements_count'] >= 1; assert len(afspec_events[0]['payload']['rendered']) > 0"
+    },
+    {
+      "id": "TS-04-14",
+      "requirement_id": "04-REQ-5.2",
+      "kind": "unit",
+      "description": "When --audit is NOT active, _assemble_afspec_context() does not emit a spec.afspec_created event.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "Dispatcher contains only DuckDBSink",
+        "run_id is empty string"
+      ],
+      "input": {
+        "audit": false,
+        "run_id": ""
+      },
+      "expected": {
+        "audit_jsonl_files_created": false,
+        "spec_afspec_created_events": 0
+      },
+      "assertion_pseudocode": "pipeline = FixPipeline(sink=dispatcher_no_audit, run_id=''); pipeline._assemble_afspec_context(triage, issue_number=7); assert emit_audit_event_mock.call_count == 0; assert no files matching 'audit_*.jsonl' in AUDIT_DIR"
+    },
+    {
+      "id": "TS-04-15",
+      "requirement_id": "04-REQ-5.3",
+      "kind": "unit",
+      "description": "The rendered field in SPEC_AFSPEC_CREATED payload is truncated to at most 50,000 characters regardless of render_combined output length.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "AUDIT_DIR is writable",
+        "AuditJsonlSink is attached to the dispatcher",
+        "render_combined returns a string of 100,000 characters"
+      ],
+      "input": {
+        "rendered_length": 100000,
+        "run_id": "test-run-afspec-trunc"
+      },
+      "expected": {
+        "payload_rendered_length": 50000
+      },
+      "assertion_pseudocode": "pipeline = FixPipeline(sink=dispatcher, run_id='test-run-afspec-trunc'); pipeline._assemble_afspec_context(triage, issue_number=1); events = read_jsonl(AUDIT_DIR / 'audit_test-run-afspec-trunc.jsonl'); afspec_events = [e for e in events if e['event_type'] == 'spec.afspec_created']; assert len(afspec_events[0]['payload']['rendered']) <= 50000"
+    },
+    {
+      "id": "TS-04-16",
+      "requirement_id": "04-REQ-5.4",
+      "kind": "unit",
+      "description": "SPEC_AFSPEC_CREATED is emitted inside the try block before the fallback except; it is not emitted when the fallback path is taken.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "AUDIT_DIR is writable",
+        "AuditJsonlSink is attached to the dispatcher",
+        "build_afspec_from_triage is configured to succeed on first call"
+      ],
+      "input": {
+        "build_afspec_succeeds": true,
+        "run_id": "test-run-emit-order"
+      },
+      "expected": {
+        "emitted_before_fallback": true,
+        "spec_afspec_created_emitted": true
+      },
+      "assertion_pseudocode": "call_order = []; pipeline = FixPipeline(sink=dispatcher, run_id='test-run-emit-order'); pipeline._assemble_afspec_context(triage, issue_number=1); events = read_jsonl(AUDIT_DIR / 'audit_test-run-emit-order.jsonl'); afspec_events = [e for e in events if e['event_type'] == 'spec.afspec_created']; assert len(afspec_events) == 1"
+    },
+    {
+      "id": "TS-04-17",
+      "requirement_id": "04-REQ-6.1",
+      "kind": "integration",
+      "description": "When --audit is active, agent_{run_id}.jsonl is created and contains at least one session.init event with non-empty system_prompt and task_prompt.",
+      "preconditions": [
+        "nightshift daemon is startable",
+        "AUDIT_DIR is writable",
+        "AgentTraceSink is attached to the dispatcher with run_id='test-run-agent'",
+        "A mock issue is available for processing"
+      ],
+      "input": {
+        "audit": true,
+        "run_id": "test-run-agent"
+      },
+      "expected": {
+        "file_exists": ".agent-fox/audit/agent_test-run-agent.jsonl",
+        "session_init_event_count_gte_1": true,
+        "system_prompt_non_empty": true,
+        "task_prompt_non_empty": true
+      },
+      "assertion_pseudocode": "run_daemon_with_audit(run_id='test-run-agent'); agent_file = AUDIT_DIR / 'agent_test-run-agent.jsonl'; assert agent_file.exists(); events = read_jsonl(agent_file); init_events = [e for e in events if e['event_type'] == 'session.init']; assert len(init_events) >= 1; assert len(init_events[0]['system_prompt']) > 0; assert len(init_events[0]['task_prompt']) > 0"
+    },
+    {
+      "id": "TS-04-18",
+      "requirement_id": "04-REQ-6.2",
+      "kind": "unit",
+      "description": "When --audit is NOT active, no agent_*.jsonl files are created in .agent-fox/audit/.",
+      "preconditions": [
+        "nightshift daemon is startable",
+        "AUDIT_DIR exists and is writable",
+        "Dispatcher contains only DuckDBSink"
+      ],
+      "input": {
+        "audit": false
+      },
+      "expected": {
+        "agent_jsonl_files_in_audit_dir": 0
+      },
+      "assertion_pseudocode": "run_daemon_without_audit(); agent_files = list(AUDIT_DIR.glob('agent_*.jsonl')); assert len(agent_files) == 0"
+    },
+    {
+      "id": "TS-04-19",
+      "requirement_id": "04-REQ-7.1",
+      "kind": "unit",
+      "description": "When --audit is not set, AgentTraceSink, AuditJsonlSink, and generate_run_id() are never instantiated/called, and no audit JSONL files are created.",
+      "preconditions": [
+        "nightshift daemon is startable",
+        "AgentTraceSink, AuditJsonlSink, and generate_run_id are monkeypatched with call-tracking mocks",
+        "AUDIT_DIR exists"
+      ],
+      "input": {
+        "audit": false
+      },
+      "expected": {
+        "AgentTraceSink_instantiated": false,
+        "AuditJsonlSink_instantiated": false,
+        "agent_jsonl_files": 0,
+        "audit_jsonl_files": 0,
+        "emit_audit_event_called_for_spec_events": false,
+        "generate_run_id_called": false
+      },
+      "assertion_pseudocode": "with mock_all_audit_symbols() as mocks: run_daemon_without_audit(); assert mocks.generate_run_id.call_count == 0; assert mocks.AgentTraceSink.call_count == 0; assert mocks.AuditJsonlSink.call_count == 0; assert mocks.emit_audit_event.call_count == 0; assert len(list(AUDIT_DIR.glob('*.jsonl'))) == 0"
+    },
+    {
+      "id": "TS-04-20",
+      "requirement_id": "04-REQ-7.2",
+      "kind": "unit",
+      "description": "When --audit is not set, ctx.obj['audit_run_id'] is set to an empty string.",
+      "preconditions": [
+        "nightshift CLI is importable",
+        "ctx.obj is accessible after CLI invocation"
+      ],
+      "input": {
+        "cli_args": [
+          "nightshift",
+          "run"
+        ]
+      },
+      "expected": {
+        "ctx_obj_audit_run_id": ""
+      },
+      "assertion_pseudocode": "captured_ctx = {}; invoke_cli(['nightshift', 'run'], ctx_capture=captured_ctx); assert captured_ctx['audit_run_id'] == ''"
+    }
+  ],
+  "property_tests": [
+    {
+      "id": "TS-04-P1",
+      "property_id": "04-PROP-1",
+      "validates": [
+        "04-REQ-6.1",
+        "04-REQ-6.2",
+        "04-REQ-7.1"
+      ],
+      "description": "For any completed daemon run, audit JSONL files exist in .agent-fox/audit/ if and only if --audit was passed.",
+      "for_any_strategy": "Sample 20 runs: 10 with audit=True and 10 with audit=False, using randomized issue inputs each time. Check file system state after each run.",
+      "invariant_check": "for each run: if audit_flag: assert len(list(AUDIT_DIR.glob('agent_*.jsonl'))) > 0 and len(list(AUDIT_DIR.glob('audit_*.jsonl'))) > 0; else: assert len(list(AUDIT_DIR.glob('agent_*.jsonl'))) == 0 and len(list(AUDIT_DIR.glob('audit_*.jsonl'))) == 0"
+    },
+    {
+      "id": "TS-04-P2",
+      "property_id": "04-PROP-2",
+      "validates": [
+        "04-REQ-2.3",
+        "04-REQ-4.1",
+        "04-REQ-5.1"
+      ],
+      "description": "For any daemon run with --audit active, every event in both JSONL files carries the same run_id that equals ctx.obj['audit_run_id'].",
+      "for_any_strategy": "Sample 10 audit-enabled runs with randomly generated run_ids (via generate_run_id()). Read all events from both agent_{run_id}.jsonl and audit_{run_id}.jsonl after each run.",
+      "invariant_check": "for each run: expected_run_id = ctx.obj['audit_run_id']; for event in read_jsonl(AUDIT_DIR / f'agent_{expected_run_id}.jsonl'): assert event['run_id'] == expected_run_id; for event in read_jsonl(AUDIT_DIR / f'audit_{expected_run_id}.jsonl'): assert event['run_id'] == expected_run_id"
+    },
+    {
+      "id": "TS-04-P3",
+      "property_id": "04-PROP-3",
+      "validates": [
+        "04-REQ-4.3",
+        "04-REQ-4.E4"
+      ],
+      "description": "For any SPEC_INMEMORY_CREATED event emitted, payload['system_context'] length is always <= 10,000 characters.",
+      "for_any_strategy": "Generate 50 InMemorySpec instances with system_context lengths drawn from [0, 1, 9999, 10000, 10001, 50000, 100000] and random strings. Emit SPEC_INMEMORY_CREATED for each and read back the payload.",
+      "invariant_check": "for each emitted event: assert len(event['payload']['system_context']) <= 10000"
+    },
+    {
+      "id": "TS-04-P4",
+      "property_id": "04-PROP-4",
+      "validates": [
+        "04-REQ-5.3",
+        "04-REQ-5.E5"
+      ],
+      "description": "For any SPEC_AFSPEC_CREATED event emitted, payload['rendered'] length is always <= 50,000 characters.",
+      "for_any_strategy": "Generate 50 mock render_combined outputs with lengths drawn from [0, 1, 49999, 50000, 50001, 100000, 200000] and random strings. Emit SPEC_AFSPEC_CREATED for each and read back the payload.",
+      "invariant_check": "for each emitted event: assert len(event['payload']['rendered']) <= 50000"
+    },
+    {
+      "id": "TS-04-P5",
+      "property_id": "04-PROP-5",
+      "validates": [
+        "04-REQ-4.E1",
+        "04-REQ-5.E1",
+        "04-REQ-5.E3"
+      ],
+      "description": "For any call to emit_audit_event inside FixPipeline that raises any exception, the exception is caught and logged at DEBUG level, and process_issue / _assemble_afspec_context complete normally.",
+      "for_any_strategy": "Sample 30 exception types (IOError, RuntimeError, ValueError, OSError, TypeError, etc.) and inject each into emit_audit_event for both SPEC_INMEMORY_CREATED and SPEC_AFSPEC_CREATED emit sites. Verify completion and log level.",
+      "invariant_check": "for each injected exception: pipeline.process_issue(mock_issue) completes without raising; pipeline._assemble_afspec_context(triage, 1) completes without raising; at least one DEBUG log entry contains the exception message"
+    },
+    {
+      "id": "TS-04-P6",
+      "property_id": "04-PROP-6",
+      "validates": [
+        "04-REQ-2.1",
+        "04-REQ-2.2",
+        "04-REQ-7.1"
+      ],
+      "description": "For any daemon run (with or without --audit), DuckDBSink is always present in the SinkDispatcher's sink list.",
+      "for_any_strategy": "Sample 20 runs: 10 with audit=True and 10 with audit=False, with randomized configurations. Inspect the dispatcher's sink list after initialization.",
+      "invariant_check": "for each run: sink_types = [type(s).__name__ for s in dispatcher.sinks]; assert 'DuckDBSink' in sink_types"
+    },
+    {
+      "id": "TS-04-P7",
+      "property_id": "04-PROP-7",
+      "validates": [
+        "04-REQ-5.4",
+        "04-REQ-5.E2"
+      ],
+      "description": "For any call to _assemble_afspec_context() where build_afspec_from_triage raises an exception, no spec.afspec_created event appears in the audit log.",
+      "for_any_strategy": "Sample 20 exception types raised by build_afspec_from_triage (RuntimeError, ValueError, KeyError, etc.) and verify the audit JSONL after each call to _assemble_afspec_context.",
+      "invariant_check": "for each injected exception: events = read_jsonl_if_exists(AUDIT_DIR / f'audit_{run_id}.jsonl'); afspec_events = [e for e in events if e['event_type'] == 'spec.afspec_created']; assert len(afspec_events) == 0"
+    },
+    {
+      "id": "TS-04-P8",
+      "property_id": "04-PROP-8",
+      "validates": [
+        "04-REQ-3.1",
+        "04-REQ-3.2",
+        "04-REQ-3.3"
+      ],
+      "description": "For any import of afaudit.events, AuditEventType.SPEC_INMEMORY_CREATED == 'spec.inmemory_created', AuditEventType.SPEC_AFSPEC_CREATED == 'spec.afspec_created', and all pre-existing members retain their original string values.",
+      "for_any_strategy": "Import afaudit.events in 10 fresh subprocess invocations (to avoid module caching). In each, check all enum members against a known-good snapshot of pre-existing values plus the two new values.",
+      "invariant_check": "from afaudit.events import AuditEventType; assert AuditEventType.SPEC_INMEMORY_CREATED == 'spec.inmemory_created'; assert AuditEventType.SPEC_AFSPEC_CREATED == 'spec.afspec_created'; for name, value in PREEXISTING_SNAPSHOT.items(): assert AuditEventType[name].value == value"
+    }
+  ],
+  "edge_case_tests": [
+    {
+      "id": "TS-04-E1",
+      "requirement_id": "04-REQ-1.E1",
+      "kind": "unit",
+      "description": "When generate_run_id() raises an exception during CLI startup with --audit, the exception propagates, the daemon does not start, and the CLI exits with a non-zero exit code.",
+      "preconditions": [
+        "nightshift CLI is importable",
+        "generate_run_id is monkeypatched to raise RuntimeError('id generation failed')"
+      ],
+      "input": {
+        "cli_args": [
+          "nightshift",
+          "run",
+          "--audit"
+        ],
+        "generate_run_id_raises": "RuntimeError('id generation failed')"
+      },
+      "expected": {
+        "daemon_started": false,
+        "exception_logged_at_ERROR": true,
+        "exit_code": "non-zero (e.g. 1)"
+      },
+      "assertion_pseudocode": "with mock_generate_run_id(raises=RuntimeError('id generation failed')): result = invoke_cli(['nightshift', 'run', '--audit']); assert result.exit_code != 0; assert 'id generation failed' in result.stderr or result.exception is not None"
+    },
+    {
+      "id": "TS-04-E2",
+      "requirement_id": "04-REQ-2.E1",
+      "kind": "unit",
+      "description": "When AUDIT_DIR is not writable with --audit set, _run_daemon logs a WARNING and continues starting the daemon with only DuckDBSink; exit code is 0.",
+      "preconditions": [
+        "nightshift _run_daemon is importable",
+        "AUDIT_DIR (.agent-fox/audit/) exists but has permissions set to 000 (not writable)",
+        "DuckDBSink is configured as the default sink"
+      ],
+      "input": {
+        "audit": true,
+        "audit_dir_writable": false
+      },
+      "expected": {
+        "audit_jsonl_files_created": false,
+        "daemon_started": true,
+        "dispatcher_sinks": [
+          "DuckDBSink only"
+        ],
+        "exit_code": 0,
+        "warning_logged": true
+      },
+      "assertion_pseudocode": "with unwritable_audit_dir(): with capture_logs() as logs: result = run_daemon(audit=True); assert result.exit_code == 0; assert any(r.levelname == 'WARNING' and 'audit' in r.message.lower() for r in logs); sink_types = [type(s).__name__ for s in dispatcher.sinks]; assert sink_types == ['DuckDBSink']"
+    },
+    {
+      "id": "TS-04-E3",
+      "requirement_id": "04-REQ-2.E2",
+      "kind": "unit",
+      "description": "When AgentTraceSink constructor raises a non-permissions exception, _run_daemon logs a WARNING with exception details, skips that sink, and continues starting the daemon.",
+      "preconditions": [
+        "nightshift _run_daemon is importable",
+        "AgentTraceSink is monkeypatched to raise ValueError('unexpected error')",
+        "AuditJsonlSink is available normally",
+        "AUDIT_DIR is writable"
+      ],
+      "input": {
+        "AgentTraceSink_raises": "ValueError('unexpected error')",
+        "audit": true
+      },
+      "expected": {
+        "AgentTraceSink_absent_from_dispatcher": true,
+        "daemon_started": true,
+        "warning_contains_exception_details": true,
+        "warning_logged": true
+      },
+      "assertion_pseudocode": "with mock_AgentTraceSink(raises=ValueError('unexpected error')): with capture_logs() as logs: result = run_daemon(audit=True); assert result.exit_code == 0; assert any(r.levelname == 'WARNING' and 'unexpected error' in r.message for r in logs); sink_types = [type(s).__name__ for s in dispatcher.sinks]; assert 'AgentTraceSink' not in sink_types"
+    },
+    {
+      "id": "TS-04-E4",
+      "requirement_id": "04-REQ-2.E3",
+      "kind": "unit",
+      "description": "When AUDIT_DIR does not exist with --audit set, _run_daemon attempts to create it; if creation fails, logs a WARNING and continues without audit sinks.",
+      "preconditions": [
+        "nightshift _run_daemon is importable",
+        "AUDIT_DIR does not exist",
+        "The parent directory of AUDIT_DIR is not writable (so mkdir fails)"
+      ],
+      "input": {
+        "audit": true,
+        "audit_dir_exists": false,
+        "mkdir_fails": true
+      },
+      "expected": {
+        "audit_sinks_attached": false,
+        "daemon_started": true,
+        "exit_code": 0,
+        "warning_logged": true
+      },
+      "assertion_pseudocode": "with nonexistent_uncreateable_audit_dir(): with capture_logs() as logs: result = run_daemon(audit=True); assert result.exit_code == 0; assert any(r.levelname == 'WARNING' for r in logs); sink_types = [type(s).__name__ for s in dispatcher.sinks]; assert 'AgentTraceSink' not in sink_types; assert 'AuditJsonlSink' not in sink_types"
+    },
+    {
+      "id": "TS-04-E5",
+      "requirement_id": "04-REQ-3.E1",
+      "kind": "unit",
+      "description": "If another spec has already added an enum member with the same string value 'spec.inmemory_created' or 'spec.afspec_created', importing afaudit.events raises a ValueError at import time.",
+      "preconditions": [
+        "A modified version of afaudit.events is available with a duplicate StrEnum value pre-existing",
+        "Python StrEnum duplicate detection is active"
+      ],
+      "input": {
+        "duplicate_value": "spec.inmemory_created"
+      },
+      "expected": {
+        "error_identifies_duplicate": true,
+        "import_raises": "ValueError"
+      },
+      "assertion_pseudocode": "with inject_duplicate_enum_value('spec.inmemory_created'): try: import afaudit.events; assert False, 'Expected ValueError'; except ValueError as e: assert 'spec.inmemory_created' in str(e) or 'duplicate' in str(e).lower()"
+    },
+    {
+      "id": "TS-04-E6",
+      "requirement_id": "04-REQ-4.E1",
+      "kind": "unit",
+      "description": "When emit_audit_event raises an exception during SPEC_INMEMORY_CREATED emission, the exception is caught, logged at DEBUG level, and process_issue continues without re-raising.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "emit_audit_event is monkeypatched to raise IOError('disk error') when called with SPEC_INMEMORY_CREATED",
+        "AuditJsonlSink is attached to the dispatcher",
+        "build_in_memory_spec returns a valid InMemorySpec"
+      ],
+      "input": {
+        "emit_raises": "IOError('disk error')",
+        "event_type": "SPEC_INMEMORY_CREATED"
+      },
+      "expected": {
+        "debug_log_entry": true,
+        "exception_not_propagated": true,
+        "process_issue_completes": true
+      },
+      "assertion_pseudocode": "with mock_emit_audit_event(raises=IOError('disk error')): with capture_logs() as logs: pipeline.process_issue(mock_issue); assert any(r.levelname == 'DEBUG' and 'disk error' in r.message for r in logs); assert process_issue_completed_normally == True"
+    },
+    {
+      "id": "TS-04-E7",
+      "requirement_id": "04-REQ-4.E2",
+      "kind": "unit",
+      "description": "When build_in_memory_spec raises an exception, no SPEC_INMEMORY_CREATED event is emitted and no spec.inmemory_created line appears in the audit log.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "build_in_memory_spec is monkeypatched to raise RuntimeError('spec build failed')",
+        "AuditJsonlSink is attached to the dispatcher"
+      ],
+      "input": {
+        "build_in_memory_spec_raises": "RuntimeError('spec build failed')"
+      },
+      "expected": {
+        "existing_error_handling_applies": true,
+        "spec_inmemory_created_events": 0
+      },
+      "assertion_pseudocode": "with mock_build_in_memory_spec(raises=RuntimeError('spec build failed')): pipeline.process_issue(mock_issue); events = read_jsonl_if_exists(AUDIT_DIR / 'audit_test-run.jsonl'); inmemory_events = [e for e in events if e['event_type'] == 'spec.inmemory_created']; assert len(inmemory_events) == 0"
+    },
+    {
+      "id": "TS-04-E8",
+      "requirement_id": "04-REQ-4.E3",
+      "kind": "unit",
+      "description": "When InMemorySpec has empty task_prompt or system_context, SPEC_INMEMORY_CREATED is still emitted with those empty string values in the payload.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "build_in_memory_spec returns an InMemorySpec with task_prompt='' and system_context=''",
+        "AuditJsonlSink is attached to the dispatcher"
+      ],
+      "input": {
+        "system_context": "",
+        "task_prompt": ""
+      },
+      "expected": {
+        "payload_system_context": "",
+        "payload_task_prompt": "",
+        "spec_inmemory_created_emitted": true
+      },
+      "assertion_pseudocode": "with mock_build_in_memory_spec(returns=InMemorySpec(task_prompt='', system_context='', ...)): pipeline.process_issue(mock_issue); events = read_jsonl(AUDIT_DIR / 'audit_test-run.jsonl'); inmemory_events = [e for e in events if e['event_type'] == 'spec.inmemory_created']; assert len(inmemory_events) == 1; assert inmemory_events[0]['payload']['task_prompt'] == ''; assert inmemory_events[0]['payload']['system_context'] == ''"
+    },
+    {
+      "id": "TS-04-E9",
+      "requirement_id": "04-REQ-4.E4",
+      "kind": "unit",
+      "description": "When system_context is exactly 10,001 characters, it is truncated to exactly 10,000 characters in the SPEC_INMEMORY_CREATED payload.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "build_in_memory_spec returns an InMemorySpec with system_context of exactly 10,001 characters",
+        "AuditJsonlSink is attached to the dispatcher"
+      ],
+      "input": {
+        "system_context_length": 10001
+      },
+      "expected": {
+        "payload_system_context_length": 10000
+      },
+      "assertion_pseudocode": "context_10001 = 'x' * 10001; with mock_build_in_memory_spec(returns=InMemorySpec(system_context=context_10001, ...)): pipeline.process_issue(mock_issue); events = read_jsonl(AUDIT_DIR / 'audit_test-run.jsonl'); inmemory_events = [e for e in events if e['event_type'] == 'spec.inmemory_created']; assert len(inmemory_events[0]['payload']['system_context']) == 10000"
+    },
+    {
+      "id": "TS-04-E10",
+      "requirement_id": "04-REQ-5.E1",
+      "kind": "unit",
+      "description": "When emit_audit_event raises an exception during SPEC_AFSPEC_CREATED emission, the exception is caught, logged at DEBUG level, and _assemble_afspec_context continues without re-raising.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "emit_audit_event is monkeypatched to raise IOError('write error') when called with SPEC_AFSPEC_CREATED",
+        "build_afspec_from_triage returns a valid Spec"
+      ],
+      "input": {
+        "emit_raises": "IOError('write error')",
+        "event_type": "SPEC_AFSPEC_CREATED"
+      },
+      "expected": {
+        "assemble_afspec_context_completes": true,
+        "debug_log_entry": true,
+        "exception_not_propagated": true
+      },
+      "assertion_pseudocode": "with mock_emit_audit_event(raises=IOError('write error'), for_event='SPEC_AFSPEC_CREATED'): with capture_logs() as logs: pipeline._assemble_afspec_context(triage, issue_number=1); assert any(r.levelname == 'DEBUG' and 'write error' in r.message for r in logs); assert context_assembly_completed == True"
+    },
+    {
+      "id": "TS-04-E11",
+      "requirement_id": "04-REQ-5.E2",
+      "kind": "unit",
+      "description": "When build_afspec_from_triage raises an exception and the fallback path is taken, no SPEC_AFSPEC_CREATED event is emitted.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "build_afspec_from_triage is monkeypatched to raise ValueError('triage failed')",
+        "AuditJsonlSink is attached to the dispatcher"
+      ],
+      "input": {
+        "build_afspec_raises": "ValueError('triage failed')"
+      },
+      "expected": {
+        "fallback_logic_applied": true,
+        "spec_afspec_created_events": 0
+      },
+      "assertion_pseudocode": "with mock_build_afspec_from_triage(raises=ValueError('triage failed')): pipeline._assemble_afspec_context(triage, issue_number=1); events = read_jsonl_if_exists(AUDIT_DIR / 'audit_test-run.jsonl'); afspec_events = [e for e in events if e['event_type'] == 'spec.afspec_created']; assert len(afspec_events) == 0"
+    },
+    {
+      "id": "TS-04-E12",
+      "requirement_id": "04-REQ-5.E3",
+      "kind": "unit",
+      "description": "When render_combined raises an exception inside the best-effort emit wrapper, the exception is caught at DEBUG level, no SPEC_AFSPEC_CREATED event is written, and _assemble_afspec_context continues normally.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "render_combined is monkeypatched to raise RuntimeError('render failed')",
+        "build_afspec_from_triage returns a valid Spec",
+        "AuditJsonlSink is attached to the dispatcher"
+      ],
+      "input": {
+        "render_combined_raises": "RuntimeError('render failed')"
+      },
+      "expected": {
+        "assemble_afspec_context_completes": true,
+        "debug_log_entry": true,
+        "spec_afspec_created_events": 0
+      },
+      "assertion_pseudocode": "with mock_render_combined(raises=RuntimeError('render failed')): with capture_logs() as logs: pipeline._assemble_afspec_context(triage, issue_number=1); assert any(r.levelname == 'DEBUG' and 'render failed' in r.message for r in logs); events = read_jsonl_if_exists(AUDIT_DIR / 'audit_test-run.jsonl'); afspec_events = [e for e in events if e['event_type'] == 'spec.afspec_created']; assert len(afspec_events) == 0; assert context_assembly_completed == True"
+    },
+    {
+      "id": "TS-04-E13",
+      "requirement_id": "04-REQ-5.E4",
+      "kind": "unit",
+      "description": "When the Spec returned by build_afspec_from_triage has zero requirements, SPEC_AFSPEC_CREATED is still emitted with requirements_count=0.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "build_afspec_from_triage returns a Spec with empty requirements list",
+        "AuditJsonlSink is attached to the dispatcher"
+      ],
+      "input": {
+        "requirements_count": 0
+      },
+      "expected": {
+        "payload_requirements_count": 0,
+        "spec_afspec_created_emitted": true
+      },
+      "assertion_pseudocode": "with mock_build_afspec_from_triage(returns=Spec(requirements=[], ...)): pipeline._assemble_afspec_context(triage, issue_number=1); events = read_jsonl(AUDIT_DIR / 'audit_test-run.jsonl'); afspec_events = [e for e in events if e['event_type'] == 'spec.afspec_created']; assert len(afspec_events) == 1; assert afspec_events[0]['payload']['requirements_count'] == 0"
+    },
+    {
+      "id": "TS-04-E14",
+      "requirement_id": "04-REQ-5.E5",
+      "kind": "unit",
+      "description": "When render_combined output is exactly 50,001 characters, the rendered field in SPEC_AFSPEC_CREATED payload is truncated to exactly 50,000 characters.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "render_combined is monkeypatched to return a string of exactly 50,001 characters",
+        "AuditJsonlSink is attached to the dispatcher"
+      ],
+      "input": {
+        "rendered_length": 50001
+      },
+      "expected": {
+        "payload_rendered_length": 50000
+      },
+      "assertion_pseudocode": "rendered_50001 = 'y' * 50001; with mock_render_combined(returns=rendered_50001): pipeline._assemble_afspec_context(triage, issue_number=1); events = read_jsonl(AUDIT_DIR / 'audit_test-run.jsonl'); afspec_events = [e for e in events if e['event_type'] == 'spec.afspec_created']; assert len(afspec_events[0]['payload']['rendered']) == 50000"
+    },
+    {
+      "id": "TS-04-E15",
+      "requirement_id": "04-REQ-6.E1",
+      "kind": "unit",
+      "description": "When agent_{run_id}.jsonl cannot be written mid-run (e.g. disk full), AgentTraceSink logs the write failure at WARNING level and the daemon continues without crashing.",
+      "preconditions": [
+        "nightshift daemon is running with --audit active",
+        "AgentTraceSink has been attached to the dispatcher",
+        "The filesystem is simulated to fail writes mid-run (e.g. disk full)"
+      ],
+      "input": {
+        "disk_full_mid_run": true,
+        "run_id": "test-run-diskfull"
+      },
+      "expected": {
+        "daemon_continues": true,
+        "no_crash": true,
+        "warning_logged": true
+      },
+      "assertion_pseudocode": "with simulate_disk_full_on_write(AUDIT_DIR / 'agent_test-run-diskfull.jsonl'): with capture_logs() as logs: result = run_daemon_with_audit(run_id='test-run-diskfull'); assert result.exit_code == 0; assert any(r.levelname == 'WARNING' for r in logs)"
+    },
+    {
+      "id": "TS-04-E16",
+      "requirement_id": "04-REQ-7.E1",
+      "kind": "unit",
+      "description": "When run_id passed to FixPipeline.process_issue() is an empty string, all emit_audit_event calls are skipped and no exceptions are raised.",
+      "preconditions": [
+        "nightshift FixPipeline is importable",
+        "emit_audit_event is monkeypatched with a call tracker",
+        "build_in_memory_spec returns a valid InMemorySpec"
+      ],
+      "input": {
+        "run_id": ""
+      },
+      "expected": {
+        "emit_audit_event_called": false,
+        "no_exceptions_raised": true
+      },
+      "assertion_pseudocode": "with mock_emit_audit_event() as emit_mock: pipeline = FixPipeline(sink=dispatcher, run_id=''); pipeline.process_issue(mock_issue); assert emit_mock.call_count == 0; assert no_exception_raised == True"
+    }
+  ],
+  "smoke_tests": [
+    {
+      "id": "TS-04-SMOKE-1",
+      "execution_path_id": "04-PATH-1",
+      "description": "Full happy-path smoke test: nightshift run --audit processes one issue, creates both JSONL files, and emits session.init, spec.inmemory_created, and spec.afspec_created events with correct payloads.",
+      "trigger": "Invoke 'nightshift run --audit' with a single mock GitHub issue (issue_number=42) available in the knowledge base.",
+      "real_components": [
+        "nightshift CLI (nightshift/app.py)",
+        "_run_daemon (nightshift/app.py)",
+        "init_knowledge (nightshift/_startup.py)",
+        "SinkDispatcher (afaudit.sink)",
+        "AgentTraceSink (afaudit.trace)",
+        "AuditJsonlSink (afaudit.events)",
+        "NightShiftEngine",
+        "FixPipeline (fix_pipeline.py)",
+        "build_in_memory_spec",
+        "build_afspec_from_triage",
+        "emit_audit_event (afaudit.emit)",
+        "generate_run_id (afaudit.events)",
+        "render_combined (afspec.render)"
+      ],
+      "mockable": [
+        "GitHub API (issue fetching)",
+        "DuckDB database (use in-memory or temp file)",
+        "LLM model API calls"
+      ],
+      "expected_effects": [
+        "ctx.obj['audit_run_id'] is a non-empty string",
+        "File .agent-fox/audit/agent_{run_id}.jsonl exists and contains at least one line with event_type == 'session.init' with non-empty system_prompt and task_prompt",
+        "File .agent-fox/audit/audit_{run_id}.jsonl exists and contains at least one line with event_type == 'spec.inmemory_created' where payload.issue_number == 42",
+        "File .agent-fox/audit/audit_{run_id}.jsonl contains at least one line with event_type == 'spec.afspec_created' where payload.requirements_count >= 1 and payload.rendered is non-empty",
+        "All events in both JSONL files share the same run_id value equal to ctx.obj['audit_run_id']",
+        "Daemon exits with code 0"
+      ]
+    },
+    {
+      "id": "TS-04-SMOKE-2",
+      "execution_path_id": "04-PATH-2",
+      "description": "No-audit smoke test: nightshift run without --audit processes one issue, creates no JSONL files, and the dispatcher contains only DuckDBSink.",
+      "trigger": "Invoke 'nightshift run' (without --audit) with a single mock GitHub issue available in the knowledge base.",
+      "real_components": [
+        "nightshift CLI (nightshift/app.py)",
+        "_run_daemon (nightshift/app.py)",
+        "init_knowledge (nightshift/_startup.py)",
+        "SinkDispatcher (afaudit.sink)",
+        "NightShiftEngine",
+        "FixPipeline (fix_pipeline.py)",
+        "build_in_memory_spec",
+        "build_afspec_from_triage"
+      ],
+      "mockable": [
+        "GitHub API (issue fetching)",
+        "DuckDB database (use in-memory or temp file)",
+        "LLM model API calls"
+      ],
+      "expected_effects": [
+        "ctx.obj['audit_run_id'] == ''",
+        "No files matching agent_*.jsonl exist in .agent-fox/audit/ after the run",
+        "No files matching audit_*.jsonl exist in .agent-fox/audit/ after the run",
+        "SinkDispatcher contains only DuckDBSink",
+        "AgentTraceSink and AuditJsonlSink are never instantiated",
+        "generate_run_id() is never called",
+        "Daemon exits with code 0"
+      ]
+    },
+    {
+      "id": "TS-04-SMOKE-3",
+      "execution_path_id": "04-PATH-3",
+      "description": "Unwritable audit directory smoke test: nightshift run --audit on a system where .agent-fox/audit/ is not writable logs a WARNING and starts the daemon normally with only DuckDBSink.",
+      "trigger": "Invoke 'nightshift run --audit' with .agent-fox/audit/ set to permissions 000 (not writable) before the run.",
+      "real_components": [
+        "nightshift CLI (nightshift/app.py)",
+        "_run_daemon (nightshift/app.py)",
+        "init_knowledge (nightshift/_startup.py)",
+        "SinkDispatcher (afaudit.sink)",
+        "NightShiftEngine",
+        "FixPipeline (fix_pipeline.py)"
+      ],
+      "mockable": [
+        "GitHub API (issue fetching)",
+        "DuckDB database (use in-memory or temp file)",
+        "LLM model API calls",
+        "Filesystem permissions (set .agent-fox/audit/ to mode 000)"
+      ],
+      "expected_effects": [
+        "A WARNING-level log message is emitted describing the unwritable audit directory",
+        "AgentTraceSink and AuditJsonlSink are NOT attached to the dispatcher",
+        "SinkDispatcher contains only DuckDBSink",
+        "No agent_*.jsonl or audit_*.jsonl files are created",
+        "Daemon starts and completes the run normally",
+        "Exit code is 0"
+      ]
+    }
+  ],
+  "coverage": {
+    "requirements_covered": [
+      "04-REQ-1.1",
+      "04-REQ-1.2",
+      "04-REQ-1.3",
+      "04-REQ-1.E1",
+      "04-REQ-2.1",
+      "04-REQ-2.2",
+      "04-REQ-2.3",
+      "04-REQ-2.E1",
+      "04-REQ-2.E2",
+      "04-REQ-2.E3",
+      "04-REQ-3.1",
+      "04-REQ-3.2",
+      "04-REQ-3.3",
+      "04-REQ-3.E1",
+      "04-REQ-4.1",
+      "04-REQ-4.2",
+      "04-REQ-4.3",
+      "04-REQ-4.E1",
+      "04-REQ-4.E2",
+      "04-REQ-4.E3",
+      "04-REQ-4.E4",
+      "04-REQ-5.1",
+      "04-REQ-5.2",
+      "04-REQ-5.3",
+      "04-REQ-5.4",
+      "04-REQ-5.E1",
+      "04-REQ-5.E2",
+      "04-REQ-5.E3",
+      "04-REQ-5.E4",
+      "04-REQ-5.E5",
+      "04-REQ-6.1",
+      "04-REQ-6.2",
+      "04-REQ-6.E1",
+      "04-REQ-7.1",
+      "04-REQ-7.2",
+      "04-REQ-7.E1"
+    ],
+    "properties_covered": [
+      "04-PROP-1",
+      "04-PROP-2",
+      "04-PROP-3",
+      "04-PROP-4",
+      "04-PROP-5",
+      "04-PROP-6",
+      "04-PROP-7",
+      "04-PROP-8"
+    ],
+    "paths_covered": [
+      "04-PATH-1",
+      "04-PATH-2",
+      "04-PATH-3"
+    ],
+    "gaps": []
+  }
+}

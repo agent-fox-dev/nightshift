@@ -1,0 +1,731 @@
+{
+  "spec_id": "04",
+  "spec_name": "nightshift_audit_flag",
+  "schema_version": 1,
+  "introduction": "The nightshift `--audit` flag enables full audit logging for daemon runs, wiring `AgentTraceSink` and `AuditJsonlSink` into the `SinkDispatcher` and emitting two new structured audit event types (`spec.inmemory_created` and `spec.afspec_created`) that serialize in-memory spec objects built during the fix pipeline.",
+  "glossary": {
+    "AUDIT_DIR": "The `Path` constant from `afaudit.constants` pointing to `.agent-fox/audit/`",
+    "AgentTraceSink": "An afaudit sink that writes model conversation traces (system prompt, task prompt, assistant messages, tool calls) to a per-run JSONL file under `.agent-fox/audit/`",
+    "AuditEventType": "A StrEnum in `afaudit.events` enumerating all recognized audit event type strings",
+    "AuditJsonlSink": "An afaudit sink that writes structured audit events to a per-run JSONL file under `.agent-fox/audit/`",
+    "DuckDBSink": "The default afaudit sink that writes events to a DuckDB database; always present in the dispatcher regardless of `--audit`",
+    "FixPipeline": "The nightshift class that orchestrates the per-issue fix workflow, including spec building, coding, and review steps",
+    "InMemorySpec": "A lightweight in-memory representation of a spec built from a GitHub issue, constructed by `build_in_memory_spec(issue, issue_body)`",
+    "SPEC_AFSPEC_CREATED": "The new `AuditEventType` enum value `spec.afspec_created` emitted after `build_afspec_from_triage()` succeeds",
+    "SPEC_INMEMORY_CREATED": "The new `AuditEventType` enum value `spec.inmemory_created` emitted after `build_in_memory_spec()` succeeds",
+    "SinkDispatcher": "The afaudit multiplexer that fans out session events to all registered sinks",
+    "Spec": "The rich afspec Pydantic model (`afspec.models.Spec`) built from triage output via `build_afspec_from_triage`, containing `requirements`, `test_spec`, `tasks`, and `prd` fields",
+    "_assemble_afspec_context": "The `FixPipeline` method that calls `build_afspec_from_triage` and assembles context for the coder and reviewer prompts",
+    "_run_daemon": "The internal nightshift function in `nightshift/app.py` that initializes all subsystems and starts the engine loop",
+    "audit_run_id": "The string key in `ctx.obj` that holds the run identifier when `--audit` is active; empty string when `--audit` is not set",
+    "build_afspec_from_triage": "A nightshift function that constructs an afspec `Spec` from triage output and an issue number",
+    "build_in_memory_spec": "A nightshift function that constructs an `InMemorySpec` from a GitHub issue and its body text",
+    "ctx.obj": "The Click context object dictionary (`dict`) used to pass state between CLI commands and subcommands in nightshift",
+    "emit_audit_event": "The afaudit function `emit_audit_event(sink, run_id, event_type, *, payload) -> None` that writes a single structured event to the dispatcher",
+    "generate_run_id": "The afaudit function `generate_run_id() -> str` that produces a unique identifier for a daemon run",
+    "init_knowledge": "The nightshift startup function in `nightshift/_startup.py` that returns `(kdb, sink, kprov)` where `sink` is a `SinkDispatcher`",
+    "process_issue": "The `FixPipeline` method that processes a single GitHub issue through the full fix pipeline, accepting an optional `run_id` parameter",
+    "render_combined": "The afspec function `render_combined(spec: Spec, *, max_tokens: int | None = None) -> str` that renders a full spec as a markdown string",
+    "session.init": "The audit event type emitted by `AgentTraceSink` at the start of a model session, containing `system_prompt` and `task_prompt` fields",
+    "--audit": "The Click boolean flag added to the nightshift CLI command that enables full audit logging; is_flag=True, default=False",
+    "generate_run_id()": "The afaudit function that generates a unique run identifier string used for naming audit JSONL files and correlating events",
+    "agent_{run_id}.jsonl": "The per-run conversation trace file written by AgentTraceSink to AUDIT_DIR, containing session.init, tool.use, assistant.message, and session.result events",
+    "audit_{run_id}.jsonl": "The per-run structured audit event file written by AuditJsonlSink to AUDIT_DIR, containing events like spec.inmemory_created and spec.afspec_created"
+  },
+  "requirements": [
+    {
+      "id": "04-REQ-1",
+      "title": "CLI --audit flag declaration",
+      "user_story": {
+        "role": "nightshift operator",
+        "goal": "pass --audit to the nightshift daemon command",
+        "benefit": "I can opt into full audit logging without changing any configuration files"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-1.1",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "set `audit_run_id` in `ctx.obj` to the string returned by `generate_run_id()` and pass the flag value into `_run_daemon`",
+          "return_contract": "the daemon starts normally; `ctx.obj['audit_run_id']` is a non-empty string",
+          "trigger": "the nightshift CLI is invoked with `--audit`"
+        },
+        {
+          "id": "04-REQ-1.2",
+          "ears_pattern": "event_driven",
+          "system": "nightshift CLI",
+          "action": "set `audit_run_id` in `ctx.obj` to an empty string and proceed with the default `SinkDispatcher` containing only `DuckDBSink`",
+          "return_contract": "the daemon starts normally; `ctx.obj['audit_run_id']` is an empty string",
+          "trigger": "the nightshift CLI is invoked without `--audit`"
+        },
+        {
+          "id": "04-REQ-1.3",
+          "ears_pattern": "ubiquitous",
+          "system": "nightshift CLI",
+          "action": "declare the `--audit` flag using the exact Click signature: `@click.option('--audit', is_flag=True, default=False, help='Enable full audit logging to .agent-fox/audit/.')`",
+          "return_contract": null
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-1.E1",
+          "ears_pattern": "unwanted",
+          "system": "nightshift CLI",
+          "action": "propagate the exception to the caller without starting the daemon",
+          "return_contract": "exits with a non-zero exit code and logs the exception at ERROR level",
+          "error_condition": "`generate_run_id()` raises an exception during CLI startup with `--audit`"
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-2",
+      "title": "Audit sink wiring in _run_daemon",
+      "user_story": {
+        "role": "nightshift operator",
+        "goal": "have AgentTraceSink and AuditJsonlSink automatically attached to the SinkDispatcher when --audit is set",
+        "benefit": "I do not need to manually configure sinks to get full conversation traces"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-2.1",
+          "ears_pattern": "optional",
+          "system": "`_run_daemon`",
+          "action": "call `SinkDispatcher.add` twice — once with `AgentTraceSink(AUDIT_DIR, run_id)` and once with `AuditJsonlSink(AUDIT_DIR, run_id)` — before the engine starts, using the same `run_id` stored in `audit_run_id`",
+          "return_contract": "both sinks appear in the dispatcher's sink list; no exception is raised",
+          "feature": "`--audit` is active"
+        },
+        {
+          "id": "04-REQ-2.2",
+          "ears_pattern": "optional",
+          "system": "`_run_daemon`",
+          "action": "skip all sink attachment logic; neither `AgentTraceSink` nor `AuditJsonlSink` is instantiated or added to the dispatcher",
+          "return_contract": "the dispatcher's sink list contains only `DuckDBSink`; no audit JSONL files are created",
+          "feature": "`--audit` is NOT active"
+        },
+        {
+          "id": "04-REQ-2.3",
+          "ears_pattern": "optional",
+          "system": "`_run_daemon`",
+          "action": "pass the same `run_id` to `init_knowledge` (or as a parameter to `_run_daemon`) and to `FixPipeline.process_issue()` so all audit events share the same identifier",
+          "return_contract": "all events in `agent_{run_id}.jsonl` and `audit_{run_id}.jsonl` carry the same `run_id` value",
+          "feature": "`--audit` is active"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-2.E1",
+          "ears_pattern": "unwanted",
+          "system": "`_run_daemon`",
+          "action": "log a WARNING-level message describing the unwritable directory, skip attaching `AgentTraceSink` and `AuditJsonlSink`, and continue starting the daemon with only `DuckDBSink`",
+          "return_contract": "the daemon starts successfully with exit code 0; no audit JSONL files are created",
+          "error_condition": "`AUDIT_DIR` (`.agent-fox/audit/`) is not writable when `--audit` is set and `_run_daemon` attempts to attach the audit sinks"
+        },
+        {
+          "id": "04-REQ-2.E2",
+          "ears_pattern": "unwanted",
+          "system": "`_run_daemon`",
+          "action": "log a WARNING-level message with the exception details, skip the failing sink, and continue starting the daemon",
+          "return_contract": "the daemon starts successfully; the failing sink is absent from the dispatcher",
+          "error_condition": "`AgentTraceSink` or `AuditJsonlSink` constructor raises an exception other than a permissions error"
+        },
+        {
+          "id": "04-REQ-2.E3",
+          "ears_pattern": "unwanted",
+          "system": "`_run_daemon`",
+          "action": "attempt to create the directory; if creation fails, log a WARNING and continue without audit sinks",
+          "return_contract": "the daemon starts successfully with exit code 0",
+          "error_condition": "`AUDIT_DIR` does not exist when `--audit` is set"
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-3",
+      "title": "New AuditEventType enum values",
+      "user_story": {
+        "role": "nightshift developer",
+        "goal": "have SPEC_INMEMORY_CREATED and SPEC_AFSPEC_CREATED defined in AuditEventType",
+        "benefit": "I can reference them by name throughout the codebase without using raw strings"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-3.1",
+          "ears_pattern": "ubiquitous",
+          "system": "`AuditEventType` in `afaudit.events`",
+          "action": "define `SPEC_INMEMORY_CREATED = 'spec.inmemory_created'` as a new StrEnum member",
+          "return_contract": "`AuditEventType.SPEC_INMEMORY_CREATED == 'spec.inmemory_created'` evaluates to True"
+        },
+        {
+          "id": "04-REQ-3.2",
+          "ears_pattern": "ubiquitous",
+          "system": "`AuditEventType` in `afaudit.events`",
+          "action": "define `SPEC_AFSPEC_CREATED = 'spec.afspec_created'` as a new StrEnum member",
+          "return_contract": "`AuditEventType.SPEC_AFSPEC_CREATED == 'spec.afspec_created'` evaluates to True"
+        },
+        {
+          "id": "04-REQ-3.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`AuditEventType`",
+          "action": "preserve all existing enum members without modification; the two new values are purely additive",
+          "return_contract": "all previously existing `AuditEventType` members remain accessible with unchanged string values"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-3.E1",
+          "ears_pattern": "unwanted",
+          "system": "`AuditEventType`",
+          "action": "raise a Python `ValueError` at import time due to duplicate StrEnum values, surfacing the conflict immediately",
+          "return_contract": "module import fails with `ValueError` identifying the duplicate member",
+          "error_condition": "another spec (e.g. `carry_patch_pipeline_monitor`) has already added an enum member with the same string value `'spec.inmemory_created'` or `'spec.afspec_created'`"
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-4",
+      "title": "Emit SPEC_INMEMORY_CREATED audit event",
+      "user_story": {
+        "role": "nightshift operator",
+        "goal": "see a spec.inmemory_created event in the audit log after each issue's InMemorySpec is built",
+        "benefit": "I can inspect the task prompt and branch name used for each issue without reading DuckDB tables"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-4.1",
+          "ears_pattern": "event_driven",
+          "system": "`FixPipeline`",
+          "action": "call `emit_audit_event(sink, run_id, AuditEventType.SPEC_INMEMORY_CREATED, payload=...)` with payload fields: `issue_number` (int), `title` (str), `branch_name` (str), `task_prompt` (str), `system_context` (str truncated to 10 000 chars)",
+          "return_contract": "`audit_{run_id}.jsonl` contains a line with `event_type == 'spec.inmemory_created'` and `payload.issue_number` matching the processed issue number",
+          "trigger": "`FixPipeline.process_issue()` successfully calls `build_in_memory_spec(issue, issue_body)` and `--audit` is active"
+        },
+        {
+          "id": "04-REQ-4.2",
+          "ears_pattern": "optional",
+          "system": "`FixPipeline`",
+          "action": "skip the `emit_audit_event` call entirely; no audit event is written",
+          "return_contract": "no `audit_*.jsonl` file is created or modified",
+          "feature": "`--audit` is NOT active"
+        },
+        {
+          "id": "04-REQ-4.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`FixPipeline`",
+          "action": "truncate `system_context` to at most 10 000 characters before including it in the `SPEC_INMEMORY_CREATED` payload",
+          "return_contract": "`payload.system_context` length is at most 10 000 characters in all emitted events"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-4.E1",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "catch the exception, log it at DEBUG level, and continue processing the issue normally without re-raising",
+          "return_contract": "the issue processing continues; no exception propagates to the caller of `process_issue`",
+          "error_condition": "`emit_audit_event` raises any exception when emitting `SPEC_INMEMORY_CREATED`"
+        },
+        {
+          "id": "04-REQ-4.E2",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "do not emit `SPEC_INMEMORY_CREATED`; the existing error handling for `build_in_memory_spec` failure applies",
+          "return_contract": "no `spec.inmemory_created` event appears in the audit log for this issue",
+          "error_condition": "`build_in_memory_spec` raises an exception before returning an `InMemorySpec`"
+        },
+        {
+          "id": "04-REQ-4.E3",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "emit the `SPEC_INMEMORY_CREATED` event with the empty string values as-is; do not suppress the event",
+          "return_contract": "`payload.task_prompt` and/or `payload.system_context` are empty strings in the emitted event",
+          "error_condition": "the `InMemorySpec` returned by `build_in_memory_spec` has an empty `task_prompt` or empty `system_context`"
+        },
+        {
+          "id": "04-REQ-4.E4",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "truncate to exactly 10 000 characters before emitting",
+          "return_contract": "`payload.system_context` has length 10 000",
+          "error_condition": "`system_context` is exactly 10 001 characters"
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-5",
+      "title": "Emit SPEC_AFSPEC_CREATED audit event",
+      "user_story": {
+        "role": "nightshift operator",
+        "goal": "see a spec.afspec_created event in the audit log after each issue's afspec Spec is built",
+        "benefit": "I can inspect the full rendered spec and requirement counts without reading DuckDB tables"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-5.1",
+          "ears_pattern": "event_driven",
+          "system": "`FixPipeline`",
+          "action": "call `emit_audit_event(sink, run_id, AuditEventType.SPEC_AFSPEC_CREATED, payload=...)` with payload fields: `issue_number` (int), `spec_id` (str), `requirements_count` (int), `test_cases_count` (int), `subtasks_count` (int), `rendered` (str — output of `render_combined(spec)` truncated to 50 000 chars)",
+          "return_contract": "`audit_{run_id}.jsonl` contains a line with `event_type == 'spec.afspec_created'` and `payload.requirements_count >= 1` and `payload.rendered` is a non-empty string",
+          "trigger": "`FixPipeline._assemble_afspec_context()` successfully calls `build_afspec_from_triage(triage, issue_number)` and `--audit` is active"
+        },
+        {
+          "id": "04-REQ-5.2",
+          "ears_pattern": "optional",
+          "system": "`FixPipeline`",
+          "action": "skip the `emit_audit_event` call for `SPEC_AFSPEC_CREATED` entirely",
+          "return_contract": "no `spec.afspec_created` event appears in any audit file",
+          "feature": "`--audit` is NOT active"
+        },
+        {
+          "id": "04-REQ-5.3",
+          "ears_pattern": "ubiquitous",
+          "system": "`FixPipeline`",
+          "action": "truncate the output of `render_combined(spec)` to at most 50 000 characters before including it in the `SPEC_AFSPEC_CREATED` payload",
+          "return_contract": "`payload.rendered` length is at most 50 000 characters in all emitted events"
+        },
+        {
+          "id": "04-REQ-5.4",
+          "ears_pattern": "state_driven",
+          "system": "`FixPipeline`",
+          "action": "emit `SPEC_AFSPEC_CREATED` before the fallback `except` block; do not emit if the fallback path is taken",
+          "return_contract": "the event appears in the audit log only when `build_afspec_from_triage` succeeds",
+          "state": "`_assemble_afspec_context()` is executing inside the `try` block after `build_afspec_from_triage` returns successfully"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-5.E1",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "catch the exception, log it at DEBUG level, and continue `_assemble_afspec_context()` normally without re-raising",
+          "return_contract": "context assembly continues; no exception propagates to the caller",
+          "error_condition": "`emit_audit_event` raises any exception when emitting `SPEC_AFSPEC_CREATED`"
+        },
+        {
+          "id": "04-REQ-5.E2",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "do not emit `SPEC_AFSPEC_CREATED`; the existing fallback logic applies",
+          "return_contract": "no `spec.afspec_created` event appears in the audit log for this issue",
+          "error_condition": "`build_afspec_from_triage` raises an exception and the fallback path is taken"
+        },
+        {
+          "id": "04-REQ-5.E3",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "catch the exception within the best-effort emit wrapper, log at DEBUG level, and skip the emit; do not propagate the exception",
+          "return_contract": "no `spec.afspec_created` event is written; `_assemble_afspec_context()` continues normally",
+          "error_condition": "`render_combined(spec)` raises an exception"
+        },
+        {
+          "id": "04-REQ-5.E4",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "emit `SPEC_AFSPEC_CREATED` with `requirements_count = 0`; do not suppress the event",
+          "return_contract": "`payload.requirements_count == 0` in the emitted event",
+          "error_condition": "the `Spec` returned by `build_afspec_from_triage` has zero requirements (empty `requirements` list)"
+        },
+        {
+          "id": "04-REQ-5.E5",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "truncate to exactly 50 000 characters before emitting",
+          "return_contract": "`payload.rendered` has length 50 000",
+          "error_condition": "`rendered` output from `render_combined(spec)` is exactly 50 001 characters"
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-6",
+      "title": "Agent trace JSONL file creation",
+      "user_story": {
+        "role": "nightshift operator",
+        "goal": "find a per-run agent trace JSONL file in .agent-fox/audit/ after a run with --audit",
+        "benefit": "I can inspect the full model conversation including system prompts and tool calls"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-6.1",
+          "ears_pattern": "optional",
+          "system": "`AgentTraceSink`",
+          "action": "write model conversation events to `.agent-fox/audit/agent_{run_id}.jsonl`, including at least one `session.init` event with non-empty `system_prompt` and `task_prompt` fields",
+          "return_contract": "the file `.agent-fox/audit/agent_{run_id}.jsonl` exists after the run and contains at least one line with `event_type == 'session.init'`",
+          "feature": "`--audit` is active"
+        },
+        {
+          "id": "04-REQ-6.2",
+          "ears_pattern": "optional",
+          "system": "nightshift daemon",
+          "action": "create no `agent_*.jsonl` files in `.agent-fox/audit/`",
+          "return_contract": "no files matching `agent_*.jsonl` exist in `.agent-fox/audit/` after the run",
+          "feature": "`--audit` is NOT active"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-6.E1",
+          "ears_pattern": "unwanted",
+          "system": "`AgentTraceSink`",
+          "action": "log the write failure at WARNING level and continue the daemon run; do not crash",
+          "return_contract": "the daemon continues processing; the partial JSONL file may be incomplete",
+          "error_condition": "the `agent_{run_id}.jsonl` file cannot be written mid-run (e.g. disk full)"
+        }
+      ]
+    },
+    {
+      "id": "04-REQ-7",
+      "title": "Zero overhead when --audit is not set",
+      "user_story": {
+        "role": "nightshift operator",
+        "goal": "run nightshift in production without any audit overhead unless I explicitly pass --audit",
+        "benefit": "I avoid performance impact and accumulation of large JSONL files on production systems"
+      },
+      "acceptance_criteria": [
+        {
+          "id": "04-REQ-7.1",
+          "ears_pattern": "state_driven",
+          "system": "nightshift daemon",
+          "action": "not instantiate `AgentTraceSink`, `AuditJsonlSink`, or call `generate_run_id()`; not call `emit_audit_event` for `SPEC_INMEMORY_CREATED` or `SPEC_AFSPEC_CREATED`",
+          "return_contract": "no audit JSONL files are created; the dispatcher contains only `DuckDBSink`",
+          "state": "`--audit` is not set"
+        },
+        {
+          "id": "04-REQ-7.2",
+          "ears_pattern": "state_driven",
+          "system": "nightshift daemon",
+          "action": "set `ctx.obj['audit_run_id']` to an empty string",
+          "return_contract": "`ctx.obj['audit_run_id'] == ''` is True",
+          "state": "`--audit` is not set"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "04-REQ-7.E1",
+          "ears_pattern": "unwanted",
+          "system": "`FixPipeline`",
+          "action": "treat an empty `run_id` as audit-disabled and skip all `emit_audit_event` calls",
+          "return_contract": "no audit events are emitted; no exceptions are raised",
+          "error_condition": "code paths in `FixPipeline` check `run_id` for truthiness and `run_id` is an empty string"
+        }
+      ]
+    }
+  ],
+  "correctness_properties": [
+    {
+      "id": "04-PROP-1",
+      "title": "Audit files created iff --audit is set",
+      "for_any": "completed daemon run",
+      "invariant": "files matching `agent_*.jsonl` or `audit_*.jsonl` exist in `.agent-fox/audit/` if and only if `--audit` was passed to the CLI for that run",
+      "validates": [
+        "04-REQ-6.1",
+        "04-REQ-6.2",
+        "04-REQ-7.1"
+      ]
+    },
+    {
+      "id": "04-PROP-2",
+      "title": "run_id consistency across all audit artifacts",
+      "for_any": "daemon run with `--audit` active",
+      "invariant": "every event in `agent_{run_id}.jsonl` and every event in `audit_{run_id}.jsonl` carries the same `run_id` value, and that value equals `ctx.obj['audit_run_id']`",
+      "validates": [
+        "04-REQ-2.3",
+        "04-REQ-4.1",
+        "04-REQ-5.1"
+      ]
+    },
+    {
+      "id": "04-PROP-3",
+      "title": "system_context truncation upper bound",
+      "for_any": "`SPEC_INMEMORY_CREATED` event emitted to `audit_{run_id}.jsonl`",
+      "invariant": "`len(payload['system_context']) <= 10000`",
+      "validates": [
+        "04-REQ-4.3",
+        "04-REQ-4.E4"
+      ]
+    },
+    {
+      "id": "04-PROP-4",
+      "title": "rendered truncation upper bound",
+      "for_any": "`SPEC_AFSPEC_CREATED` event emitted to `audit_{run_id}.jsonl`",
+      "invariant": "`len(payload['rendered']) <= 50000`",
+      "validates": [
+        "04-REQ-5.3",
+        "04-REQ-5.E5"
+      ]
+    },
+    {
+      "id": "04-PROP-5",
+      "title": "Emit failures never abort issue processing",
+      "for_any": "call to `emit_audit_event` inside `FixPipeline` that raises any exception",
+      "invariant": "the exception is caught and logged at DEBUG level; `process_issue` and `_assemble_afspec_context` complete normally without re-raising",
+      "validates": [
+        "04-REQ-4.E1",
+        "04-REQ-5.E1",
+        "04-REQ-5.E3"
+      ]
+    },
+    {
+      "id": "04-PROP-6",
+      "title": "DuckDBSink always present regardless of --audit",
+      "for_any": "any daemon run",
+      "invariant": "`DuckDBSink` is always present in the `SinkDispatcher`'s sink list, whether or not `--audit` is set",
+      "validates": [
+        "04-REQ-2.1",
+        "04-REQ-2.2",
+        "04-REQ-7.1"
+      ]
+    },
+    {
+      "id": "04-PROP-7",
+      "title": "SPEC_AFSPEC_CREATED emitted only on successful build",
+      "for_any": "call to `_assemble_afspec_context()` where `build_afspec_from_triage` raises an exception",
+      "invariant": "no `spec.afspec_created` event appears in `audit_{run_id}.jsonl` for that issue",
+      "validates": [
+        "04-REQ-5.4",
+        "04-REQ-5.E2"
+      ]
+    },
+    {
+      "id": "04-PROP-8",
+      "title": "AuditEventType enum values are additive and non-conflicting",
+      "for_any": "import of `afaudit.events`",
+      "invariant": "`AuditEventType.SPEC_INMEMORY_CREATED == 'spec.inmemory_created'` and `AuditEventType.SPEC_AFSPEC_CREATED == 'spec.afspec_created'` and all pre-existing enum members retain their original string values",
+      "validates": [
+        "04-REQ-3.1",
+        "04-REQ-3.2",
+        "04-REQ-3.3"
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "04-PATH-1",
+      "title": "Happy path: --audit run with InMemorySpec and Spec events",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "invokes `nightshift run --audit` from the command line"
+        },
+        {
+          "actor": "nightshift CLI",
+          "action": "calls `generate_run_id()` to produce a unique `run_id`, stores it in `ctx.obj['audit_run_id']`, and passes `audit=True` and `run_id` into `_run_daemon`"
+        },
+        {
+          "actor": "`_run_daemon`",
+          "action": "calls `init_knowledge()` to obtain `(kdb, sink, kprov)` where `sink` is a `SinkDispatcher` containing `DuckDBSink`"
+        },
+        {
+          "actor": "`_run_daemon`",
+          "action": "instantiates `AgentTraceSink(AUDIT_DIR, run_id)` and `AuditJsonlSink(AUDIT_DIR, run_id)`, then calls `SinkDispatcher.add` for each"
+        },
+        {
+          "actor": "`_run_daemon`",
+          "action": "starts `NightShiftEngine` with the augmented dispatcher and passes `run_id` through to `FixPipeline`"
+        },
+        {
+          "actor": "`FixPipeline`",
+          "action": "calls `process_issue(issue, run_id=run_id)`, which calls `build_in_memory_spec(issue, issue_body)` to produce an `InMemorySpec`"
+        },
+        {
+          "actor": "`FixPipeline`",
+          "action": "calls `emit_audit_event(sink, run_id, AuditEventType.SPEC_INMEMORY_CREATED, payload={issue_number, title, branch_name, task_prompt, system_context[:10000]})` wrapped in try/except"
+        },
+        {
+          "actor": "`AuditJsonlSink`",
+          "action": "appends the `spec.inmemory_created` event as a JSON line to `.agent-fox/audit/audit_{run_id}.jsonl`"
+        },
+        {
+          "actor": "`FixPipeline`",
+          "action": "calls `_assemble_afspec_context()`, which calls `build_afspec_from_triage(triage, issue_number)` to produce a `Spec`"
+        },
+        {
+          "actor": "`FixPipeline`",
+          "action": "calls `render_combined(spec)`, truncates to 50 000 chars, then calls `emit_audit_event(sink, run_id, AuditEventType.SPEC_AFSPEC_CREATED, payload={issue_number, spec_id, requirements_count, test_cases_count, subtasks_count, rendered})` wrapped in try/except"
+        },
+        {
+          "actor": "`AuditJsonlSink`",
+          "action": "appends the `spec.afspec_created` event as a JSON line to `.agent-fox/audit/audit_{run_id}.jsonl`"
+        },
+        {
+          "actor": "`AgentTraceSink`",
+          "action": "writes model conversation events including `session.init` to `.agent-fox/audit/agent_{run_id}.jsonl`"
+        }
+      ]
+    },
+    {
+      "id": "04-PATH-2",
+      "title": "No-audit path: daemon run without --audit flag",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "invokes `nightshift run` without `--audit`"
+        },
+        {
+          "actor": "nightshift CLI",
+          "action": "sets `ctx.obj['audit_run_id']` to an empty string and passes `audit=False` into `_run_daemon`"
+        },
+        {
+          "actor": "`_run_daemon`",
+          "action": "calls `init_knowledge()` to obtain the default `SinkDispatcher` containing only `DuckDBSink`; skips all audit sink instantiation"
+        },
+        {
+          "actor": "`NightShiftEngine`",
+          "action": "starts with the default dispatcher; `FixPipeline.process_issue()` is called with `run_id=''`"
+        },
+        {
+          "actor": "`FixPipeline`",
+          "action": "detects empty `run_id`, skips all `emit_audit_event` calls for `SPEC_INMEMORY_CREATED` and `SPEC_AFSPEC_CREATED`"
+        },
+        {
+          "actor": "File system",
+          "action": "no `agent_*.jsonl` or `audit_*.jsonl` files are created in `.agent-fox/audit/`"
+        }
+      ]
+    },
+    {
+      "id": "04-PATH-3",
+      "title": "Unwritable audit directory: graceful degradation",
+      "steps": [
+        {
+          "actor": "Operator",
+          "action": "invokes `nightshift run --audit` on a system where `.agent-fox/audit/` is not writable"
+        },
+        {
+          "actor": "nightshift CLI",
+          "action": "calls `generate_run_id()`, stores `run_id` in `ctx.obj['audit_run_id']`, passes `audit=True` into `_run_daemon`"
+        },
+        {
+          "actor": "`_run_daemon`",
+          "action": "attempts to instantiate `AgentTraceSink(AUDIT_DIR, run_id)` or create `AUDIT_DIR`; catches the permissions or IO exception"
+        },
+        {
+          "actor": "`_run_daemon`",
+          "action": "logs a WARNING-level message describing the unwritable directory and skips attaching audit sinks"
+        },
+        {
+          "actor": "`_run_daemon`",
+          "action": "starts `NightShiftEngine` with the default `SinkDispatcher` containing only `DuckDBSink`"
+        },
+        {
+          "actor": "nightshift daemon",
+          "action": "completes the run normally with exit code 0; no audit JSONL files are created"
+        }
+      ]
+    }
+  ],
+  "error_handling": [
+    {
+      "id": "04-ERR-1",
+      "condition": "`AUDIT_DIR` is not writable or does not exist and cannot be created when `--audit` is set",
+      "behavior": "log a WARNING-level message and continue daemon startup without attaching `AgentTraceSink` or `AuditJsonlSink`; daemon exits with code 0",
+      "requirement_id": "04-REQ-2.E1"
+    },
+    {
+      "id": "04-ERR-2",
+      "condition": "`AgentTraceSink` or `AuditJsonlSink` constructor raises an exception other than a permissions error",
+      "behavior": "log a WARNING-level message with exception details, skip the failing sink, and continue daemon startup with the remaining sinks",
+      "requirement_id": "04-REQ-2.E2"
+    },
+    {
+      "id": "04-ERR-3",
+      "condition": "`emit_audit_event` raises any exception when emitting `SPEC_INMEMORY_CREATED` in `process_issue()`",
+      "behavior": "catch the exception, log at DEBUG level, and continue issue processing without re-raising",
+      "requirement_id": "04-REQ-4.E1"
+    },
+    {
+      "id": "04-ERR-4",
+      "condition": "`emit_audit_event` raises any exception when emitting `SPEC_AFSPEC_CREATED` in `_assemble_afspec_context()`",
+      "behavior": "catch the exception, log at DEBUG level, and continue context assembly without re-raising",
+      "requirement_id": "04-REQ-5.E1"
+    },
+    {
+      "id": "04-ERR-5",
+      "condition": "`render_combined(spec)` raises an exception inside the best-effort emit wrapper",
+      "behavior": "catch the exception within the try/except wrapper, log at DEBUG level, skip the `SPEC_AFSPEC_CREATED` emit, and continue `_assemble_afspec_context()` normally",
+      "requirement_id": "04-REQ-5.E3"
+    },
+    {
+      "id": "04-ERR-6",
+      "condition": "`generate_run_id()` raises an exception during CLI startup with `--audit`",
+      "behavior": "propagate the exception; the daemon does not start and exits with a non-zero exit code",
+      "requirement_id": "04-REQ-1.E1"
+    },
+    {
+      "id": "04-ERR-7",
+      "condition": "the `agent_{run_id}.jsonl` file cannot be written mid-run (e.g. disk full)",
+      "behavior": "`AgentTraceSink` logs the write failure at WARNING level and continues; the daemon does not crash",
+      "requirement_id": "04-REQ-6.E1"
+    },
+    {
+      "id": "04-ERR-8",
+      "condition": "`run_id` passed to `FixPipeline.process_issue()` is an empty string (audit disabled)",
+      "behavior": "all `emit_audit_event` call sites treat empty `run_id` as audit-disabled and skip emission without raising exceptions",
+      "requirement_id": "04-REQ-7.E1"
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "afaudit",
+      "version": "1.0.0",
+      "symbols": [
+        {
+          "name": "AgentTraceSink",
+          "import_path": "afaudit.trace",
+          "signature": "(audit_dir: Path, run_id: str)",
+          "notes": "Already implemented; writes model conversation traces to agent_{run_id}.jsonl"
+        },
+        {
+          "name": "AuditJsonlSink",
+          "import_path": "afaudit.events",
+          "signature": "(audit_dir: Path, run_id: str)",
+          "notes": "Already implemented; writes structured audit events to audit_{run_id}.jsonl"
+        },
+        {
+          "name": "SinkDispatcher.add",
+          "import_path": "afaudit.sink",
+          "signature": "(sink: SessionSink) -> None",
+          "notes": "Registers an additional sink with the dispatcher"
+        },
+        {
+          "name": "AuditEventType",
+          "import_path": "afaudit.events",
+          "signature": "StrEnum",
+          "notes": "Extend with SPEC_INMEMORY_CREATED and SPEC_AFSPEC_CREATED values"
+        },
+        {
+          "name": "emit_audit_event",
+          "import_path": "afaudit.emit",
+          "signature": "(sink, run_id, event_type, *, payload) -> None",
+          "notes": "Writes a single structured event to the dispatcher"
+        },
+        {
+          "name": "generate_run_id",
+          "import_path": "afaudit.events",
+          "signature": "() -> str",
+          "notes": "Produces a unique identifier for a daemon run"
+        },
+        {
+          "name": "AUDIT_DIR",
+          "import_path": "afaudit.constants",
+          "signature": "Path",
+          "notes": "Points to .agent-fox/audit/"
+        }
+      ]
+    },
+    {
+      "package": "afspec",
+      "version": "4.1.3",
+      "symbols": [
+        {
+          "name": "render_combined",
+          "import_path": "afspec.render",
+          "signature": "(spec: Spec, *, max_tokens: int | None = None) -> str",
+          "notes": "Renders full spec as markdown; output may be large for complex specs"
+        },
+        {
+          "name": "Spec",
+          "import_path": "afspec.models",
+          "signature": "Pydantic model",
+          "notes": "Contains requirements, test_spec, tasks, and prd fields"
+        }
+      ]
+    }
+  ]
+}
