@@ -1,6 +1,6 @@
 [project]
 name = "afaudit"
-version = "1.0.0"
+version = "1.0.1"
 description = "Audit file-writing infrastructure for agent-fox"
 requires-python = ">=3.12"
 dependencies = []

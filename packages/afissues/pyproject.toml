@@ -1,6 +1,6 @@
 [project]
 name = "afissues"
-version = "1.0.0"
+version = "1.0.1"
 description = "Standalone platform/forge abstraction layer for agent-fox"
 requires-python = ">=3.12"
 dependencies = ["httpx>=0.27"]

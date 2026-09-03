@@ -29,9 +29,9 @@ class TestPyprojectToml:
             return tomllib.load(f)
 
     def test_version_is_1_0_0(self) -> None:
-        """Version must be 1.0.0."""
+        """Version must be 1.0.1."""
         toml = self._load_toml()
-        assert toml["project"]["version"] == "1.0.0"
+        assert toml["project"]["version"] == "1.0.1"
 
     def test_requires_python(self) -> None:
         """requires-python must be >=3.12."""
