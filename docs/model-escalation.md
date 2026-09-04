@@ -71,6 +71,145 @@ model_variant = "extended"
 model_tier = "STANDARD"
 ```
 
+## Adopting a New Model
+
+Two config surfaces compose to control model selection:
+
+| Surface | What it controls |
+|---------|-----------------|
+| `[models.registry]` + `[models.tier_defaults]` | Which model ID backs each tier |
+| `[archetypes.overrides]` | Which tier and variant each archetype requests |
+
+### Step 1 — Register the new model
+
+Models not in the built-in registry must be declared before they can be used
+as tier defaults or in archetype overrides. Each entry needs a `tier` and an
+optional `variant`:
+
+```toml
+[models.registry.claude-sonnet-5]
+tier    = "SIMPLE"
+variant = "standard"
+
+[models.registry.claude-opus-5]
+tier    = "STANDARD"
+variant = "standard"
+
+[models.registry.claude-fable-5-1]
+tier    = "ADVANCED"
+variant = "standard"
+```
+
+Valid `tier` values: `SIMPLE`, `STANDARD`, `ADVANCED`.
+Valid `variant` values: `fast`, `standard`, `extended` (ordered by capability).
+
+### Step 2 — Remap tier defaults (broadest scope)
+
+After registration, redirect a whole tier so that every archetype at that
+tier picks up the new model automatically:
+
+```toml
+[models.tier_defaults]
+SIMPLE   = "claude-sonnet-5"
+STANDARD = "claude-opus-5"
+ADVANCED = "claude-fable-5-1"
+```
+
+Because archetypes select by tier (e.g., `coder` requests `STANDARD`), this
+single change upgrades every archetype in that tier with no further config.
+
+### Step 3 — Per-archetype override (medium scope)
+
+Override the tier or variant for one archetype only, leaving others unchanged:
+
+```toml
+[archetypes.overrides.coder]
+model_tier    = "ADVANCED"
+model_variant = "standard"
+effort        = "xhigh"
+
+[archetypes.overrides.reviewer]
+model_tier    = "ADVANCED"
+model_variant = "standard"
+```
+
+### Step 4 — Per-mode override (finest grain)
+
+Override a specific mode of an archetype without touching the base archetype
+config or other modes:
+
+```toml
+# Coder base stays on STANDARD, but the fix mode uses ADVANCED
+[archetypes.overrides.coder.modes.fix]
+model_tier    = "ADVANCED"
+model_variant = "standard"
+effort        = "max"
+
+# reviewer's audit-review mode is pinned to ADVANCED
+[archetypes.overrides.reviewer.modes.audit-review]
+model_tier = "ADVANCED"
+```
+
+### All available knobs
+
+Every `[archetypes.overrides.<name>]` table (and its nested
+`[archetypes.overrides.<name>.modes.<mode>]` table) accepts these fields.
+All fields are optional; omitting one inherits the archetype registry default.
+
+| Field | Valid values | Notes |
+|-------|-------------|-------|
+| `model_tier` | `SIMPLE`, `STANDARD`, `ADVANCED` | Selects the capability tier |
+| `model_variant` | `fast`, `standard`, `extended` | Selects the variant within the tier |
+| `effort` | `low`, `medium`, `high`, `xhigh`, `max` | Controls thinking depth and token spend — independent of model selection |
+| `max_turns` | integer ≥ 0 (0 = unlimited) | |
+| `thinking_mode` | `adaptive`, `disabled` | |
+| `compaction` | `true`, `false` | Enable server-side context compaction |
+| `max_budget_usd` | float ≥ 0.0 (0 = unlimited) | Per-archetype spend cap; inherits `orchestrator.max_budget_usd` if omitted |
+| `allowlist` | list of command strings | Replaces the archetype's default bash allowlist |
+
+`effort` and `model_*` are orthogonal: `effort` controls how hard the model
+thinks within a session; `model_tier`/`model_variant` control which model
+binary is selected.
+
+### Complete worked example
+
+Self-contained config for adopting a new model generation across the whole pipeline:
+
+```toml
+# 1. Register the new models
+[models.registry.claude-sonnet-5]
+tier    = "SIMPLE"
+variant = "standard"
+
+[models.registry.claude-opus-5]
+tier    = "STANDARD"
+variant = "standard"
+
+[models.registry.claude-fable-5-1]
+tier    = "ADVANCED"
+variant = "standard"
+
+# 2. Redirect tier defaults — every archetype inherits the new models
+[models.tier_defaults]
+SIMPLE   = "claude-sonnet-5"
+STANDARD = "claude-opus-5"
+ADVANCED = "claude-fable-5-1"
+
+# 3. Optional: tune individual archetypes or modes
+[archetypes.overrides.coder]
+effort = "max"              # maximum thinking depth for the coder
+
+[archetypes.overrides.coder.modes.fix]
+model_tier = "ADVANCED"    # escalate the fix mode to Fable
+
+[archetypes.overrides.gate]
+effort = "low"             # keep the gating check cheap
+```
+
+No per-archetype `model_tier`/`model_variant` lines are needed in step 3 if
+the tier-default remapping in step 2 already gives you the right model — only
+add them when one archetype needs to differ from the tier default.
+
 ## Retry Behavior
 
 When a session fails, the orchestrator applies a simple retry counter.
