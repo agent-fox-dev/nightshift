@@ -4,9 +4,9 @@ version = "1.0.1"
 description = "Core library for the Night Shift autonomous fix daemon"
 requires-python = ">=3.12"
 dependencies = [
-    "afaudit>=1.0.1",
-    "afhub>=1.0.1",
-    "afissues>=1.0.1",
+    "afaudit>=1.0.0",
+    "afhub>=1.0.0",
+    "afissues>=1.0.0",
     "afspec>=1.4.0",
     "click>=8.1",
     "pydantic>=2.13",
@@ -49,9 +49,6 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-afaudit = { workspace = true }
-afhub = { workspace = true }
-afissues = { workspace = true }
 afspec = { git = "https://github.com/agent-fox-dev/spec-format", subdirectory = "packages/afspec" }
 
 [tool.pytest.ini_options]

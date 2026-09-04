@@ -21,7 +21,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["packages/afcore/tests", "packages/afaudit/tests", "packages/afissues/tests", "packages/nightshift/tests"]
+testpaths = ["packages/afcore/tests", "packages/nightshift/tests"]
 pythonpath = ["packages/afcore"]
 asyncio_mode = "auto"
 addopts = "-n auto --dist=loadfile --timeout=15 -m 'not smoke' --import-mode=importlib"
@@ -33,13 +33,13 @@ markers = [
 ]
 
 [tool.uv.workspace]
-members = ["packages/*"]
+members = ["packages/afcore", "packages/nightshift"]
 
 [tool.uv.sources]
-afaudit = { workspace = true }
-afissues = { workspace = true }
+afaudit = { git = "https://github.com/agent-fox-dev/af-python", subdirectory = "packages/afaudit" }
+afissues = { git = "https://github.com/agent-fox-dev/af-python", subdirectory = "packages/afissues" }
+afhub = { git = "https://github.com/agent-fox-dev/af-python", subdirectory = "packages/afhub" }
 afcore = { workspace = true }
-afhub = { workspace = true }
 nightshift = { workspace = true }
 
 [tool.ruff]
