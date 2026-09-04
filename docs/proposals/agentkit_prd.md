@@ -1,9 +1,9 @@
-# AgentKit: A Dependency-Free Agent SDK for Python and Go
+# AgentKit: A Dependency-Free Agent SDK for Go
 
 **Author:** [Platform Engineering]
 **Date:** 2026-09-03
 **Status:** Draft
-**Version:** 0.1.0
+**Version:** 0.2.0
 
 ---
 
@@ -25,15 +25,29 @@
 
 ### Overview
 
-AgentKit is a lightweight, dependency-free Agent SDK that gives developers direct, transparent control over the full agentic stack. It provides a production-grade agent loop, a unified tool system, a skills packaging format, a plugin extension model, and bidirectional MCP (Model Context Protocol) support — all without wrapping external frameworks such as LangChain, Google ADK, or the Claude Code CLI. First-class implementations are provided in both Python (asyncio-native) and Go (goroutine-native) with a comparable public API surface in each language.
+AgentKit is a lightweight, dependency-free Go library that gives developers direct, transparent control over the full agentic stack. It provides a production-grade agent loop, a unified tool system, a skills packaging format, a plugin extension model, and bidirectional MCP (Model Context Protocol) support — all without wrapping external frameworks such as LangChain, Google ADK, or the Claude Code CLI.
 
-AgentKit is not a platform, not a cloud service, and not a visual builder. It is a library — a set of composable interfaces that a developer imports, wires together, and controls directly. Every meaningful behavior in AgentKit is expressed in ordinary code that a developer can read, step through with a debugger, and override.
+AgentKit is a library, not a product. It has no binary, no daemon, no CLI of its own. It is `import`ed by tools that need agentic capabilities — tools like nightshift (an issue-triage CLI) or hub (an API gateway) — and those tools own the user-facing interface. Every meaningful behavior in AgentKit is expressed in ordinary Go code that a developer can read, step through with a debugger, and override.
+
+### Positioning
+
+AgentKit sits **below** end-user tools in the stack, not beside them:
+
+```
+Claude Code / nightshift / hub / your-tool
+         ↓  (imports)
+       AgentKit
+         ↓  (calls)
+  Anthropic / OpenAI / Gemini / OpenRouter / Ollama
+```
+
+AgentKit does not compete with Claude Code, the Anthropic CLI, or any end-user agent product. It is the foundation those products could be built on — or that teams embed when building their own. A nightshift binary that uses AgentKit is still nightshift; AgentKit is invisible to the end user.
 
 ### Motivation
 
 Existing agent frameworks each impose non-trivial abstraction taxes. The Claude Agent SDK shells out to a closed-source Bun-compiled binary rather than calling the Anthropic Messages API directly. Google ADK is a large, opinionated framework with deep coupling to Google Cloud services and no Go implementation. LangChain/LangGraph carries a layered package ecosystem and a state-machine DSL that must be learned before simple tool-calling works.
 
-AgentKit eliminates that overhead by calling model provider APIs directly, owning the loop explicitly, and exposing every extension point through small, composable interfaces. The loop is six lines of logic. The tool system is a dataclass with a callable. The extension system is three orthogonal axes: middleware, turn hooks, and tool interceptors. Nothing is hidden inside a subprocess or a graph engine.
+AgentKit eliminates that overhead by calling model provider APIs directly, owning the loop explicitly, and exposing every extension point through small, composable interfaces. The loop is six lines of logic. The tool system is a struct with a handler function. The extension system is three orthogonal axes: middleware, turn hooks, and tool interceptors. Nothing is hidden inside a subprocess or a graph engine.
 
 The core insight behind AgentKit is that the agentic loop is not complex — it is a while loop with a switch statement. What the existing frameworks actually provide is tooling around that loop: retries, compaction, streaming, observability, multi-agent coordination, and secure tool execution. AgentKit provides all of that tooling as transparent, composable components rather than as opaque framework internals.
 
@@ -67,7 +81,6 @@ Tool registration alone has multiple partially-overlapping patterns: the `@tool`
 |---|---|---|---|---|
 | Direct provider API calls, no subprocess | No (shells to CLI) | Yes | Yes | Yes |
 | Explicit, readable agent loop | No (inside binary) | Partial (graph engine) | Partial (LangGraph) | Yes |
-| Python first-class | Yes | Yes | Yes | Yes |
 | Go first-class | No | No (alpha) | No | Yes |
 | Anthropic provider | Yes (via CLI) | Via LiteLLM | Via langchain-anthropic | Yes (native) |
 | OpenAI provider | Via CLI | Via LiteLLM | Yes (native) | Yes (native) |
@@ -91,7 +104,7 @@ No existing SDK simultaneously satisfies all seven requirements. AgentKit is bui
 
 ### Goals
 
-**G1 — Complete agentic loop, both languages.** Implement the full loop (call model, dispatch tools, loop until stop) in Python and Go with no dependency on external agent frameworks.
+**G1 — Embeddable agentic loop.** Implement the full loop (call model, dispatch tools, loop until stop) in Go as an importable library, with no binary entrypoint of its own and no dependency on external agent frameworks. The canonical consumers are tools like nightshift and hub that `import` AgentKit and expose their own CLI/API surface to users.
 
 **G2 — Provider abstraction.** Abstract Anthropic Messages API, OpenAI Chat Completions API, Google Gemini API, OpenRouter, and Ollama behind a thin `ProviderClient` interface. Provider-specific types must not appear in agent logic. All five providers are first-class — not adapters or workarounds.
 
@@ -99,15 +112,15 @@ No existing SDK simultaneously satisfies all seven requirements. AgentKit is bui
 
 **G3 — Built-in local tool library.** Provide file read/write/edit/delete/move/find/stat/append, grep (with ripgrep acceleration), shell command execution (with allowlist enforcement), and SSRF-protected HTTP fetch.
 
-**G4 — Skills packaging format.** Define a TOML manifest + Markdown prompt file + optional Python tools module format, with a discovery/loading pipeline across SDK-built-in, user-global, and project-local directories.
+**G4 — Skills packaging format.** Define a TOML manifest + Markdown prompt file + optional tool plugin format, with a discovery/loading pipeline across SDK-built-in, user-global, and project-local directories.
 
-**G5 — Plugin extension model.** Define four plugin categories (backend, tool provider, storage, event hook) via Protocol interfaces, discoverable via Python entry points and local plugin directories.
+**G5 — Plugin extension model.** Define four plugin categories (backend, tool provider, storage, event hook) via Go interfaces, discoverable via plugin.toml manifests in configured directories.
 
-**G6 — MCP client support.** Consume MCP servers as tool providers using the official `mcp` Python SDK, exposing them through the same unified tool registry as native tools, with stdio and streamable-HTTP transports.
+**G6 — MCP client support.** Consume MCP servers as tool providers using the mcp-go library (`github.com/mark3labs/mcp-go`), exposing them through the same unified tool registry as native tools, with stdio and streamable-HTTP transports.
 
 **G7 — MCP server support.** Optionally expose AgentKit capabilities as an MCP server consumable by Claude Desktop, Claude Code, and other MCP hosts.
 
-**G8 — Two-level streaming.** Provide token-level text deltas and tool-call lifecycle events via `AsyncIterator` in Python and channel-based `EventStream` in Go.
+**G8 — Two-level streaming.** Provide token-level text deltas and tool-call lifecycle events via channel-based `EventStream`.
 
 **G9 — Three orthogonal extension axes.** Support middleware (wraps `complete()` calls), turn hooks (lifecycle callbacks), and tool interceptors (wraps individual tool executions).
 
@@ -125,39 +138,41 @@ No existing SDK simultaneously satisfies all seven requirements. AgentKit is bui
 
 **NG5** — AgentKit does not implement a vector database or embedding store; it may define a protocol for a pluggable knowledge store but does not ship one.
 
-**NG6** — The Go implementation does not need to be a mechanical translation of the Python code. Go-idiomatic patterns (goroutines, channels, explicit interfaces, manual JSON Schema literals) are preferred.
+**NG6** — MCP Resources and MCP Prompts are not in scope for the initial client release. Only MCP Tools are consumed. Resources and Prompts may be added in a future release.
 
-**NG7** — MCP Resources and MCP Prompts are not in scope for the initial client release. Only MCP Tools are consumed. Resources and Prompts may be added in a future release.
+**NG7** — AgentKit does not provide a graphical agent builder or visual workflow editor.
 
-**NG8** — AgentKit does not provide a graphical agent builder or visual workflow editor.
+**NG8** — AgentKit is not a replacement for, nor a competitor to, Claude Code, the Anthropic CLI, nightshift, hub, or any end-user agent tool. It is the layer those tools embed. AgentKit has no user-facing CLI of its own; it exposes Go package APIs only.
+
+**NG9** — AgentKit is not a distribution mechanism for AI capabilities. It does not ship models, manage API subscriptions, or provide a marketplace. Teams that need to expose AgentKit-powered agents to end users must build their own CLI, service, or integration on top of it.
 
 ---
 
 ## 4. User Personas
 
-### Persona A: Platform Engineer (Python)
+### Persona A: Platform Engineer (Go)
 
-Builds internal automation tooling for an engineering organization. Writes Python asyncio services. Wants to add agentic capabilities to an existing service without adopting a heavyweight framework. Needs direct control over retry logic, cost tracking, and context compaction to stay within budget. Will register custom tools against internal APIs. Will write skills to encode company-specific coding standards. Evaluates the SDK by reading the agent loop source code directly — if the loop is opaque, the SDK is disqualified.
+Builds internal automation tooling for an engineering organization. Maintains Go services and wants to add agentic capabilities to an existing Go service without adopting a heavyweight framework or introducing a runtime dependency on an interpreter. Needs direct control over retry logic, cost tracking, and context compaction to stay within budget. Will register custom tools against internal APIs. Will write skills to encode company-specific coding standards. Evaluates the SDK by reading the agent loop source code directly — if the loop is opaque, the SDK is disqualified.
 
-**Key needs:** Composable middleware for retries and budget gates; sync and async variants of the Agent class; clean separation between session configuration and system prompt; observable cost per turn.
+**Key needs:** Composable middleware for retries and budget gates; Go-native `context.Context` integration throughout the agent loop; clean separation between session configuration and system prompt; observable cost per turn.
 
 ### Persona B: Backend Engineer (Go)
 
-Maintains a Go service that processes engineering issues at scale. Needs to embed agent capabilities in the same process as the Go service without introducing a Python runtime dependency or spawning subprocess agents. Requires a Go-native interface with goroutine-safe concurrent tool execution and `context.Context` cancellation propagation. Will use the Anthropic provider. Will not use the skills system initially — primarily needs the core loop and tool registration.
+Maintains a Go service that processes engineering issues at scale. Needs to embed agent capabilities in the same process as the Go service without introducing a runtime dependency or spawning subprocess agents. Requires a Go-native interface with goroutine-safe concurrent tool execution and `context.Context` cancellation propagation. Will use the Anthropic provider. Will not use the skills system initially — primarily needs the core loop and tool registration.
 
 **Key needs:** Zero required external dependencies beyond stdlib and mcp-go; explicit JSON Schema literals for tool registration; typed sentinel errors for programmatic error handling; channel-based streaming.
 
 ### Persona C: AI Application Developer
 
-Building a multi-agent product where one orchestrator delegates to multiple specialist agents. Needs subagent delegation via the tool-as-agent pattern, parallel execution of child agents, and budget propagation across delegation boundaries. Needs streaming events to drive a UI showing tool calls and partial text in real time. Will use both Python (for agent logic) and potentially Go (for an API server hosting the agent). Will leverage MCP to integrate third-party tools (GitHub, filesystem, database) without writing custom tool implementations.
+Building a multi-agent product where one orchestrator delegates to multiple specialist agents. Needs subagent delegation via the tool-as-agent pattern, parallel execution of child agents via `errgroup`, and budget propagation across delegation boundaries via `context.Context` values. Needs streaming events to drive a UI showing tool calls and partial text in real time. Will leverage MCP to integrate third-party tools (GitHub, filesystem, database) without writing custom tool implementations.
 
-**Key needs:** `SubagentTool` delegation wrapper; `asyncio.gather` parallel subagent execution; `BudgetTracker` propagation via `contextvars`; `AgentDoneEvent` / `ToolCallStartEvent` in the streaming taxonomy; MCP server pool with qualified tool names.
+**Key needs:** `SubagentTool` delegation wrapper; `errgroup` parallel subagent execution; `BudgetTracker` propagation via `context.Context`; `AgentDoneEvent` / `ToolCallStartEvent` in the streaming taxonomy; MCP server pool with qualified tool names.
 
 ### Persona D: SDK Integrator
 
-Maintains a plugin that adds a new capability domain (Kubernetes tooling, Slack integration) to AgentKit deployments. Publishes the plugin as a pip package with a Python entry point. The plugin registers a `ToolProviderPlugin` returning callables and an `EventHookPlugin` logging all tool calls to an external observability platform. Needs the plugin protocol to be stable and the private-API blocklist to be clearly documented so they do not accidentally depend on internal modules that may change.
+Maintains a plugin that adds a new capability domain (Kubernetes tooling, Slack integration) to AgentKit deployments. Publishes the plugin as a Go module with a registered plugin factory. The plugin registers a `ToolProviderPlugin` returning tool handlers and an `EventHookPlugin` logging all tool calls to an external observability platform. Needs the plugin interface to be stable and the private-API blocklist to be clearly documented so they do not accidentally depend on internal packages that may change.
 
-**Key needs:** Stable `Protocol` interfaces for all four plugin categories; entry-point discovery via `afcore.plugins` group; `PLUGIN_DEPS` declaration for local plugins; `nightshift --validate-plugins` command to check conformance without starting the daemon.
+**Key needs:** Stable Go interfaces for all four plugin categories; plugin.toml manifest-based discovery in configured directories; `nightshift --validate-plugins` command to check conformance without starting the daemon.
 
 ---
 
@@ -195,8 +210,8 @@ AgentKit defines a canonical content block type system that is provider-independ
 | Type | Fields |
 |---|---|
 | `AgentConfig` | `model`, `provider`, `max_tokens`, `max_turns`, `temperature`, `system_prompt`, `max_budget_usd` |
-| `Tool` | `name`, `description`, `input_schema` (JSON Schema), `handler`, `is_async`, `strict` |
-| `Message` | `role` (`"user"` or `"assistant"`), `content: list[ContentBlock]` |
+| `Tool` | `name`, `description`, `input_schema` (JSON Schema), `handler`, `strict` |
+| `Message` | `role` (`"user"` or `"assistant"`), `content []ContentBlock` |
 | `ContentBlock` | Union of `TextBlock`, `ToolUseBlock`, `ToolResultBlock`, `ThinkingBlock` |
 | `RunResult` | `messages`, `stop_reason`, `usage`, `turn_count` |
 | `Usage` | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd` |
@@ -225,7 +240,7 @@ Three orthogonal extension axes are defined, each with a distinct scope:
 | Skill | Agent behavior — prompt additions and tools | Session | Domain experts |
 | Plugin | SDK runtime infrastructure | Framework-wide | Third-party integrators |
 
-The `steering.md` convention used in the existing nightshift codebase is a degenerate always-on skill with no manifest. Skills target specific archetypes; plugins are framework-wide. Skill Python code (`tools.py`) is sandboxed: it cannot import `afcore.session`, any LLM client library, or model API packages.
+The `steering.md` convention used in the existing nightshift codebase is a degenerate always-on skill with no manifest. Skills target specific archetypes; plugins are framework-wide. Skill plugin code is sandboxed: it may not import internal agentkit packages, any LLM client library, or model API packages.
 
 ---
 
@@ -237,15 +252,15 @@ The `steering.md` convention used in the existing nightshift codebase is a degen
 - **REQ-LOOP-02:** All tool_result blocks from a single model turn must be collected into a single user message. The SDK must never split them across turns.
 - **REQ-LOOP-03:** Tool handler exceptions must be caught and converted to `ToolResultBlock(is_error=True)`. The loop continues rather than aborting.
 - **REQ-LOOP-04:** Stop conditions must be checked in the priority order: `end_turn/stop_sequence` > `max_tokens` > `refusal` > `max_turns` > `budget_exceeded`.
-- **REQ-LOOP-05:** Parallel tool execution is supported and opt-in via `AgentConfig.parallel_tools=True`. In Python, `asyncio.gather` is used. In Go, `errgroup` with per-tool goroutines is used.
-- **REQ-LOOP-06:** Both `AsyncAgent` and `Agent` (sync wrapper) are provided in Python. In Go, a single `Agent` type suffices.
+- **REQ-LOOP-05:** Parallel tool execution is supported and opt-in via `AgentConfig.parallel_tools=true`. In Go, `errgroup` with per-tool goroutines is used.
+- **REQ-LOOP-06:** In Go, a single `Agent` type suffices. There is no sync/async distinction.
 - **REQ-LOOP-07:** The loop accepts a `max_turns` limit (default configurable) and raises `MaxTurnsError` when exceeded.
 - **REQ-LOOP-08:** The loop accepts a `max_budget_usd` limit and raises `BudgetExceededError` when cumulative cost exceeds it.
-- **REQ-LOOP-09:** The loop supports context cancellation (`asyncio.CancelledError` in Python, `context.Context` in Go) that cleanly terminates mid-turn without corrupting history state.
+- **REQ-LOOP-09:** The loop supports context cancellation via `context.Context` that cleanly terminates mid-turn without corrupting history state.
 
 ### 6.2 Model Provider Abstraction
 
-- **REQ-PROV-01:** A `ProviderClient` Protocol/interface with a single required method: `complete(messages, tools, config) -> CompleteResponse`.
+- **REQ-PROV-01:** A `ProviderClient` interface with a single required method: `complete(messages, tools, config) -> CompleteResponse`.
 - **REQ-PROV-02:** Five first-class provider implementations:
   - **Anthropic** — Messages API; models: `claude-opus-4`, `claude-sonnet-4-5`, `claude-haiku-4-5` and any future `claude-*` IDs (model string passed through unchanged). Supports `cache_control` headers for prompt caching, streaming, server-side compaction (`compact-2026-01-12` beta).
   - **OpenAI** — Chat Completions API; models: `gpt-4o`, `gpt-4o-mini`, `o1`, `o3`, `o4-mini` and any `gpt-*` / `o*` IDs. Supports `store: true` for prompt caching and the Responses API for multi-turn state where available.
@@ -253,7 +268,7 @@ The `steering.md` convention used in the existing nightshift codebase is a degen
   - **OpenRouter** — OpenAI-compatible endpoint at `https://openrouter.ai/api/v1`; any model string OpenRouter exposes (e.g. `anthropic/claude-opus-4`, `google/gemini-2.5-pro`, `meta-llama/llama-4-maverick`). Provider accepts `base_url` and `api_key` overrides. Passes `HTTP-Referer` and `X-Title` headers per OpenRouter convention. Caching behaviour depends on the underlying model; `cache_read_tokens` propagated where exposed.
   - **Ollama** — Native Ollama REST API (`/api/chat`) at a configurable `base_url` (default `http://localhost:11434`); any model pulled locally (e.g. `llama3.3`, `qwen2.5-coder`, `mistral-small3.2`). Supports streaming via NDJSON chunks. No prompt caching at the provider level; request-level deduplication cache applies. Tool calling requires a model that supports it (Ollama `tools` field).
 - **REQ-PROV-03:** Each provider translates canonical `Message`/`ContentBlock` types to and from the provider wire format. No provider-specific types in agent logic.
-- **REQ-PROV-04:** Each provider implements a streaming variant: `stream_complete()` returning an async generator of canonical `StreamEvent` objects.
+- **REQ-PROV-04:** Each provider implements a streaming variant: `StreamComplete()` returning a channel-based `EventStream` of canonical `StreamEvent` objects.
 - **REQ-PROV-05:** Each provider populates `Usage` on every response, including `cache_read_tokens` and `cache_write_tokens` where the provider exposes them. Providers that do not expose cache token counts set these fields to zero.
 - **REQ-PROV-06:** Built-in `RetryMiddleware` handles transient errors (HTTP 429, 500, 502, 503) with exponential backoff.
 - **REQ-PROV-07:** The Anthropic provider supports the server-side compaction mechanism (`compact-2026-01-12` beta): compaction blocks from the response are passed back unchanged in subsequent turns.
@@ -277,115 +292,114 @@ Each provider with native prompt caching is configured automatically:
 **Level 2 — Request-level deduplication (in-process, zero-latency hit)**
 
 - **REQ-CACHE-01:** `CachingMiddleware` maintains a bounded LRU cache of `complete()` request fingerprints → `CompleteResponse`. Fingerprint is a SHA-256 hash of: serialised messages, serialised tool schemas, model ID, temperature. Identical requests within the session window return the cached response without a network call.
-- **REQ-CACHE-02:** Cache is scoped per `Session` by default. An optional shared `CacheStore` (in-memory `dict` or a user-supplied store implementing the `CacheStore` Protocol) allows cross-session sharing for workloads that reuse a large common prefix (e.g. a fixed system prompt + tool list).
-- **REQ-CACHE-03:** Maximum cache size defaults to 128 entries per store, configurable via `CachingMiddleware(max_size=N)`. Eviction policy: LRU.
-- **REQ-CACHE-04:** Cached responses are not returned when `temperature > 0` unless `CachingMiddleware(ignore_temperature=True)` is set — non-deterministic responses should not be replayed.
+- **REQ-CACHE-02:** Cache is scoped per `Session` by default. An optional shared `CacheStore` (in-memory map or a user-supplied store implementing the `CacheStore` interface) allows cross-session sharing for workloads that reuse a large common prefix (e.g. a fixed system prompt + tool list).
+- **REQ-CACHE-03:** Maximum cache size defaults to 128 entries per store, configurable via `CacheOptions{MaxSize: N}` on `CachingMiddleware`. Eviction policy: LRU.
+- **REQ-CACHE-04:** Cached responses are not returned when `temperature > 0` unless `CachingMiddleware` is configured with `IgnoreTemperature: true` — non-deterministic responses should not be replayed.
 - **REQ-CACHE-05:** Every cache hit emits a `CacheHitEvent` observable via turn hooks. Every cache miss emits a `CacheMissEvent`. Both include the fingerprint and tier (`"request_dedup"`).
 
 **Level 3 — Tool schema caching (in-process, eliminates repeated serialization)**
 
 - **REQ-CACHE-06:** The canonical `Tool` list is serialized to provider wire format once per session when the tool set is first used, then stored on the session. Subsequent turns reuse the cached serialized form. The cache is invalidated when the tool list changes (tools added or removed at runtime).
-- **REQ-CACHE-07:** MCP tool lists are cached per `MCPServerConnection` and refreshed only on `notifications/tools/list_changed` MCP notification or on explicit `connection.refresh_tools()` call.
+- **REQ-CACHE-07:** MCP tool lists are cached per `MCPServerConnection` and refreshed only on `notifications/tools/list_changed` MCP notification or on explicit `connection.RefreshTools()` call.
 
 **Observability**
 
-- **REQ-CACHE-08:** `Session.cache_stats()` returns `{hits: int, misses: int, provider_cache_read_tokens: int, provider_cache_write_tokens: int, estimated_savings_usd: float}` aggregated across all levels for the session lifetime.
+- **REQ-CACHE-08:** `Session.CacheStats()` returns `{hits: int, misses: int, provider_cache_read_tokens: int, provider_cache_write_tokens: int, estimated_savings_usd: float}` aggregated across all levels for the session lifetime.
 - **REQ-CACHE-09:** `TracingMiddleware` adds `cache.hit`, `cache.tier`, `cache.fingerprint` as span attributes on every model call span when a cache hit occurs.
 
 ### 6.3 Tool System — Built-in and Custom
 
-- **REQ-TOOL-01:** A `Tool` dataclass/struct with: `name`, `description`, `input_schema` (JSON Schema), `handler`, `is_async` (inferred in Python), `strict`.
-- **REQ-TOOL-02:** Python schema inference from PEP 484 annotations and docstrings for `@tool` decorator. Go callers provide JSON Schema literals.
+- **REQ-TOOL-01:** A `Tool` struct with: `name`, `description`, `input_schema` (JSON Schema), `handler`, `strict`.
+- **REQ-TOOL-02:** Go callers provide JSON Schema literals as `json.RawMessage`. An optional `agentkit-schemagen` code-gen tool reads struct tags and emits schema constants as a build step.
 - **REQ-TOOL-03:** All tool handlers invoked via a unified dispatch path that catches panics/exceptions and produces `tool_result(is_error=True)`.
 
 **REQ-TOOL-04 — File system tools:**
 
 | Tool | Inputs | Output |
 |---|---|---|
-| `read_file` | `path: str, offset: int = 0, limit: int \| None = None` | `{content: str, encoding: str}` |
-| `write_file` | `path: str, content: str` | `{written: true, bytes: int}` |
-| `edit_file` | `path: str, old_string: str, new_string: str` | `{replaced: int}` |
-| `delete_file` | `path: str` | `{deleted: true}` |
-| `move_file` | `src: str, dst: str` | `{moved: true}` |
-| `find_files` | `pattern: str, path: str = ".", file_type: str = "file", max_results: int = 200` | `{files: list[str], truncated: bool}` |
-| `stat_file` | `path: str` | `{size_bytes: int, mtime_iso: str, is_dir: bool, is_symlink: bool}` |
-| `append_file` | `path: str, content: str` | `{appended: true, bytes: int}` |
-| `list_files` | `path: str, max_entries: int = 1000` | `{entries: list[str], truncated: bool}` |
+| `read_file` | `path string, offset int (default 0), limit int (optional)` | `{content: string, encoding: string}` |
+| `write_file` | `path string, content string` | `{written: true, bytes: int}` |
+| `edit_file` | `path string, old_string string, new_string string` | `{replaced: int}` |
+| `delete_file` | `path string` | `{deleted: true}` |
+| `move_file` | `src string, dst string` | `{moved: true}` |
+| `find_files` | `pattern string, path string (default "."), file_type string (default "file"), max_results int (default 200)` | `{files []string, truncated: bool}` |
+| `stat_file` | `path string` | `{size_bytes: int, mtime_iso: string, is_dir: bool, is_symlink: bool}` |
+| `append_file` | `path string, content string` | `{appended: true, bytes: int}` |
+| `list_files` | `path string, max_entries int (default 1000)` | `{entries []string, truncated: bool}` |
 
 **REQ-TOOL-05 — Search tool:**
 
-`search_files(pattern, path, *, context_lines=0, file_glob=None, case_sensitive=True, max_matches=500)` returns:
+`search_files(pattern, path, context_lines int (default 0), file_glob string (optional), case_sensitive bool (default true), max_matches int (default 500))` returns:
 ```json
 {
   "matches": [
-    {"file": "src/foo.py", "line": 42, "text": "    def foo(self):", "before": [], "after": []}
+    {"file": "src/foo.go", "line": 42, "text": "    func Foo() {", "before": [], "after": []}
   ],
   "truncated": false,
   "files_searched": 87
 }
 ```
-Implemented as `grep_files`, accelerated by shelling out to `rg --json` if available, falling back to Python `re`. The `rg` call is internal to the tool implementation — it does not pass through the bash allowlist.
+Implemented as `grep_files`, accelerated by shelling out to `rg --json` if available, falling back to the Go standard library `regexp` package. The `rg` call is internal to the tool implementation — it does not pass through the bash allowlist.
 
-**REQ-TOOL-06 — Shell tools:** `execute(command: str)` with mandatory `AllowlistPolicy`, shell operator rejection, mandatory timeout (default 120s), `stdin=DEVNULL`, `cwd` fixed to workspace root. `run_command(argv: list[str])` variant with `shell=False` for structured invocation.
+**REQ-TOOL-06 — Shell tools:** `execute(command string)` with mandatory `AllowlistPolicy`, shell operator rejection, mandatory timeout (default 120s), `stdin=DEVNULL`, `cwd` fixed to workspace root. `run_command(argv []string)` variant for structured invocation without shell interpolation.
 
-**REQ-TOOL-07 — HTTP tool:** `fetch_url(url, *, method="GET", headers=None, body=None, timeout_s=30.0)` with `SSRFGuardTransport` (blocks private/loopback/link-local IPs at DNS and TCP time), HTTPS-only by default, 512 KB response cap, 5-hop redirect limit with per-hop SSRF re-validation, optional HTML-to-text extraction.
+**REQ-TOOL-07 — HTTP tool:** `fetch_url(url string, method string (default "GET"), headers map[string]string (optional), body string (optional), timeout_s float (default 30.0))` with `SSRFGuardTransport` (blocks private/loopback/link-local IPs at DNS and TCP time), HTTPS-only by default, 512 KB response cap, 5-hop redirect limit with per-hop SSRF re-validation, optional HTML-to-text extraction.
 
-**REQ-TOOL-08 — Output envelope:** All built-in tools return a `ToolResult` dataclass:
-```python
-@dataclass(frozen=True)
-class ToolResult:
-    ok: bool
-    data: dict[str, Any]
-    error: str | None = None
-    detail: str | None = None
-    metadata: ToolMetadata | None = None
+**REQ-TOOL-08 — Output envelope:** All built-in tools return a `ToolResult` struct:
+```go
+type ToolResult struct {
+    OK       bool            `json:"ok"`
+    Data     map[string]any  `json:"data"`
+    Error    string          `json:"error,omitempty"`
+    Detail   string          `json:"detail,omitempty"`
+    Metadata *ToolMetadata   `json:"metadata,omitempty"`
+}
 ```
-`to_llm_dict()` strips metadata. Providers receive only the payload.
+`ToLLMMap()` strips metadata. Providers receive only the payload.
 
-**REQ-TOOL-09 — Size limits:** `read_file` defaults to 200 KB. `search_files` caps at 500 matches. `list_files` caps at 1000 entries. `execute` captures up to 64 KB stdout and 64 KB stderr. Truncated output sets `metadata.truncated=True` with a marker line.
+**REQ-TOOL-09 — Size limits:** `read_file` defaults to 200 KB. `search_files` caps at 500 matches. `list_files` caps at 1000 entries. `execute` captures up to 64 KB stdout and 64 KB stderr. Truncated output sets `metadata.truncated=true` with a marker line.
 
 ### 6.4 Multi-Agent and Subagent Support
 
-- **REQ-MULTI-01:** Delegation is implemented as tool use. `SubagentTool` wraps an `Agent` instance; its handler calls `child_agent.run(prompt)` and returns the text result as a `tool_result` string.
+- **REQ-MULTI-01:** Delegation is implemented as tool use. `SubagentTool` wraps an `Agent` instance; its handler calls `child_agent.Run(ctx, prompt)` and returns the text result as a `tool_result` string.
 - **REQ-MULTI-02:** Child agents always start with fresh, empty history. Sharing parent history with a child is prohibited — it creates prompt injection risk and inflates context.
-- **REQ-MULTI-03:** Budget propagation: before delegating, the parent passes a budget slice to the child (`child.config.max_budget_usd = parent.budget.remaining() * fraction`). The child enforces its own budget independently.
-- **REQ-MULTI-04:** In Python, budget context propagation uses `contextvars.ContextVar[BudgetTracker]` so child agents inherit the tracker without explicit passing.
-- **REQ-MULTI-05:** Parallel delegation is safe by construction (each child is an independent value). `asyncio.gather` in Python, `errgroup` in Go.
-- **REQ-MULTI-06:** Agent definitions (name, description, system prompt, tool allowlist, model) are registerable by name so the parent model can invoke a named specialist by name as a tool call.
+- **REQ-MULTI-03:** Budget propagation: before delegating, the parent passes a budget slice to the child (`child.config.max_budget_usd = parent.budget.Remaining() * fraction`). The child enforces its own budget independently.
+- **REQ-MULTI-04:** Parallel delegation is safe by construction (each child is an independent value). `errgroup` in Go.
+- **REQ-MULTI-05:** Agent definitions (name, description, system prompt, tool allowlist, model) are registerable by name so the parent model can invoke a named specialist by name as a tool call.
 
 ### 6.5 Skills System
 
 - **REQ-SKILL-01:** A skill is a packaged, reusable agent behavior unit combining system prompt additions, tool set overrides, trigger conditions, and metadata.
-- **REQ-SKILL-02:** Skill directory layout: `skill.toml` (manifest), `prompt.md` (system prompt additions), `tools.py` (optional), `README.md` (optional).
+- **REQ-SKILL-02:** Skill directory layout: `skill.toml` (manifest), `prompt.md` (system prompt additions), optional Go plugin module, `README.md` (optional).
 - **REQ-SKILL-03:** Manifest fields: `name`, `version`, `description`, `author`, `sdk_min_version`, `archetypes`, `injection` (`'always'|'on_demand'|'keyword'`), `keywords`, `prompt_file`, `prompt_position` (`'pre'|'post'|'replace_section'`), `[skill.tools]` module+factory, `[skill.security]` allowlist_extend, `[skill.session]` max_turns_add, `[skill.subagent]` archetype+mode+prompt_template+result_key.
-- **REQ-SKILL-04:** Discovery searches three locations in priority order: SDK built-in (`afcore/_skills/`), user global (`~/.nightshift/skills/`), project (``.nightshift/skills/``). Project-level takes precedence.
-- **REQ-SKILL-05:** `SkillRegistry.load_for_session(archetype, task_prompt, config)` returns the ordered list of skills to inject, applying archetype filter and injection mode filter.
-- **REQ-SKILL-06:** Prompt injection applied inside `session.py` before `backend.execute()`. Pre-position injections are prepended; post-position injections are appended; separated by `---` dividers.
+- **REQ-SKILL-04:** Discovery searches three locations in priority order: SDK built-in (`agentkit/_skills/`), user global (`~/.nightshift/skills/`), project (`.nightshift/skills/`). Project-level takes precedence.
+- **REQ-SKILL-05:** `SkillRegistry.LoadForSession(archetype, taskPrompt, config)` returns the ordered list of skills to inject, applying archetype filter and injection mode filter.
+- **REQ-SKILL-06:** Prompt injection applied inside `session.go` before `backend.Execute()`. Pre-position injections are prepended; post-position injections are appended; separated by `---` dividers.
 - **REQ-SKILL-07:** Tool registrations from skills are merged with the session's base tool list. Name collisions raise `SkillConflictError` unless one skill declares `overrides`.
-- **REQ-SKILL-08:** Skill subagent spawning is declarative only. The session runner spawns the subagent session, waits for the result, and injects the result text into the main session's system prompt. Skill Python code may not directly call `session.py` or any backend.
-- **REQ-SKILL-09:** Skill Python code (`tools.py`) is sandboxed: no imported module names may contain `'claude'`, `'anthropic'`, `'openai'`, `'google.adk'`, or `'afcore.session'`. Violations reject the skill at load time.
-- **REQ-SKILL-10:** Skill manifests are parsed and validated with Pydantic (strict unknown-key rejection).
+- **REQ-SKILL-08:** Skill subagent spawning is declarative only. The session runner spawns the subagent session, waits for the result, and injects the result text into the main session's system prompt. Skill plugin code may not directly invoke internal session or backend packages.
+- **REQ-SKILL-09:** Skill plugin code is restricted at load time: plugins may not import internal agentkit packages (`agentkit/internal/...`), any LLM client library, or model API packages. Violations reject the skill at load time.
+- **REQ-SKILL-10:** Skill manifests are parsed and validated using strict TOML decoding with unknown-key rejection.
 - **REQ-SKILL-11:** Every loaded skill name is recorded in the session's audit event.
 
 ### 6.6 Plugin System
 
 - **REQ-PLUGIN-01:** Four plugin categories: `BackendPlugin`, `ToolProviderPlugin`, `StoragePlugin`, `EventHookPlugin`.
-- **REQ-PLUGIN-02:** Each category defines a `Protocol` with `runtime_checkable`. `EventHookPlugin.on_tool_use(tool_name, tool_input, ctx) -> 'allow' | 'block' | None`.
-- **REQ-PLUGIN-03:** All `EventHookPlugin` methods have default no-op implementations.
-- **REQ-PLUGIN-04:** Event hooks execute in registration order. The first hook returning `'block'` from `on_tool_use` wins. Security allowlist check runs before hooks — hooks cannot forge allow decisions for allowlist-blocked commands.
-- **REQ-PLUGIN-05:** Discovery via Python entry points (`afcore.plugins` group) and local plugin directories (`[plugins] paths` in config.toml).
-- **REQ-PLUGIN-06:** Loading order: built-in SDK components, entry-point plugins (alphabetical by package name), local plugins last. Name collision: later registration wins with a warning.
+- **REQ-PLUGIN-02:** Each category defines a Go interface. `EventHookPlugin.OnToolUse(toolName string, toolInput json.RawMessage, ctx context.Context) string` returns `"allow"`, `"block"`, or `""` (no opinion).
+- **REQ-PLUGIN-03:** All `EventHookPlugin` methods have default no-op implementations via an embedded base struct.
+- **REQ-PLUGIN-04:** Event hooks execute in registration order. The first hook returning `"block"` from `OnToolUse` wins. Security allowlist check runs before hooks — hooks cannot forge allow decisions for allowlist-blocked commands.
+- **REQ-PLUGIN-05:** Discovery via plugin.toml manifests in explicitly configured directories (`[plugins] paths` in config.toml).
+- **REQ-PLUGIN-06:** Loading order: built-in SDK components, manifest-declared plugins (alphabetical by name), local plugins last. Name collision: later registration wins with a warning.
 - **REQ-PLUGIN-07:** `[plugins] disabled` list allows opt-out by name.
-- **REQ-PLUGIN-08:** Local plugins may declare `PLUGIN_DEPS = [...]` as PEP 508 requirement strings. Missing or version-mismatched dependencies skip the plugin with a warning.
-- **REQ-PLUGIN-09:** Plugin code may not import private `afcore` module paths (`afcore.session.backends`, `afcore.engine.*`). Violations reject the plugin at load time.
-- **REQ-PLUGIN-10:** `nightshift --validate-plugins` loads all configured plugins, runs protocol conformance checks, and reports violations without starting the daemon.
-- **REQ-PLUGIN-11:** `PluginRegistry` is held on `AgentFoxConfig`, not a module-level global, so tests can inject mock plugins without patching global state.
+- **REQ-PLUGIN-08:** Go plugin dependencies are resolved at build time via the standard Go module system. Plugin manifests declare their module path in `plugin.toml`. No runtime dependency resolution is performed; incompatible or missing plugin binaries skip the plugin with a warning.
+- **REQ-PLUGIN-09:** Plugin code may not import internal agentkit packages (`agentkit/internal/...`). Violations reject the plugin at load time.
+- **REQ-PLUGIN-10:** `nightshift --validate-plugins` loads all configured plugins, runs interface conformance checks, and reports violations without starting the daemon.
+- **REQ-PLUGIN-11:** `PluginRegistry` is held on `AgentFoxConfig`, not a package-level global, so tests can inject mock plugins without patching global state.
 
 ### 6.7 MCP Client Support
 
-- **REQ-MCP-CLIENT-01:** Consume MCP servers as tool providers using `mcp>=1.0`.
+- **REQ-MCP-CLIENT-01:** Consume MCP servers as tool providers using `github.com/mark3labs/mcp-go`.
 - **REQ-MCP-CLIENT-02:** Three transports: stdio (subprocess + NDJSON), HTTP/SSE (2024-11-05 spec), streamable HTTP (2025-03-26 spec).
-- **REQ-MCP-CLIENT-03:** `MCPServerConnection` wraps `mcp.ClientSession` and provides: initialization (protocol handshake + capability negotiation), tool list caching with refresh on `notifications/tools/list_changed`, async `call(tool_name, arguments) -> dict`, and audit logging of every call via `afaudit`.
+- **REQ-MCP-CLIENT-03:** `MCPServerConnection` wraps an mcp-go client session and provides: initialization (protocol handshake + capability negotiation), tool list caching with refresh on `notifications/tools/list_changed`, `Call(toolName string, arguments map[string]any) (map[string]any, error)`, and audit logging of every call via `afaudit`.
 - **REQ-MCP-CLIENT-04:** `MCPServerPool` holds `server_name -> MCPServerConnection`, instantiated during session initialization, torn down after the session ends.
 - **REQ-MCP-CLIENT-05:** MCP tools exposed through the unified tool registry with qualified names using `server_name__tool_name` convention (e.g., `github__create_issue`). Configurable per-server prefix.
 - **REQ-MCP-CLIENT-06:** MCP tool names may not shadow native tool names. Collision raises `MCPNameCollisionError` at connection time.
@@ -393,33 +407,19 @@ class ToolResult:
 - **REQ-MCP-CLIENT-08:** Sampling requests require explicit `allow_sampling = true` per server. All sampling requests are logged in the audit trail.
 - **REQ-MCP-CLIENT-09:** MCP tool result content is capped at 50K characters per result with truncation and a note to the LLM.
 - **REQ-MCP-CLIENT-10:** Stdio server processes spawned with a reduced environment. Credentials resolved from the secrets store at spawn time.
-- **REQ-MCP-CLIENT-11:** `AllowlistPolicy` and `PermissionCallback` include MCP qualified tool names. `on_tool_use` event hooks fire for MCP tool calls with the qualified name.
+- **REQ-MCP-CLIENT-11:** `AllowlistPolicy` and `PermissionCallback` include MCP qualified tool names. `OnToolUse` event hooks fire for MCP tool calls with the qualified name.
 
 ### 6.8 MCP Server Support
 
 - **REQ-MCP-SERVER-01:** Optional, off by default. Enabled via `[mcp_server] enabled = true` in `config.toml`.
 - **REQ-MCP-SERVER-02:** Two serving modes: stdio (`nightshift --mcp-server`) and HTTP (`mcp_server.transport = 'http'`, `mcp_server.port`).
-- **REQ-MCP-SERVER-03:** Server implementation uses `fastmcp` (decorator-based registration).
+- **REQ-MCP-SERVER-03:** Server implementation uses mcp-go server primitives with explicit tool registration.
 - **REQ-MCP-SERVER-04:** Exposed tools: `process_issue(issue_number, mode)`, `get_session_status(session_id)`, `list_active_sessions()`, `cancel_session(session_id)`.
 - **REQ-MCP-SERVER-05:** Exposed resources: `nightshift://issues/{number}/triage-report`, `nightshift://sessions/{id}/audit-log`, `nightshift://config`.
 - **REQ-MCP-SERVER-06:** Implements MCP 2025-03-26 protocol version.
 - **REQ-MCP-SERVER-07:** HTTP mode requires API key authentication on every request. Unauthenticated requests return HTTP 401. Stdio mode relies on OS-level process isolation.
 
-### 6.9 Python Implementation
-
-- **REQ-PY-01:** Python 3.10+ required. Asyncio-native throughout.
-- **REQ-PY-02:** Both `AsyncAgent` and `Agent` (sync wrapper) provided. Sync wrapper runs the asyncio event loop internally.
-- **REQ-PY-03:** `ProviderClient` Protocol uses `@runtime_checkable`. Structural subtyping — no explicit registration required.
-- **REQ-PY-04:** Tool handlers may be sync or async. SDK detects via `inspect.iscoroutinefunction` and dispatches sync handlers via `asyncio.to_thread`.
-- **REQ-PY-05:** Schema inference covers: `str`, `int`, `bool`, `float`, `list[T]`, `Optional[T]`/`T|None`, `Literal[...]`, `TypedDict`, `dataclass`.
-- **REQ-PY-06:** Streaming exposed as `AsyncIterator[Event]` via async generator. `agent.stream(prompt)` is an async context manager handling cleanup.
-- **REQ-PY-07:** Budget propagation in delegation uses `contextvars.ContextVar[BudgetTracker]`.
-- **REQ-PY-08:** `ConversationHistory.snapshot()` (defensive copy) and `restore(messages)` for session resumability.
-- **REQ-PY-09:** Four compaction strategies: `NoCompaction`, `TurnWindowCompaction(max_turns)`, `TokenWindowCompaction(max_tokens)`, `SummarizationCompaction(model, threshold_tokens)`. Compaction checked before each model call.
-- **REQ-PY-10:** `mcp>=1.0` used for MCP client. `fastmcp` used for MCP server. Both are optional extras.
-- **REQ-PY-11:** The package is importable with no optional dependencies installed. Provider packages, `mcp`, and `fastmcp` are optional extras.
-
-### 6.10 Go Implementation
+### 6.9 Go Implementation
 
 - **REQ-GO-01:** Go 1.21+ target.
 - **REQ-GO-02:** Single `Agent` type. No sync/async distinction.
@@ -432,260 +432,33 @@ class ToolResult:
 - **REQ-GO-09:** Typed sentinel errors: `ErrMaxTurns`, `ErrBudgetExceeded`, `ErrToolRejected`, `ErrRefusal`.
 - **REQ-GO-10:** Go MCP client uses `github.com/mark3labs/mcp-go` (MIT licensed).
 - **REQ-GO-11:** Zero required external dependencies beyond stdlib and `mcp-go`. Provider dependencies loaded via build tags or separate sub-packages.
+- **REQ-GO-12:** Four compaction strategies: `NoCompaction`, `TurnWindowCompaction` (max turns), `TokenWindowCompaction` (max tokens), `SummarizationCompaction` (model, threshold tokens). Compaction checked before each model call.
 
-### 6.11 Observability and Hooks
+### 6.10 Observability and Hooks
 
 - **REQ-OBS-01:** Every model call wrapped in an OpenTelemetry span (when `TracingMiddleware` is active) with attributes: `model`, `provider`, `turn_count`, `input_tokens`, `output_tokens`, `cost_usd`, `stop_reason`.
 - **REQ-OBS-02:** Every tool call emits `on_tool_start` and `on_tool_end` spans with: `tool_name`, `tool_use_id`, `is_error`, `elapsed_ms`.
-- **REQ-OBS-03:** Session start and end fire `EventHookPlugin.on_session_start` and `on_session_end` for all registered hooks.
+- **REQ-OBS-03:** Session start and end fire `EventHookPlugin.OnSessionStart` and `OnSessionEnd` for all registered hooks.
 - **REQ-OBS-04:** Every loaded skill name recorded in the session audit event.
 - **REQ-OBS-05:** Every MCP tool call logged in the `afaudit` trail with `server_name`, `tool_name`, arguments hash, and `is_error` status.
 - **REQ-OBS-06:** Streaming event taxonomy: `TextDeltaEvent`, `ThinkingDeltaEvent`, `ToolCallStartEvent`, `ToolInputDeltaEvent`, `ToolCallEndEvent`, `ToolExecutionEvent`, `ToolResultEvent`, `TurnEndEvent`, `AgentDoneEvent`.
 - **REQ-OBS-07:** Turn hooks (`OnTurnStart`, `OnTurnEnd`, `OnAgentDone`, `OnError`) provided as callback registration points separate from middleware.
 
-### 6.12 Security and Sandboxing
+### 6.11 Security and Sandboxing
 
-- **REQ-SEC-01 (Path containment):** All file system tools call `_check_path()` before any I/O. Paths resolving outside workspace root (via `..`, symlinks) are rejected with `error='path_not_allowed'`.
+- **REQ-SEC-01 (Path containment):** All file system tools call `checkPath()` before any I/O. Paths resolving outside workspace root (via `..`, symlinks) are rejected with `error='path_not_allowed'`.
 - **REQ-SEC-02 (Output size limits):** `read_file`: 200 KB default. `execute` stdout/stderr: 64 KB each. MCP tool results: 50 KB per result. `search_files`: 500 matches. `list_files`: 1000 entries.
 - **REQ-SEC-03 (Command allowlist):** `execute` tool accepts `AllowlistPolicy` at construction time. Blocked commands return `error='command_not_allowed'`.
-- **REQ-SEC-04 (Shell operator rejection):** `check_shell_operators` regex applied inside `execute` before subprocess invocation. Blocked: `|`, `;`, `&`, `$()`, backtick, variable expansion patterns.
+- **REQ-SEC-04 (Shell operator rejection):** `checkShellOperators` regex applied inside `execute` before subprocess invocation. Blocked: `|`, `;`, `&`, `$()`, backtick, variable expansion patterns.
 - **REQ-SEC-05 (SSRF guard):** `fetch_url` uses `SSRFGuardTransport` validating against private/loopback/link-local/reserved IP ranges at DNS resolution time and TCP connection time.
-- **REQ-SEC-06 (Skill sandbox):** `tools.py` validated at load time for prohibited imports. Symlink directories and symlink prompt files rejected. Skill allowlist extensions are additive only.
-- **REQ-SEC-07 (Plugin sandbox):** Plugin code validated at load time for imports of private `afcore` module paths. Missing dependencies cause graceful skip. Event hook veto is additive only.
+- **REQ-SEC-06 (Skill sandbox):** Skill plugin code validated at load time for prohibited import paths. Symlink directories and symlink prompt files rejected. Skill allowlist extensions are additive only.
+- **REQ-SEC-07 (Plugin sandbox):** Plugin code validated at load time for imports of disallowed agentkit package paths (`agentkit/internal/...`). Missing or incompatible plugin binaries cause graceful skip. Event hook veto is additive only.
 - **REQ-SEC-08 (MCP threat mitigations):** Tool name prefix prevents shadowing. Sampling requires explicit opt-in. Resource URI auto-fetch disabled. Stdio server credentials resolved from secrets store at spawn time. Per-server call count limits enforced per session.
 - **REQ-SEC-09 (HTTPS enforcement):** `fetch_url` allows only `https://` by default. HTTP is opt-in via `tools.allow_http = true`.
 
 ---
 
 ## 7. API Design Sketches
-
-### Python: Core Agent API
-
-```python
-import os
-from pathlib import Path
-from agentkit import AsyncAgent, AgentConfig
-from agentkit.providers import AnthropicProvider
-from agentkit.tools import make_local_tools
-from agentkit.security import AllowlistPolicy
-from agentkit.events import TextDeltaEvent, ToolCallStartEvent, AgentDoneEvent
-
-# Build configuration
-config = AgentConfig(
-    model='claude-opus-4-5',
-    provider='anthropic',
-    max_tokens=8192,
-    max_turns=50,
-    max_budget_usd=2.00,
-    system_prompt='You are a coding assistant.',
-    parallel_tools=True,
-)
-
-# Build provider
-provider = AnthropicProvider(api_key=os.environ['ANTHROPIC_API_KEY'])
-
-# Build local tool set with a command allowlist
-policy = AllowlistPolicy(['ls', 'cat', 'grep', 'git', 'pytest', 'rg'])
-tools = make_local_tools(cwd=Path('.'), allowlist_policy=policy)
-
-# Create the agent
-agent = AsyncAgent(config=config, provider=provider, tools=tools)
-
-# Non-streaming run
-result = await agent.run('Fix the bug in src/foo.py')
-print(result.final_text())
-print(f'Cost: ${result.usage.cost_usd:.4f}')
-
-# Streaming run
-async for event in agent.stream('Explain the architecture'):
-    match event:
-        case TextDeltaEvent(text=t):
-            print(t, end='', flush=True)
-        case ToolCallStartEvent(name=n):
-            print(f'\n[calling {n}]')
-        case AgentDoneEvent(result=r):
-            print(f'\nDone: {r.turn_count} turns, ${r.usage.cost_usd:.4f}')
-```
-
-### Python: Tool Registration
-
-```python
-from agentkit import Tool
-from agentkit.delegation import SubagentTool
-
-# Decorator pattern — schema inferred from type hints and docstring
-@agent.tool(description='Search the codebase for a pattern')
-async def grep(pattern: str, path: str = '.', context_lines: int = 0) -> dict:
-    """Search files for a regex pattern, returning matching lines with context."""
-    return await grep_files(pattern, path, context_lines=context_lines)
-
-# Explicit registration — full control over schema
-agent.register_tool(Tool(
-    name='create_issue',
-    description='Open a GitHub issue',
-    input_schema={
-        'type': 'object',
-        'properties': {
-            'title': {'type': 'string'},
-            'body': {'type': 'string'},
-        },
-        'required': ['title'],
-    },
-    handler=create_github_issue,
-))
-
-# Subagent as tool
-reviewer_config = AgentConfig(
-    model='claude-opus-4-5',
-    provider='anthropic',
-    max_tokens=4096,
-    max_turns=20,
-    system_prompt='You are a strict code reviewer.',
-)
-reviewer = AsyncAgent(config=reviewer_config, provider=provider, tools=review_tools)
-agent.register_tool(SubagentTool(
-    name='review',
-    description='Run a code review on changed files',
-    agent=reviewer,
-))
-```
-
-### Python: Middleware and Hooks
-
-```python
-from agentkit.middleware import RetryMiddleware, BudgetMiddleware, TracingMiddleware
-from agentkit.errors import ToolRejectedError
-from opentelemetry import trace
-
-tracer = trace.get_tracer('my-service')
-
-# Middleware stack — retry is outermost, tracing is innermost
-agent.use(RetryMiddleware(max_retries=3, base_delay=1.0, jitter=True))
-agent.use(BudgetMiddleware(max_usd=2.00))
-agent.use(TracingMiddleware(tracer=tracer))
-
-# Turn hooks for observation without interception
-agent.on_turn_end(
-    lambda turn, resp: logger.info(
-        'turn %d: %d tokens, $%.4f', turn, resp.usage.output_tokens, resp.usage.cost_usd
-    )
-)
-agent.on_error(lambda err: alerting.send(str(err)))
-
-# Tool interceptor for human-in-the-loop approval
-async def approval_interceptor(call, next_fn):
-    if call.name in {'delete_file', 'write_file', 'execute'}:
-        if not await ask_approval(call.name, call.input):
-            raise ToolRejectedError(call.name)
-    return await next_fn(call)
-
-agent.intercept_tools(approval_interceptor)
-```
-
-### Python: MCP Client Configuration
-
-```toml
-# .nightshift/config.toml
-[[mcp.servers]]
-name = "github"
-command = ["npx", "-y", "@modelcontextprotocol/server-github@1.5.0"]
-env = {GITHUB_TOKEN = "${GITHUB_PAT}"}
-tool_prefix = "gh"
-per_session_call_limit = 200
-timeout_s = 30.0
-allow_sampling = false
-
-[[mcp.servers]]
-name = "filesystem"
-command = ["npx", "-y", "@modelcontextprotocol/server-filesystem@1.0.0", "/workspace"]
-tool_prefix = "fs"
-```
-
-```python
-from agentkit.mcp import MCPServerPool
-
-# Automatic via config
-pool = MCPServerPool.from_config(config.mcp.servers)
-
-async with pool:
-    mcp_tools = await pool.all_tools()  # list[MCPToolDescriptor]
-    # Each tool has a qualified name: gh__create_issue, fs__read_file, etc.
-    agent = AsyncAgent(
-        config=config,
-        provider=provider,
-        tools=local_tools + mcp_tools,
-    )
-    result = await agent.run('Create a GitHub issue for the auth bug in src/auth.py')
-    # The model calls gh__create_issue, which routes through pool to the GitHub MCP server
-```
-
-The protocol flow for each MCP tool call:
-
-```
-1. Session init:
-   pool.connect("github") ->
-     spawn npx subprocess ->
-     send: {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
-     recv: {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}},...}}
-     send: {"jsonrpc":"2.0","method":"notifications/initialized"}
-     send: {"jsonrpc":"2.0","id":2,"method":"tools/list"}
-     recv: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"create_issue",...}]}}
-     cache tool list as MCPToolDescriptors with prefix "gh__"
-
-2. Agent loop — model emits tool_use for gh__create_issue:
-   pool.call("github", "create_issue", {"title":"Bug","body":"..."}) ->
-     send: {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_issue","arguments":{...}}}
-     recv: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Issue #42 created"}],"isError":false}}
-     return {"content": [...], "is_error": false}
-   inject as tool_result in next user message
-
-3. Session end:
-   pool.close("github") -> terminate subprocess
-```
-
-### Python: Skill Loading
-
-```toml
-# .nightshift/skills/python-testing/skill.toml
-[skill]
-name = "python-testing"
-version = "1.0.0"
-description = "Enforces pytest conventions and coverage thresholds"
-archetypes = ["coder"]
-injection = "keyword"
-keywords = ["test", "pytest", "coverage", "spec"]
-prompt_file = "prompt.md"
-prompt_position = "post"
-
-[skill.tools]
-module = "tools"
-factory = "make_tools"
-
-[skill.security]
-allowlist_extend = ["pytest", "coverage", "python"]
-
-[skill.session]
-max_turns_add = 30
-```
-
-```python
-from agentkit.skills import SkillRegistry
-
-registry = SkillRegistry()
-registry.discover(project_root=Path('.'))
-
-skills = registry.load_for_session(
-    archetype='coder',
-    task_prompt='Add tests for the auth module',
-    config=config.skills,
-)
-# Returns [Skill(name='python-testing', ...)] because 'tests' matches keyword
-
-# Skills are applied automatically in session.py before backend.execute()
-# The skill's prompt.md is appended to the system prompt
-# The skill's tools.py.make_tools() results are merged into the tool registry
-# The skill's allowlist_extend is unioned with the archetype's allowlist
-```
 
 ### Go: Core Agent API
 
@@ -808,25 +581,51 @@ orchestrator.RegisterTool(agentkit.SubagentTool(
 // Budget is propagated: child.MaxBudgetUSD = parent.RemainingBudget() * 0.3
 ```
 
+### MCP Client: Protocol Flow
+
+The protocol flow for each MCP tool call:
+
+```
+1. Session init:
+   pool.Connect("github") ->
+     spawn npx subprocess ->
+     send: {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
+     recv: {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}},...}}
+     send: {"jsonrpc":"2.0","method":"notifications/initialized"}
+     send: {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+     recv: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"create_issue",...}]}}
+     cache tool list as MCPToolDescriptors with prefix "gh__"
+
+2. Agent loop — model emits tool_use for gh__create_issue:
+   pool.Call("github", "create_issue", {"title":"Bug","body":"..."}) ->
+     send: {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_issue","arguments":{...}}}
+     recv: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Issue #42 created"}],"isError":false}}
+     return {"content": [...], "is_error": false}
+   inject as tool_result in next user message
+
+3. Session end:
+   pool.Close("github") -> terminate subprocess
+```
+
 ---
 
 ## 8. Non-Functional Requirements
 
 ### Performance
 
-- **NFR-PERF-01:** The agentic loop overhead (excluding model API latency and tool execution time) must be less than 5 ms per turn in Python and less than 1 ms per turn in Go.
+- **NFR-PERF-01:** The agentic loop overhead (excluding model API latency and tool execution time) must be less than 1 ms per turn.
 - **NFR-PERF-02:** MCP server connection setup (stdio subprocess spawn + initialize handshake) must complete within 2 seconds for typical local MCP servers. Connection setup happens once per session, not per tool call.
 - **NFR-PERF-03:** Tool schema serialization (translating canonical `Tool` objects to provider wire format) must be computed once per session and cached — not recomputed on every model call.
-- **NFR-PERF-04:** Parallel tool execution must use true concurrency (`asyncio.gather` in Python, `errgroup` in Go). Sequential fallback is only used when `parallel_tools=False`.
+- **NFR-PERF-04:** Parallel tool execution must use true concurrency (`errgroup` in Go). Sequential fallback is only used when `parallel_tools=false`.
 - **NFR-PERF-05:** The streaming path must not buffer complete model responses before yielding the first token. `TextDeltaEvent` must be emitted as soon as the first streaming delta arrives from the provider.
 - **NFR-PERF-06:** A Level 2 (request deduplication) cache hit must add less than 0.5 ms overhead versus a direct response return. The LRU eviction path must not block the agent loop.
-- **NFR-PERF-07:** Anthropic `cache_control` breakpoint injection must be a pure in-memory operation (hash + dict merge); it must not make any additional API calls. Breakpoint recomputation (on tool list change) must complete within 1 ms for tool sets up to 128 tools.
-- **NFR-PERF-08:** Google `CachedContent` creation is an async network call and must run on a background task before the first model call of the session when `context_cache_ttl` is set. The agent loop must not block waiting for cache creation — it falls back to uncached operation if the cache creation has not completed by the time the first `complete()` call fires.
+- **NFR-PERF-07:** Anthropic `cache_control` breakpoint injection must be a pure in-memory operation (hash + map merge); it must not make any additional API calls. Breakpoint recomputation (on tool list change) must complete within 1 ms for tool sets up to 128 tools.
+- **NFR-PERF-08:** Google `CachedContent` creation is a network call and must run on a background goroutine before the first model call of the session when `context_cache_ttl` is set. The agent loop must not block waiting for cache creation — it falls back to uncached operation if the cache creation has not completed by the time the first `complete()` call fires.
 
 ### Reliability
 
 - **NFR-REL-01:** The agentic loop must tolerate transient provider errors (429, 500–503) via `RetryMiddleware` with exponential backoff and jitter. Default: 3 retries, 1s base delay, 2x multiplier, 0.5 jitter factor.
-- **NFR-REL-02:** Tool handler panics (Go) and unhandled exceptions (Python) must never crash the agent process. They must be caught and converted to `tool_result(is_error=True)`.
+- **NFR-REL-02:** Tool handler panics must never crash the agent process. They must be caught via `recover()` and converted to `tool_result(is_error=True)`.
 - **NFR-REL-03:** MCP server disconnects during a session surface as `ToolResultEvent{IsError: true}` for the affected tool call. The agent loop continues. Reconnection is attempted up to `per_session_reconnect_limit` (default 3).
 - **NFR-REL-04:** Session state (`ConversationHistory`) must be serializable to JSON and restorable. An interrupted session can resume from a saved snapshot.
 - **NFR-REL-05:** History compaction must be applied before each model call (not after), ensuring the model always receives a valid context window. Compaction failures fall back to `TurnWindowCompaction` rather than aborting the session.
@@ -837,22 +636,21 @@ orchestrator.RegisterTool(agentkit.SubagentTool(
 - **NFR-SEC-02:** Path containment is enforced by resolving all paths to their absolute canonical form before comparison. No string manipulation that could be fooled by non-canonical paths.
 - **NFR-SEC-03:** MCP server configs referencing `${VAR}` environment variables must be resolved at spawn time. Unexpanded variable references are a configuration error, not silently passed to the subprocess.
 - **NFR-SEC-04:** The AgentKit MCP server (when enabled in HTTP mode) must require API key authentication on every request. Unauthenticated requests return HTTP 401.
-- **NFR-SEC-05:** Plugin and skill code is imported in a context where `sys.path` manipulation is reverted after import. No persistent modification of the process-level Python path.
+- **NFR-SEC-05:** Plugin and skill code is verified at load time for prohibited import paths. No plugin may register `init()` functions that modify global state accessible to the agent runtime.
 
 ### Compatibility
 
-- **NFR-COMPAT-01:** Python 3.10, 3.11, 3.12, and 3.13 supported.
-- **NFR-COMPAT-02:** Go 1.21 and later minor versions supported.
-- **NFR-COMPAT-03:** MCP client supports MCP protocol version 2025-03-26 (current) and maintains backward compatibility with 2024-11-05 servers.
-- **NFR-COMPAT-04:** The Anthropic, OpenAI, Google, and OpenRouter providers pass the model string through to the API unchanged. No hardcoded model ID lists — new model IDs work without SDK updates.
-- **NFR-COMPAT-05:** The Ollama provider uses the native Ollama REST API (`/api/chat`) rather than the OpenAI-compatible shim. This avoids relying on Ollama's compatibility layer, which does not fully implement streaming tool calls or the `cache_read_tokens` usage field. The `base_url` defaults to `http://localhost:11434` and is overridable. The OpenAI provider still accepts a `base_url` override for vLLM and other OpenAI-compatible self-hosted endpoints separately from the Ollama provider.
-- **NFR-COMPAT-06:** The Google provider supports both the `google.generativeai` SDK path (API key) and the Vertex AI endpoint (service account / ADC). Switching between them requires only a config change (`google_auth: "api_key" | "vertex_ai"`), not a provider swap.
+- **NFR-COMPAT-01:** Go 1.21 and later minor versions supported.
+- **NFR-COMPAT-02:** MCP client supports MCP protocol version 2025-03-26 (current) and maintains backward compatibility with 2024-11-05 servers.
+- **NFR-COMPAT-03:** The Anthropic, OpenAI, Google, and OpenRouter providers pass the model string through to the API unchanged. No hardcoded model ID lists — new model IDs work without SDK updates.
+- **NFR-COMPAT-04:** The Ollama provider uses the native Ollama REST API (`/api/chat`) rather than the OpenAI-compatible shim. This avoids relying on Ollama's compatibility layer, which does not fully implement streaming tool calls or the `cache_read_tokens` usage field. The `base_url` defaults to `http://localhost:11434` and is overridable. The OpenAI provider still accepts a `base_url` override for vLLM and other OpenAI-compatible self-hosted endpoints separately from the Ollama provider.
+- **NFR-COMPAT-05:** The Google provider supports both the `google.generativeai` SDK path (API key) and the Vertex AI endpoint (service account / ADC). Switching between them requires only a config change (`google_auth: "api_key" | "vertex_ai"`), not a provider swap.
 
 ### Testability
 
-- **NFR-TEST-01:** The `ProviderClient` Protocol allows mock implementations with zero external network calls, enabling full loop testing offline.
-- **NFR-TEST-02:** The `PluginRegistry` accepts injected plugins without touching entry points or the file system, enabling unit tests for plugin-dependent code.
-- **NFR-TEST-03:** `ConversationHistory.snapshot()` and `from_dict()` must round-trip losslessly through JSON. This must be tested with property-based tests covering all `ContentBlock` subtypes.
+- **NFR-TEST-01:** The `ProviderClient` interface allows mock implementations with zero external network calls, enabling full loop testing offline.
+- **NFR-TEST-02:** The `PluginRegistry` accepts injected plugins without touching manifests or the file system, enabling unit tests for plugin-dependent code.
+- **NFR-TEST-03:** `ConversationHistory.Snapshot()` and `FromMessages()` must round-trip losslessly through JSON. This must be tested with property-based tests covering all `ContentBlock` subtypes.
 - **NFR-TEST-04:** Every built-in tool must be independently testable against a temporary directory fixture. No tool may have hidden dependencies on global state.
 - **NFR-TEST-05:** The agentic loop must be testable with a scripted mock provider that returns a predetermined sequence of responses (text, tool_use, tool_use+text) to verify correct multi-turn behavior without live API calls.
 
@@ -864,7 +662,7 @@ orchestrator.RegisterTool(agentkit.SubagentTool(
 
 When a skill declares `[skill.subagent]` with `mode='before_session'`, the session runner spawns a separate session and injects the result into the main session's system prompt. If the pre-analysis session fails or times out, should the main session: (a) abort with an error surfaced to the caller, (b) proceed without the pre-analysis with a warning injected into the system prompt, or (c) make the behavior configurable per skill via a `on_failure` manifest field?
 
-The current design specifies result injection but is silent on failure behavior. A decision is needed before implementing the subagent spawning path in `session.py`. Recommendation: default to option (b) — proceed with warning — since pre-analysis is enrichment, not a hard dependency. Make `on_failure = "abort" | "warn" | "skip"` a configurable manifest field.
+The current design specifies result injection but is silent on failure behavior. A decision is needed before implementing the subagent spawning path in `session.go`. Recommendation: default to option (b) — proceed with warning — since pre-analysis is enrichment, not a hard dependency. Make `on_failure = "abort" | "warn" | "skip"` a configurable manifest field.
 
 ### OQ-2: Schema inference in Go — code-gen vs. runtime reflection
 
@@ -892,9 +690,9 @@ The tradeoff is security vs. usability for local developer setups where Claude D
 
 ### OQ-6: Plugin local directory auto-discovery scope
 
-The design specifies that every Python file under `[plugins] paths` directories containing a class implementing any plugin Protocol is auto-discovered. Auto-discovery is convenient but adds startup latency and risks importing unintended modules. An alternative is requiring an explicit `plugins/__init__.py` or a manifest listing which classes to load — consistent with the entry-point mechanism for installed packages, which requires explicit declaration.
+The design specifies that every plugin.toml manifest under `[plugins] paths` directories is auto-discovered. Auto-discovery is convenient but adds startup latency and risks loading unintended plugin directories. An alternative is requiring an explicit declaration in the root `config.toml` listing which plugin directories to load — consistent with the explicit registration model for other SDK extension points.
 
-Recommendation: require explicit declaration for local plugins. Add a `plugin.toml` manifest per plugin directory analogous to `skill.toml`. This makes the plugin set predictable and auditable, matches the entry-point registration model, and avoids importing unexpected files in the plugin directory.
+Recommendation: require explicit declaration for local plugins via `plugin.toml` manifests in explicitly configured directories. This makes the plugin set predictable and auditable, matches the skill discovery model, and avoids loading unexpected plugins from the configured paths.
 
 ### OQ-7: Streaming backpressure in Go
 
