@@ -59,7 +59,11 @@ def main(ctx: click.Context, json_flag=None, hub_url=None, workspace=None, token
     config = load_config()
     ctx.obj.update(config=config, verbose=om.verbose, quiet=om.quiet)
     if not om.json_mode and not om.quiet:
-        render_banner(create_theme(getattr(config, "theme", None) or ThemeConfig()), quiet=om.quiet)
+        render_banner(
+            create_theme(getattr(config, "theme", None) or ThemeConfig()),
+            quiet=om.quiet,
+            models_config=config.models,
+        )
     if ctx.invoked_subcommand is None:
         # 3-tier resolution for carry-patch mode
         r_url = resolve_hub_url(hub_url_flag=hub_url, config_url=config.hub.endpoint_url) or ""
@@ -98,6 +102,12 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
 
     root = Path.cwd()
     validate_night_shift_prerequisites(config)
+
+    # Validate model access before entering the daemon loop (NS-REQ-3).
+    from afcore.core.models import validate_model_access
+
+    validate_model_access(models_config=config.models)
+
     platform = create_platform(config, root)
     try:
         asyncio.run(platform.check_credentials())

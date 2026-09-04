@@ -1,10 +1,10 @@
 """Banner rendering tests.
 
 Test Spec: TS-14-1, TS-14-2, TS-14-3, TS-14-4, TS-14-7, TS-14-8,
-           TS-14-E1, TS-14-E2
+           TS-14-E1, TS-14-E2, TS-NS-1, TS-NS-2
 Requirements: 14-REQ-1.1, 14-REQ-1.2, 14-REQ-2.1, 14-REQ-2.2,
               14-REQ-2.3, 14-REQ-2.E1, 14-REQ-3.1, 14-REQ-3.2,
-              14-REQ-3.E1
+              14-REQ-3.E1, NS-REQ-1, NS-REQ-2
 """
 
 from __future__ import annotations
@@ -15,8 +15,12 @@ from unittest.mock import patch
 
 import pytest
 from afcore import __version__
-from afcore.core.config import ThemeConfig
-from afcore.ui.display import create_theme, render_banner
+from afcore.core.config import ModelsConfig, ThemeConfig
+from afcore.ui.display import (
+    _resolve_coding_model_display,
+    create_theme,
+    render_banner,
+)
 from rich.console import Console
 from rich.theme import Theme
 
@@ -34,6 +38,7 @@ def _capture_banner(
     *,
     quiet: bool = False,
     force_terminal: bool = False,
+    models_config: ModelsConfig | None = None,
 ) -> str:
     """Capture render_banner output via a StringIO-backed console.
 
@@ -45,6 +50,7 @@ def _capture_banner(
         quiet: Whether to suppress banner output.
         force_terminal: If True, capture ANSI escape codes for role
             verification. If False, capture plain text.
+        models_config: Optional config-driven model overrides.
 
     Returns:
         The captured console output as a string.
@@ -59,7 +65,7 @@ def _capture_banner(
         force_terminal=force_terminal,
         width=120,
     )
-    render_banner(theme, quiet=quiet)
+    render_banner(theme, quiet=quiet, models_config=models_config)
     return buf.getvalue()
 
 
@@ -222,3 +228,84 @@ class TestBannerCwdOSError:
 
         # Should not raise
         _capture_banner(ThemeConfig())
+
+
+# --- Model Config Override Tests (Issue #10) ---
+
+
+class TestBannerModelConfigOverride:
+    """TS-NS-1: Banner prints the actual configured model, not the hardcoded tier default.
+
+    Requirements: NS-REQ-1, NS-REQ-2
+    """
+
+    def test_banner_shows_overridden_model(self) -> None:
+        """When a tier_defaults override is set, the banner shows the override.
+
+        The coder archetype uses STANDARD tier by default, which resolves to
+        'claude-sonnet-4-6'. With a tier_defaults override mapping STANDARD
+        to a different model, the banner should display that model.
+        """
+        # Override STANDARD (coder's default tier) to a different model
+        models_cfg = ModelsConfig(
+            tier_defaults={"STANDARD": "claude-haiku-4-5"},
+        )
+
+        with patch("afcore.ui.display._get_git_revision", return_value=None):
+            output = _capture_banner(ThemeConfig(), models_config=models_cfg)
+
+        assert "model: claude-haiku-4-5" in output, (
+            f"Expected 'model: claude-haiku-4-5' in banner output, got:\n{output}"
+        )
+        # Ensure the old default is NOT shown
+        assert "claude-sonnet-4-6" not in output, (
+            f"Old default 'claude-sonnet-4-6' should not appear in banner, got:\n{output}"
+        )
+
+    def test_banner_shows_default_when_no_override(self) -> None:
+        """When no override is set, banner shows the hardcoded tier default.
+
+        Unchanged behaviour — STANDARD tier resolves to 'claude-sonnet-4-6'.
+        """
+        with patch("afcore.ui.display._get_git_revision", return_value=None):
+            output = _capture_banner(ThemeConfig(), models_config=None)
+
+        assert "model: claude-sonnet-4-6" in output, (
+            f"Expected 'model: claude-sonnet-4-6' in banner output, got:\n{output}"
+        )
+
+    def test_banner_shows_default_with_empty_models_config(self) -> None:
+        """An empty ModelsConfig (no overrides) shows the hardcoded default."""
+        models_cfg = ModelsConfig()
+
+        with patch("afcore.ui.display._get_git_revision", return_value=None):
+            output = _capture_banner(ThemeConfig(), models_config=models_cfg)
+
+        assert "model: claude-sonnet-4-6" in output, (
+            f"Expected 'model: claude-sonnet-4-6' in banner output, got:\n{output}"
+        )
+
+
+class TestResolveCodingModelDisplay:
+    """TS-NS-2: _resolve_coding_model_display uses models_config.
+
+    Requirements: NS-REQ-2
+    """
+
+    def test_with_override_returns_override_model(self) -> None:
+        """When tier_defaults maps STANDARD to a different model, returns it."""
+        models_cfg = ModelsConfig(
+            tier_defaults={"STANDARD": "claude-haiku-4-5"},
+        )
+        result = _resolve_coding_model_display(models_config=models_cfg)
+        assert result == "claude-haiku-4-5"
+
+    def test_without_override_returns_default(self) -> None:
+        """When no override is set, returns the hardcoded STANDARD default."""
+        result = _resolve_coding_model_display(models_config=None)
+        assert result == "claude-sonnet-4-6"
+
+    def test_with_empty_config_returns_default(self) -> None:
+        """An empty ModelsConfig returns the hardcoded default."""
+        result = _resolve_coding_model_display(models_config=ModelsConfig())
+        assert result == "claude-sonnet-4-6"

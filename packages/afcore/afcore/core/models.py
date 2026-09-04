@@ -181,6 +181,113 @@ def resolve_model(name: str, *, variant: str | None = None, models_config: Model
     )
 
 
+def collect_configured_model_ids(models_config: ModelsConfig | None = None) -> set[str]:
+    """Collect all unique model IDs that nightshift archetypes will use.
+
+    Iterates over every archetype and its mode variants, resolving each
+    tier+variant pair to a concrete model ID. Returns the deduplicated
+    set of model IDs.
+
+    Args:
+        models_config: Optional config-driven model overrides from
+            ``[models]`` in config.toml.
+
+    Returns:
+        A set of model ID strings that will be used at runtime.
+
+    Requirements: NS-REQ-4
+    """
+    from afcore.archetypes import ARCHETYPE_REGISTRY, resolve_effective_config
+
+    model_ids: set[str] = set()
+    for entry in ARCHETYPE_REGISTRY.values():
+        # Base archetype tier/variant
+        try:
+            model_ids.add(
+                resolve_model(
+                    entry.default_model_tier,
+                    variant=entry.default_model_variant,
+                    models_config=models_config,
+                )
+            )
+        except Exception:
+            pass  # resolve_model already logs; skip gracefully
+
+        # Mode-specific overrides
+        for mode_name in entry.modes:
+            resolved = resolve_effective_config(entry, mode=mode_name)
+            try:
+                model_ids.add(
+                    resolve_model(
+                        resolved.default_model_tier,
+                        variant=resolved.default_model_variant,
+                        models_config=models_config,
+                    )
+                )
+            except Exception:
+                pass
+    return model_ids
+
+
+def validate_model_access(models_config: ModelsConfig | None = None) -> None:
+    """Validate that all configured model IDs are accessible via the API key.
+
+    Calls the Anthropic models API to list available models, then checks
+    that every model ID nightshift will use is present in the response.
+
+    **Fail-open on network errors**: if the API is unreachable (connection
+    error, timeout, etc.) a warning is logged and startup continues.
+
+    **Exit on inaccessible models**: if one or more configured model IDs
+    are not in the API response, logs an error naming each inaccessible
+    model and calls ``sys.exit(1)``.
+
+    Args:
+        models_config: Optional config-driven model overrides from
+            ``[models]`` in config.toml.
+
+    Requirements: NS-REQ-3, NS-REQ-4, NS-REQ-5
+    """
+    import sys
+
+    configured_ids = collect_configured_model_ids(models_config)
+    if not configured_ids:
+        return
+
+    try:
+        from afcore.core.client import create_anthropic_client
+
+        client = create_anthropic_client()
+        try:
+            available: set[str] = set()
+            # Anthropic SDK models.list() returns a paginated SyncPage.
+            page = client.models.list(limit=1000)
+            for model in page.data:
+                available.add(model.id)
+        finally:
+            client.close()
+    except Exception:
+        logger.warning(
+            "Unable to validate model access — API unreachable; continuing startup",
+            exc_info=True,
+        )
+        return
+
+    inaccessible = sorted(configured_ids - available)
+    if inaccessible:
+        logger.error(
+            "The following model(s) are not accessible with the current API key: %s. "
+            "Check your API key permissions or update [models] in config.toml.",
+            ", ".join(inaccessible),
+        )
+        sys.exit(1)
+
+    logger.info(
+        "Model access validated: %d model(s) confirmed accessible",
+        len(configured_ids),
+    )
+
+
 def calculate_cost(
     input_tokens: int,
     output_tokens: int,

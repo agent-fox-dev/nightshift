@@ -22,7 +22,7 @@ from rich.theme import Theme
 
 from afcore import __version__
 from afcore._build_info import GIT_REVISION
-from afcore.core.config import ThemeConfig
+from afcore.core.config import ModelsConfig, ThemeConfig
 from afcore.core.models import resolve_model
 
 logger = logging.getLogger(__name__)
@@ -146,19 +146,26 @@ def _get_git_revision() -> str | None:
     return None
 
 
-def _resolve_coding_model_display() -> str:
+def _resolve_coding_model_display(models_config: ModelsConfig | None = None) -> str:
     """Resolve the coding model to a display string.
 
     Returns the model ID (e.g., 'claude-opus-4-6') on success,
     or the raw tier string (e.g., 'ADVANCED') on failure.
 
-    Uses the coder archetype's registry default tier.
+    Uses the coder archetype's registry default tier. When *models_config*
+    is provided, user-configured tier-default overrides are applied.
+
+    Args:
+        models_config: Optional config-driven model overrides from
+            ``[models]`` in config.toml.
+
+    Requirements: NS-REQ-1, NS-REQ-2
     """
     from afcore.archetypes import ARCHETYPE_REGISTRY
 
     tier = ARCHETYPE_REGISTRY["coder"].default_model_tier
     try:
-        return resolve_model(tier)
+        return resolve_model(tier, models_config=models_config)
     except Exception:
         return tier
 
@@ -166,12 +173,18 @@ def _resolve_coding_model_display() -> str:
 def render_banner(
     theme: AppTheme,
     quiet: bool = False,
+    models_config: ModelsConfig | None = None,
 ) -> None:
     """Render the CLI banner with art, version, model, and cwd.
 
     Args:
         theme: The app theme for styled output.
         quiet: If True, suppress all banner output.
+        models_config: Optional config-driven model overrides. When provided,
+            the banner displays the user-configured model instead of the
+            hardcoded tier default.
+
+    Requirements: NS-REQ-1, NS-REQ-2
     """
     if quiet:
         return
@@ -185,7 +198,7 @@ def render_banner(
         console.print(line, style="header", highlight=False)
 
     # 14-REQ-2.1, 14-REQ-2.2, 14-REQ-2.3, 14-REQ-2.E1: Version + model line
-    model_display = _resolve_coding_model_display()
+    model_display = _resolve_coding_model_display(models_config=models_config)
     revision = _get_git_revision()
     version_part = f"nightshift v{__version__}"
     if revision:
