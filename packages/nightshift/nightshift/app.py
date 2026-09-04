@@ -98,9 +98,10 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     from afcore.workspace.merge_lock import cleanup_stale_merge_lock
     from afissues.errors import IntegrationError
 
-    from nightshift._startup import init_knowledge, wrap_task_callback
+    from nightshift._startup import check_root_permission_mode, init_knowledge, wrap_task_callback
 
     root = Path.cwd()
+    check_root_permission_mode(config)  # Pre-flight: root + bypassPermissions (#11)
     validate_night_shift_prerequisites(config)
 
     # Validate model access before entering the daemon loop (NS-REQ-3).

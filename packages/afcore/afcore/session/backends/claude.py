@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -81,6 +82,7 @@ class ClaudeBackend:
         effort: str | None = None,
         compaction: bool = False,
         cache_policy: str = "NONE",
+        permission_mode: str = "bypassPermissions",
     ) -> AsyncIterator[AgentMessage]:
         """Execute a session via the Claude SDK and yield canonical messages.
 
@@ -95,6 +97,11 @@ class ClaudeBackend:
         this parameter records the orchestrator's caching intent so cache
         hit metrics can be correlated with policy.
 
+        The ``permission_mode`` parameter controls the Claude Code
+        permission mode. When running as root (UID 0) with
+        ``"bypassPermissions"``, a fatal error is emitted immediately
+        without retrying, because Claude Code rejects that flag for root.
+
         Requirements: 26-REQ-2.3, 26-REQ-2.E1, 56-REQ-1.2, 56-REQ-2.2,
                       56-REQ-4.2, 56-REQ-5.E1
         """
@@ -103,6 +110,30 @@ class ClaudeBackend:
                 "ClaudeBackend: cache_policy=%s (CLI manages caching internally)",
                 cache_policy,
             )
+
+        # Pre-flight guard: root + bypassPermissions is a deterministic,
+        # non-retryable failure.  Detect it early and emit a clear error
+        # instead of letting the transport-retry loop waste three attempts
+        # on the same fatal CLI rejection.
+        if permission_mode == "bypassPermissions" and _is_root():
+            logger.critical(
+                "Cannot use permission_mode='bypassPermissions' as root (UID 0). "
+                "Claude Code rejects --dangerously-skip-permissions for root/sudo. "
+                "Set permission_mode = 'acceptEdits' in [security] of config.toml."
+            )
+            yield ResultMessage(
+                status="failed",
+                input_tokens=0,
+                output_tokens=0,
+                duration_ms=0,
+                error_message=(
+                    "permission_mode='bypassPermissions' cannot be used as root (UID 0). "
+                    "Set permission_mode = 'acceptEdits' in [security] of config.toml."
+                ),
+                is_error=True,
+                is_transport_error=False,
+            )
+            return
 
         # Build extra_args for parameters not directly supported by ClaudeAgentOptions
         # (56-REQ-2.2)
@@ -121,7 +152,7 @@ class ClaudeBackend:
             cwd=cwd,
             model=model,
             system_prompt=system_prompt,
-            permission_mode="bypassPermissions",
+            permission_mode=permission_mode,
             extra_args=extra_args,
             **({"max_turns": max_turns} if max_turns is not None else {}),  # type: ignore[arg-type]
         )
@@ -226,8 +257,27 @@ class ClaudeBackend:
                 # propagate immediately so the asyncio task is properly cancelled.
                 raise
             except Exception as exc:
+                exc_str = str(exc)
+                # #11: Root-restriction errors are deterministic and non-retryable.
+                # Detect the Claude Code error pattern and exit immediately.
+                if _is_root_restriction_error(exc_str):
+                    logger.critical(
+                        "ClaudeBackend: root-restriction error (non-retryable): %s",
+                        exc_str,
+                    )
+                    yield ResultMessage(
+                        status="failed",
+                        input_tokens=0,
+                        output_tokens=0,
+                        duration_ms=0,
+                        error_message=exc_str,
+                        is_error=True,
+                        is_transport_error=False,
+                    )
+                    return
+
                 # 26-REQ-2.E1: Connection/OS errors are transient transport failures
-                last_error = str(exc)
+                last_error = exc_str
                 logger.warning(
                     "ClaudeBackend transport error (attempt %d/%d): %s",
                     _attempt + 1,
@@ -393,6 +443,28 @@ class ClaudeBackend:
 
     async def close(self) -> None:
         """Release resources (no-op for ClaudeBackend)."""
+
+
+def _is_root() -> bool:
+    """Return True when the process is running as root (UID 0).
+
+    On non-POSIX systems where ``os.getuid`` is unavailable (Windows),
+    returns False — root-restriction is a POSIX-only concern.
+    """
+    try:
+        return os.getuid() == 0
+    except AttributeError:
+        return False
+
+
+def _is_root_restriction_error(message: str) -> bool:
+    """Detect the Claude Code root-restriction CLI error in a message string.
+
+    Claude Code emits:
+        ``--dangerously-skip-permissions cannot be used with root/sudo``
+    when ``bypassPermissions`` is set and the process runs as root.
+    """
+    return "dangerously-skip-permissions" in message and "root" in message
 
 
 def _build_notification_hook(

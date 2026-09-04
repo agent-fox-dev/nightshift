@@ -74,16 +74,40 @@ max_retries = 3
 
 ## security
 
-Controls the bash command allowlist that agent sessions may execute.
+Controls the bash command allowlist and Claude Code permission mode.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `bash_allowlist` | list[str]\|null | `null` | Full replacement allowlist (null uses the built-in list) |
 | `bash_allowlist_extend` | list[str] | `[]` | Additional commands appended to the built-in allowlist |
+| `permission_mode` | str | `"bypassPermissions"` | Claude Code permission mode (see below) |
+
+### permission_mode
+
+Controls the Claude Code CLI permission enforcement mode. Accepted values:
+
+| Value | Description |
+|-------|-------------|
+| `"bypassPermissions"` | Skip all permission prompts (default). **Cannot be used when running as root (UID 0).** |
+| `"acceptEdits"` | Auto-accept file edits but prompt for other tool use. **Required for root environments.** |
+| `"plan"` | Plan-only mode — no tool execution. |
+| `"default"` | Full interactive permission prompts. |
+
+**Root environments (Docker, CI as root):** Claude Code rejects
+`bypassPermissions` when the process runs as root (`UID 0`) for security
+reasons. If Night Shift is running as root, set `permission_mode = "acceptEdits"`.
+The daemon will exit at startup with a clear error if it detects root + `bypassPermissions`.
+
+Note that `"acceptEdits"` may require additional allowlist configuration
+(via `bash_allowlist` or `bash_allowlist_extend`) to avoid interactive prompts
+for non-edit tool calls.
 
 ```toml
 [security]
 bash_allowlist_extend = ["my-custom-tool", "deploy.sh"]
+
+# Required when running as root (e.g. in Docker):
+# permission_mode = "acceptEdits"
 ```
 
 ---

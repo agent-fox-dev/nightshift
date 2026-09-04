@@ -52,6 +52,7 @@ class Backend(Protocol):
         effort: str | None = None,
         compaction: bool = False,
         cache_policy: str = "NONE",
+        permission_mode: str = "bypassPermissions",
     ) -> AsyncIterator[AgentMessage]:
         """Execute a session and yield canonical messages.
 

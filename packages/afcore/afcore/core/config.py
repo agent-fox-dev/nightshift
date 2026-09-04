@@ -125,6 +125,14 @@ class SecurityConfig(BaseModel):
 
     bash_allowlist: list[str] | None = Field(default=None, description="Allowed bash commands")
     bash_allowlist_extend: list[str] = Field(default_factory=list, description="Additional allowed bash commands")
+    permission_mode: Literal["bypassPermissions", "acceptEdits", "plan", "default"] = Field(
+        default="bypassPermissions",
+        description=(
+            "Claude Code permission mode. Root (UID 0) environments must use "
+            "'acceptEdits' because Claude Code rejects 'bypassPermissions' "
+            "when running as root."
+        ),
+    )
 
 
 class ThemeConfig(BaseModel):

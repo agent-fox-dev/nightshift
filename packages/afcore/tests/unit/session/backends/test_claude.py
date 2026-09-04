@@ -1531,3 +1531,316 @@ class TestPreToolUseHookReplacesCanUseTool:
         result = await hook_fn(hook_input, None, ctx)
 
         assert result.get("decision") == "block", f"Expected block decision, got: {result}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #11: permission_mode threading and root-restriction guard
+# Requirements: NS-REQ-1 through NS-REQ-5
+# ---------------------------------------------------------------------------
+
+
+class TestPermissionModeThreading:
+    """Verify permission_mode is passed through to ClaudeAgentOptions
+    instead of being hardcoded to 'bypassPermissions'.
+
+    TS-NS-1: ClaudeBackend.execute() uses the caller-supplied permission_mode.
+    """
+
+    @pytest.mark.asyncio
+    async def test_default_permission_mode_is_bypass(self) -> None:
+        """Default permission_mode is 'bypassPermissions' for backward compat (NS-REQ-4)."""
+        captured_options: list = []
+
+        backend = ClaudeBackend()
+        with patch("afcore.session.backends.claude.ClaudeSDKClient", side_effect=_make_fake_client(captured_options)):
+            async for _ in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+            ):
+                pass
+
+        assert len(captured_options) == 1
+        assert captured_options[0].permission_mode == "bypassPermissions"
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_permission_mode_is_used(self) -> None:
+        """When permission_mode='acceptEdits' is passed, ClaudeAgentOptions uses it (NS-REQ-1)."""
+        captured_options: list = []
+
+        backend = ClaudeBackend()
+        with patch("afcore.session.backends.claude.ClaudeSDKClient", side_effect=_make_fake_client(captured_options)):
+            async for _ in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_mode="acceptEdits",
+            ):
+                pass
+
+        assert len(captured_options) == 1
+        assert captured_options[0].permission_mode == "acceptEdits"
+
+    @pytest.mark.asyncio
+    async def test_plan_mode_is_threaded(self) -> None:
+        """permission_mode='plan' is threaded through to options."""
+        captured_options: list = []
+
+        backend = ClaudeBackend()
+        with patch("afcore.session.backends.claude.ClaudeSDKClient", side_effect=_make_fake_client(captured_options)):
+            async for _ in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_mode="plan",
+            ):
+                pass
+
+        assert len(captured_options) == 1
+        assert captured_options[0].permission_mode == "plan"
+
+
+class TestRootRestrictionPreflightGuard:
+    """Verify that execute() detects root + bypassPermissions and fails
+    immediately without retrying.
+
+    TS-NS-2, TS-NS-3: Pre-flight guard and no-retry behavior.
+    """
+
+    @pytest.mark.asyncio
+    async def test_root_bypass_emits_immediate_failure(self) -> None:
+        """When UID 0 and bypassPermissions, execute() yields a single failed
+        ResultMessage immediately without creating a ClaudeSDKClient (NS-REQ-2)."""
+        backend = ClaudeBackend()
+
+        with (
+            patch("afcore.session.backends.claude._is_root", return_value=True),
+            patch("afcore.session.backends.claude.ClaudeSDKClient") as mock_client_cls,
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_mode="bypassPermissions",
+            ):
+                messages.append(msg)
+
+        # Exactly one message — a non-retryable failure
+        assert len(messages) == 1
+        result = messages[0]
+        assert isinstance(result, ResultMessage)
+        assert result.is_error is True
+        assert result.is_transport_error is False
+        assert "bypassPermissions" in result.error_message
+        assert "root" in result.error_message.lower() or "UID 0" in result.error_message
+
+        # ClaudeSDKClient was never instantiated
+        mock_client_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_root_accept_edits_proceeds_normally(self) -> None:
+        """When UID 0 and acceptEdits, execute() proceeds normally (NS-REQ-1)."""
+        captured_options: list = []
+
+        backend = ClaudeBackend()
+        with (
+            patch("afcore.session.backends.claude._is_root", return_value=True),
+            patch(
+                "afcore.session.backends.claude.ClaudeSDKClient",
+                side_effect=_make_fake_client(captured_options),
+            ),
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_mode="acceptEdits",
+            ):
+                messages.append(msg)
+
+        # Session completed successfully
+        assert len(messages) == 1
+        assert isinstance(messages[0], ResultMessage)
+        assert messages[0].is_error is False
+        assert captured_options[0].permission_mode == "acceptEdits"
+
+    @pytest.mark.asyncio
+    async def test_non_root_bypass_proceeds_normally(self) -> None:
+        """When not root, bypassPermissions proceeds normally (NS-REQ-4)."""
+        captured_options: list = []
+
+        backend = ClaudeBackend()
+        with (
+            patch("afcore.session.backends.claude._is_root", return_value=False),
+            patch(
+                "afcore.session.backends.claude.ClaudeSDKClient",
+                side_effect=_make_fake_client(captured_options),
+            ),
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_mode="bypassPermissions",
+            ):
+                messages.append(msg)
+
+        assert len(messages) == 1
+        assert isinstance(messages[0], ResultMessage)
+        assert messages[0].is_error is False
+        assert captured_options[0].permission_mode == "bypassPermissions"
+
+    @pytest.mark.asyncio
+    async def test_root_bypass_no_retry(self) -> None:
+        """Root + bypassPermissions does not trigger the retry loop (NS-REQ-3)."""
+        backend = ClaudeBackend()
+
+        with (
+            patch("afcore.session.backends.claude._is_root", return_value=True),
+            patch("afcore.session.backends.claude.asyncio.sleep") as mock_sleep,
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_mode="bypassPermissions",
+            ):
+                messages.append(msg)
+
+        # No sleep = no retry
+        mock_sleep.assert_not_called()
+        assert len(messages) == 1
+
+
+class TestRootRestrictionErrorDetection:
+    """Verify that the transport retry loop detects root-restriction errors
+    from the Claude CLI subprocess and does not retry them.
+
+    TS-NS-3: Root-restriction error pattern matching in the retry loop.
+    """
+
+    @pytest.mark.asyncio
+    async def test_root_restriction_error_not_retried(self) -> None:
+        """When _stream_messages raises with the root-restriction error pattern,
+        execute() exits the retry loop immediately (NS-REQ-3)."""
+        backend = ClaudeBackend()
+        call_count = 0
+
+        async def _root_error(*, prompt, options):
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("--dangerously-skip-permissions cannot be used with root/sudo privileges")
+            yield  # noqa: RET503
+
+        with (
+            patch.object(backend, "_stream_messages", _root_error),
+            patch("afcore.session.backends.claude._is_root", return_value=False),
+            patch("afcore.session.backends.claude.asyncio.sleep") as mock_sleep,
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_mode="bypassPermissions",
+            ):
+                messages.append(msg)
+
+        # Exactly one attempt, no retries
+        assert call_count == 1
+        mock_sleep.assert_not_called()
+
+        # Non-transport error result
+        assert len(messages) == 1
+        result = messages[0]
+        assert isinstance(result, ResultMessage)
+        assert result.is_error is True
+        assert result.is_transport_error is False
+        assert "root" in result.error_message
+
+    @pytest.mark.asyncio
+    async def test_non_root_error_is_retried(self) -> None:
+        """Regular transport errors are still retried (NS-REQ-4)."""
+        backend = ClaudeBackend()
+        call_count = 0
+
+        async def _transient_error(*, prompt, options):
+            nonlocal call_count
+            call_count += 1
+            raise OSError("connection refused")
+            yield  # noqa: RET503
+
+        with (
+            patch.object(backend, "_stream_messages", _transient_error),
+            patch("afcore.session.backends.claude._is_root", return_value=False),
+            patch("afcore.session.backends.claude.asyncio.sleep"),
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                permission_mode="bypassPermissions",
+            ):
+                messages.append(msg)
+
+        # All 3 retries exhausted
+        assert call_count == 3
+        assert len(messages) == 1
+        assert isinstance(messages[0], ResultMessage)
+        assert messages[0].is_transport_error is True
+
+
+class TestIsRootHelper:
+    """Test the _is_root() helper function."""
+
+    def test_returns_true_when_uid_zero(self) -> None:
+        from afcore.session.backends.claude import _is_root
+
+        with patch("afcore.session.backends.claude.os.getuid", return_value=0):
+            assert _is_root() is True
+
+    def test_returns_false_when_uid_nonzero(self) -> None:
+        from afcore.session.backends.claude import _is_root
+
+        with patch("afcore.session.backends.claude.os.getuid", return_value=1000):
+            assert _is_root() is False
+
+    def test_returns_false_when_getuid_unavailable(self) -> None:
+        from afcore.session.backends.claude import _is_root
+
+        with patch("afcore.session.backends.claude.os.getuid", side_effect=AttributeError):
+            assert _is_root() is False
+
+
+class TestIsRootRestrictionError:
+    """Test the _is_root_restriction_error() helper function."""
+
+    def test_detects_root_restriction_message(self) -> None:
+        from afcore.session.backends.claude import _is_root_restriction_error
+
+        msg = "--dangerously-skip-permissions cannot be used with root/sudo privileges"
+        assert _is_root_restriction_error(msg) is True
+
+    def test_does_not_match_unrelated_error(self) -> None:
+        from afcore.session.backends.claude import _is_root_restriction_error
+
+        assert _is_root_restriction_error("connection refused") is False
+
+    def test_does_not_match_partial_root_without_skip(self) -> None:
+        from afcore.session.backends.claude import _is_root_restriction_error
+
+        assert _is_root_restriction_error("running as root user") is False

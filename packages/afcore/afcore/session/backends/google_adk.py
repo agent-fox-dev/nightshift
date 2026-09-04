@@ -120,6 +120,7 @@ class GoogleADKBackend:
         effort: str | None = None,
         compaction: bool = False,
         cache_policy: str = "NONE",
+        permission_mode: str = "bypassPermissions",
     ) -> AsyncIterator[AgentMessage]:
         """Execute a coding session via the ADK and yield canonical messages.
 

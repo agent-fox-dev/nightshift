@@ -308,3 +308,45 @@ class TestModelsConfig:
         config_file.write_text('[models.tier_defaults]\nSIMPLE = "claude-haiku-4-5"\n')
         config = load_config(path=config_file)
         assert config.models.tier_defaults["SIMPLE"] == "claude-haiku-4-5"
+
+
+# ---------------------------------------------------------------------------
+# Issue #11: SecurityConfig.permission_mode
+# ---------------------------------------------------------------------------
+
+
+class TestSecurityPermissionMode:
+    """Verify SecurityConfig exposes a configurable permission_mode field."""
+
+    def test_default_permission_mode(self) -> None:
+        """Default permission_mode is 'bypassPermissions' (NS-REQ-4)."""
+        config = AgentFoxConfig()
+        assert config.security.permission_mode == "bypassPermissions"
+
+    def test_permission_mode_override_from_toml(self, tmp_path: Path) -> None:
+        """permission_mode can be set via config.toml (NS-REQ-1)."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[security]\npermission_mode = "acceptEdits"\n')
+        config = load_config(path=config_file)
+        assert config.security.permission_mode == "acceptEdits"
+
+    def test_permission_mode_plan(self, tmp_path: Path) -> None:
+        """permission_mode='plan' is accepted."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[security]\npermission_mode = "plan"\n')
+        config = load_config(path=config_file)
+        assert config.security.permission_mode == "plan"
+
+    def test_permission_mode_default_value(self, tmp_path: Path) -> None:
+        """permission_mode='default' is accepted."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[security]\npermission_mode = "default"\n')
+        config = load_config(path=config_file)
+        assert config.security.permission_mode == "default"
+
+    def test_invalid_permission_mode_raises(self, tmp_path: Path) -> None:
+        """Invalid permission_mode value raises ConfigError."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[security]\npermission_mode = "invalid"\n')
+        with pytest.raises(ConfigError):
+            load_config(path=config_file)

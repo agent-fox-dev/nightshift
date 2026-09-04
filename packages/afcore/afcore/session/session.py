@@ -311,6 +311,9 @@ async def _execute_query(
                 error_message=error_message,
             )
 
+    # Resolve permission_mode from the effective security config (#11).
+    _permission_mode = getattr(effective_security, "permission_mode", "bypassPermissions")
+
     async for message in backend.execute(
         task_prompt,
         system_prompt=system_prompt,
@@ -327,6 +330,7 @@ async def _execute_query(
         effort=effort,
         compaction=compaction,
         cache_policy=cache_policy,
+        permission_mode=_permission_mode,
     ):
         is_result = isinstance(message, ResultMessage)
 

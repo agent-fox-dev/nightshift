@@ -3,8 +3,44 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 
 logger = logging.getLogger(__name__)
+
+
+def check_root_permission_mode(config) -> None:
+    """Fail fast when running as root with bypassPermissions (#11).
+
+    Claude Code's CLI rejects ``--dangerously-skip-permissions`` when the
+    effective UID is 0.  Rather than letting every session fail with opaque
+    transport retries, detect the misconfiguration at daemon startup and
+    exit with a clear, actionable error message.
+    """
+    try:
+        is_root = os.getuid() == 0
+    except AttributeError:
+        # Windows — root-restriction is POSIX-only
+        return
+
+    if not is_root:
+        return
+
+    mode = getattr(config.security, "permission_mode", "bypassPermissions")
+    if mode == "bypassPermissions":
+        logger.critical(
+            "Night Shift is running as root (UID 0) with "
+            "permission_mode='bypassPermissions'. Claude Code rejects "
+            "--dangerously-skip-permissions for root/sudo. "
+            "Set permission_mode = 'acceptEdits' in the [security] section "
+            "of config.toml to run as root."
+        )
+        print(
+            "Error: cannot run as root with permission_mode='bypassPermissions'. "
+            "Set permission_mode = 'acceptEdits' in [security] of config.toml.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def init_knowledge(config, project_root):
