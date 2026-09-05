@@ -33,6 +33,7 @@ with default values for reference.
 - [caching](#caching)
 - [hub](#hub)
 - [carry_patch](#carry_patch)
+  - [Carry-Patch Authentication](#carry-patch-authentication)
 
 ---
 
@@ -399,6 +400,55 @@ a running af-hub instance and the `[hub]` section to be configured.
 enabled = true
 workspace = "my-workspace"
 check_interval = 300
+```
+
+### Carry-Patch Authentication
+
+Carry-patch mode requires three credentials to connect to the hub:
+
+| Credential | CLI flag | Environment variable | Config file | Description |
+|------------|----------|---------------------|-------------|-------------|
+| Hub PAT | `--token` | `AF_HUB_TOKEN` | *(none)* | Personal access token for hub API authentication |
+| Hub URL | `--hub-url` | `AF_HUB_URL` | `hub.endpoint_url` | Hub API base URL |
+| Workspace slug | `--workspace` | `AF_WORKSPACE` | `carry_patch.workspace` | Hub workspace identifier |
+
+#### Resolution priority
+
+Each credential is resolved with a three-tier priority order — the first
+non-empty value wins:
+
+1. **CLI flag** (`--token`, `--hub-url`, `--workspace`)
+2. **Environment variable** (`AF_HUB_TOKEN`, `AF_HUB_URL`, `AF_WORKSPACE`)
+3. **Config file** (`hub.endpoint_url`, `carry_patch.workspace`) — where
+   applicable
+
+> **Security note:** The hub PAT (`AF_HUB_TOKEN` / `--token`) has **no
+> config-file equivalent** and is never written to disk. It must be supplied
+> via the `--token` CLI flag or the `AF_HUB_TOKEN` environment variable to
+> prevent accidental persistence of secrets. The auto-generated
+> `.nightshift/config.toml` (created during carry-patch bootstrap) deliberately
+> omits the PAT.
+
+#### Error: missing PAT with workspace configured
+
+If a workspace slug is configured (via `--workspace`, `AF_WORKSPACE`, or
+`carry_patch.workspace` in config) but no PAT is available from any source
+(no `--token` flag, no `AF_HUB_TOKEN` environment variable), Night Shift
+exits immediately at startup with exit code 1 and the message:
+
+```
+Error: PAT is required for carry-patch mode (--token / AF_HUB_TOKEN)
+```
+
+To resolve this error, supply the hub token via either:
+- `--token <your-pat>` on the command line, or
+- `export AF_HUB_TOKEN=<your-pat>` in the environment.
+
+Similarly, if both a workspace slug and PAT are present but no hub URL is
+available, Night Shift exits with:
+
+```
+Error: hub URL required for carry-patch mode (--hub-url / AF_HUB_URL)
 ```
 
 ---

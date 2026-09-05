@@ -55,7 +55,16 @@ push_fix_branch = false       # push fix branches before merge
 Set the `GITHUB_PAT` (or `GITLAB_TOKEN` / `GITEA_TOKEN`) environment variable
 for platform authentication.
 
-See [docs/config-reference.md](docs/config-reference.md) for all options.
+For **carry-patch mode** (hub authentication), set these additional variables:
+
+| Variable | Description |
+|----------|-------------|
+| `AF_HUB_TOKEN` | Hub personal access token (required; also via `--token`) |
+| `AF_HUB_URL` | Hub API base URL (also via `--hub-url` or `hub.endpoint_url` in config) |
+| `AF_WORKSPACE` | Hub workspace slug (also via `--workspace` or `carry_patch.workspace` in config) |
+
+See [docs/config-reference.md](docs/config-reference.md) for full details,
+including resolution priority and error behavior.
 
 ## Development
 
