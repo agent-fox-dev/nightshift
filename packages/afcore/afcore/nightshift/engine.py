@@ -13,6 +13,7 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from afaudit.emit import emit_audit_event as _emit_audit_event
@@ -752,6 +753,97 @@ class NightShiftEngine:
                 pipeline=pipeline,
             )
             self.state.issue_checks_completed += 1
+
+    async def _run_coder_session(
+        self,
+        *,
+        archetype: str,
+        mode: str,
+        context: dict[str, object],
+    ) -> object:
+        """Run a coder session for carry-patch conflict resolution.
+
+        Loads the archetype profile, renders template placeholders with
+        values from *context*, resolves SDK parameters for the requested
+        mode, and delegates to :func:`run_session`.
+
+        The workspace is constructed from ``context["repo_root"]`` and
+        ``context["branch"]``; the coder runs in the repository checkout
+        (not in an isolated worktree).
+
+        Requirements: 03-REQ-3.3
+        """
+        from afcore.core.models import resolve_model
+        from afcore.engine.sdk_params import (
+            resolve_model_tier,
+            resolve_security_config,
+            resolve_session_params,
+        )
+        from afcore.session.profiles import load_profile
+        from afcore.session.session import run_session
+        from afcore.workspace.worktree import WorkspaceInfo
+
+        # Load the archetype profile template.
+        profile = load_profile(archetype, project_dir=Path.cwd(), mode=mode)
+
+        # Render template placeholders with context values.
+        patch_description = str(context.get("patch_description", ""))
+        conflict_files = context.get("conflict_files", [])
+        upstream_context = str(context.get("upstream_context", ""))
+        rerere_resolutions = context.get("rerere_resolutions", [])
+
+        conflict_files_str = "\n".join(f"- {f}" for f in conflict_files) if conflict_files else "(none)"
+        rerere_str = "\n".join(f"- {r}" for r in rerere_resolutions) if rerere_resolutions else "(none)"
+
+        system_prompt = profile.replace("{{ patch_description }}", patch_description)
+        system_prompt = system_prompt.replace("{{ conflict_files }}", conflict_files_str)
+        system_prompt = system_prompt.replace("{{ upstream_context }}", upstream_context)
+        system_prompt = system_prompt.replace("{{ rerere_resolutions }}", rerere_str)
+
+        # Build workspace info for the checked-out branch.
+        repo_root = Path(str(context.get("repo_root", Path.cwd())))
+        branch = str(context.get("branch", ""))
+        workspace = WorkspaceInfo(
+            path=repo_root,
+            branch=branch,
+            spec_name="carry-patch",
+            task_group=0,
+            role="coder",
+            mode=mode,
+        )
+
+        # Resolve SDK parameters for the archetype and mode.
+        config = self._config
+        model_id = resolve_model(
+            resolve_model_tier(config, archetype, mode=mode),
+            models_config=config.models,
+        )
+        security = resolve_security_config(config, archetype, mode=mode)
+        params = resolve_session_params(config, archetype, mode=mode)
+
+        task_prompt = (
+            "Resolve the merge conflicts in the files listed above. Follow the resolution rules in the system prompt."
+        )
+        node_id = f"carry-patch:{branch}:{archetype}"
+
+        return await run_session(
+            workspace=workspace,
+            node_id=node_id,
+            system_prompt=system_prompt,
+            task_prompt=task_prompt,
+            config=config,
+            activity_callback=self._activity_callback,
+            model_id=model_id,
+            security_config=security,
+            max_turns=params.max_turns,
+            max_budget_usd=params.max_budget_usd,
+            thinking=params.thinking,
+            effort=params.effort,
+            compaction=params.compaction,
+            cache_policy=params.cache_policy,
+            archetype=archetype,
+            sink_dispatcher=self._sink,
+        )
 
     async def _run_carry_patch_monitor(self, slug: str) -> object:
         """Delegate to the stored CarryPatchMonitor instance.

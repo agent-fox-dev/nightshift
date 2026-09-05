@@ -415,6 +415,8 @@ class CarryPatchMonitor:
         await _workspace_git.checkout_branch(repo_root, branch)
 
         # Step 3: Run coder session in carry-patch mode (03-REQ-3.3)
+        context["branch"] = branch
+        context["repo_root"] = str(repo_root)
         await self._engine._run_coder_session(
             archetype="coder",
             mode="carry-patch",

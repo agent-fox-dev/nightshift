@@ -24,6 +24,13 @@ HEAD. Use this to understand what upstream changes caused the conflict:
 
 {{ upstream_context }}
 
+## Rerere Resolutions
+
+Previously recorded rerere resolution paths that may help guide your
+conflict resolution approach:
+
+{{ rerere_resolutions }}
+
 ## Resolution Rules
 
 1. **Preserve patch intent** — the resolved code must still accomplish what

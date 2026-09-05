@@ -32,6 +32,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from afcore.nightshift.carry_patch_monitor import CarryPatchMonitor, MonitorCycleResult
+from afcore.nightshift.engine import NightShiftEngine
 
 # ---------------------------------------------------------------------------
 # Stub types for afhub (Spec 01 — not yet implemented)
@@ -123,8 +124,13 @@ def _make_engine(
     coder_session_raises: Exception | None = None,
     coder_session_returns: object = None,
 ) -> MagicMock:
-    """Return a MagicMock NightShiftEngine with async _run_coder_session."""
-    engine = MagicMock()
+    """Return a MagicMock NightShiftEngine with async _run_coder_session.
+
+    Uses ``spec=NightShiftEngine`` so that accessing attributes not present
+    on the real class raises ``AttributeError`` — ensuring the mock stays
+    honest about the engine's public and private API (AC-2, NS-REQ-1).
+    """
+    engine = MagicMock(spec=NightShiftEngine)
     if coder_session_raises is not None:
         engine._run_coder_session = AsyncMock(side_effect=coder_session_raises)
     else:
@@ -1194,3 +1200,299 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
         assert isinstance(result, MonitorCycleResult), (
             "run_cycle must return MonitorCycleResult even when audit emission fails"
         )
+
+
+# ---------------------------------------------------------------------------
+# 4.1 — AC-1/AC-2/AC-3/AC-4/AC-5: Rendered prompt and spec-bound mock
+# ---------------------------------------------------------------------------
+
+
+def _mock_session_params() -> MagicMock:
+    """Return a mock ResolvedSessionParams with sensible defaults."""
+    params = MagicMock()
+    params.max_turns = 200
+    params.thinking = None
+    params.max_budget_usd = None
+    params.effort = "high"
+    params.compaction = False
+    params.cache_policy = "NONE"
+    return params
+
+
+class TestSpecBoundEngine:
+    """AC-2: MagicMock(spec=NightShiftEngine) works for _run_coder_session.
+
+    Requirements: NS-REQ-1
+    """
+
+    def test_spec_bound_mock_has_run_coder_session(self) -> None:
+        """Accessing _run_coder_session on a spec-bound mock succeeds.
+
+        Requirements: NS-REQ-1.1
+        """
+        engine = MagicMock(spec=NightShiftEngine)
+        # This must NOT raise AttributeError — proving the method
+        # exists on the real NightShiftEngine class.
+        _ = engine._run_coder_session
+        assert hasattr(engine, "_run_coder_session")
+
+
+class TestRunCoderSessionRendering:
+    """Tests for NightShiftEngine._run_coder_session prompt rendering.
+
+    Verifies that the carry-patch profile template is loaded and rendered
+    with actual context values — no {{ ... }} placeholders survive.
+
+    Requirements: NS-REQ-2, NS-REQ-3, NS-REQ-4
+    Test Specs: TS-NS-2, TS-NS-3, TS-NS-4
+    """
+
+    async def test_system_prompt_contains_patch_description_and_conflict_files(
+        self,
+    ) -> None:
+        """run_session receives a prompt with patch description and conflict files.
+
+        Requirements: NS-REQ-2.1
+        Test Spec: TS-NS-2
+        """
+        config = MagicMock()
+        config.models = MagicMock()
+        engine = NightShiftEngine(config=config, platform=MagicMock())
+
+        context: dict[str, object] = {
+            "patch_description": "Fix authentication bypass in login flow",
+            "conflict_files": ["auth.py", "login.py"],
+            "upstream_context": "diff --git a/auth.py b/auth.py",
+            "rerere_resolutions": [],
+            "branch": "fix/auth",
+            "repo_root": "/tmp/test-repo",
+        }
+
+        with (
+            patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run,
+            patch("afcore.core.models.resolve_model", return_value="claude-sonnet-4-20250514"),
+            patch("afcore.engine.sdk_params.resolve_model_tier", return_value="STANDARD"),
+            patch("afcore.engine.sdk_params.resolve_session_params", return_value=_mock_session_params()),
+            patch("afcore.engine.sdk_params.resolve_security_config", return_value=None),
+        ):
+            await engine._run_coder_session(
+                archetype="coder",
+                mode="carry-patch",
+                context=context,
+            )
+
+        mock_run.assert_called_once()
+        call_kwargs = mock_run.call_args.kwargs
+        system_prompt = call_kwargs["system_prompt"]
+
+        assert "Fix authentication bypass in login flow" in system_prompt, (
+            "system_prompt must contain the literal patch_description value"
+        )
+        assert "auth.py" in system_prompt, "system_prompt must contain conflict file names"
+        assert "login.py" in system_prompt, "system_prompt must contain all conflict file names"
+
+    async def test_no_template_placeholders_remain(self) -> None:
+        """No {{ ... }} placeholders remain in the rendered system prompt.
+
+        Requirements: NS-REQ-2.1
+        Test Spec: TS-NS-2
+        """
+        import re
+
+        config = MagicMock()
+        config.models = MagicMock()
+        engine = NightShiftEngine(config=config, platform=MagicMock())
+
+        context: dict[str, object] = {
+            "patch_description": "Fix bug",
+            "conflict_files": ["file.py"],
+            "upstream_context": "some diff",
+            "rerere_resolutions": ["path/to/rerere"],
+            "branch": "fix/bug",
+            "repo_root": "/tmp/repo",
+        }
+
+        with (
+            patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run,
+            patch("afcore.core.models.resolve_model", return_value="claude-sonnet-4-20250514"),
+            patch("afcore.engine.sdk_params.resolve_model_tier", return_value="STANDARD"),
+            patch("afcore.engine.sdk_params.resolve_session_params", return_value=_mock_session_params()),
+            patch("afcore.engine.sdk_params.resolve_security_config", return_value=None),
+        ):
+            await engine._run_coder_session(
+                archetype="coder",
+                mode="carry-patch",
+                context=context,
+            )
+
+        system_prompt = mock_run.call_args.kwargs["system_prompt"]
+        assert not re.search(r"\{\{\s*\w+\s*\}\}", system_prompt), (
+            f"system_prompt must not contain {{ ... }} placeholders, got: {system_prompt[:200]}"
+        )
+
+    async def test_rerere_resolutions_in_prompt(self) -> None:
+        """System prompt contains rerere resolution paths.
+
+        Requirements: NS-REQ-4.1
+        Test Spec: TS-NS-4
+        """
+        config = MagicMock()
+        config.models = MagicMock()
+        engine = NightShiftEngine(config=config, platform=MagicMock())
+
+        context: dict[str, object] = {
+            "patch_description": "Fix bug",
+            "conflict_files": ["file.py"],
+            "upstream_context": "",
+            "rerere_resolutions": ["path/to/rerere", "another/rerere"],
+            "branch": "fix/bug",
+            "repo_root": "/tmp/repo",
+        }
+
+        with (
+            patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run,
+            patch("afcore.core.models.resolve_model", return_value="claude-sonnet-4-20250514"),
+            patch("afcore.engine.sdk_params.resolve_model_tier", return_value="STANDARD"),
+            patch("afcore.engine.sdk_params.resolve_session_params", return_value=_mock_session_params()),
+            patch("afcore.engine.sdk_params.resolve_security_config", return_value=None),
+        ):
+            await engine._run_coder_session(
+                archetype="coder",
+                mode="carry-patch",
+                context=context,
+            )
+
+        system_prompt = mock_run.call_args.kwargs["system_prompt"]
+        assert "path/to/rerere" in system_prompt, "system_prompt must contain rerere resolution paths"
+        assert "another/rerere" in system_prompt, "system_prompt must contain all rerere resolution paths"
+
+    async def test_carry_patch_mode_passed_to_session_params(self) -> None:
+        """SDK parameters are resolved with mode='carry-patch'.
+
+        Requirements: NS-REQ-3.1
+        Test Spec: TS-NS-3
+        """
+        config = MagicMock()
+        config.models = MagicMock()
+        engine = NightShiftEngine(config=config, platform=MagicMock())
+
+        context: dict[str, object] = {
+            "patch_description": "Fix bug",
+            "conflict_files": ["file.py"],
+            "upstream_context": "",
+            "rerere_resolutions": [],
+            "branch": "fix/bug",
+            "repo_root": "/tmp/repo",
+        }
+
+        with (
+            patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run,
+            patch("afcore.core.models.resolve_model", return_value="claude-sonnet-4-20250514"),
+            patch("afcore.engine.sdk_params.resolve_model_tier", return_value="STANDARD") as mock_tier,
+            patch(
+                "afcore.engine.sdk_params.resolve_session_params",
+                return_value=_mock_session_params(),
+            ) as mock_params,
+            patch("afcore.engine.sdk_params.resolve_security_config", return_value=None),
+        ):
+            await engine._run_coder_session(
+                archetype="coder",
+                mode="carry-patch",
+                context=context,
+            )
+
+        # Verify mode='carry-patch' was passed to param resolution
+        mock_tier.assert_called_once_with(config, "coder", mode="carry-patch")
+        mock_params.assert_called_once_with(config, "coder", mode="carry-patch")
+
+        # Verify archetype='coder' was passed to run_session
+        call_kwargs = mock_run.call_args.kwargs
+        assert call_kwargs["archetype"] == "coder"
+
+    async def test_workspace_info_constructed_from_context(self) -> None:
+        """WorkspaceInfo is built with repo_root and branch from context.
+
+        Requirements: NS-REQ-5.1
+        Test Spec: TS-NS-5
+        """
+        config = MagicMock()
+        config.models = MagicMock()
+        engine = NightShiftEngine(config=config, platform=MagicMock())
+
+        context: dict[str, object] = {
+            "patch_description": "Fix bug",
+            "conflict_files": [],
+            "upstream_context": "",
+            "rerere_resolutions": [],
+            "branch": "fix/my-branch",
+            "repo_root": "/tmp/my-repo",
+        }
+
+        with (
+            patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run,
+            patch("afcore.core.models.resolve_model", return_value="claude-sonnet-4-20250514"),
+            patch("afcore.engine.sdk_params.resolve_model_tier", return_value="STANDARD"),
+            patch("afcore.engine.sdk_params.resolve_session_params", return_value=_mock_session_params()),
+            patch("afcore.engine.sdk_params.resolve_security_config", return_value=None),
+        ):
+            await engine._run_coder_session(
+                archetype="coder",
+                mode="carry-patch",
+                context=context,
+            )
+
+        from pathlib import Path  # noqa: PLC0415
+
+        workspace = mock_run.call_args.kwargs["workspace"]
+        assert workspace.path == Path("/tmp/my-repo")
+        assert workspace.branch == "fix/my-branch"
+        assert workspace.mode == "carry-patch"
+
+
+class TestFullCycleResolution:
+    """AC-5: Full run_cycle with a real engine (patched internals) resolves successfully.
+
+    Verifies that conflicts_resolved increments by 1 and conflicts_failed
+    stays at 0 when the coder session succeeds.
+
+    Requirements: NS-REQ-5
+    Test Spec: TS-NS-5
+    """
+
+    async def test_successful_resolution_with_mocked_engine(self) -> None:
+        """Successful cycle increments conflicts_resolved, not conflicts_failed.
+
+        Requirements: NS-REQ-5.1
+        Test Spec: TS-NS-5
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                description="Fix auth bug",
+                conflict_files=["auth.py"],
+            )
+        ]
+        hub_client = _make_hub_client(
+            patches=patches,
+            rerere_entries=[_RerereEntry(path="auth.py")],
+            submit_rebuild_return=_RebuildJob("job-1", "queued"),
+        )
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine(coder_session_returns=None)
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        with (
+            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
+            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
+            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "afcore.workspace.git.run_git",
+                AsyncMock(return_value=(0, "diff output", "")),
+            ),
+        ):
+            result = await monitor.run_cycle()
+
+        assert result.conflicts_resolved == 1, "conflicts_resolved must be 1 after successful resolution"
+        assert result.conflicts_failed == 0, "conflicts_failed must be 0 after successful resolution"
