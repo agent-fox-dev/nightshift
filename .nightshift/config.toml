@@ -22,6 +22,6 @@ compaction = true
 model_tier = "ADVANCED"
 max_turns = 120
 
-[archetypes.overrides.reviewer.modes.pre-review]
+[archetypes.overrides.reviewer.modes.pre-flight]
 model_tier = "STANDARD"
 max_turns = 50

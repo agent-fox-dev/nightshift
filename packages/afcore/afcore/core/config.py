@@ -248,7 +248,7 @@ class PerArchetypeConfig(BaseModel):
         default=None,
         description=(
             "Enable server-side context compaction to prevent context overflow in long sessions. "
-            "None = use registry default (False)."
+            "None = use registry default (True for coder, False for other archetypes)."
         ),
     )
     modes: dict[str, PerArchetypeConfig] = Field(
@@ -272,6 +272,35 @@ class ArchetypesConfig(BaseModel):
         default_factory=dict,
         description=("Unified per-archetype configuration tables. TOML: [archetypes.overrides.<name>]."),
     )
+
+    @model_validator(mode="after")
+    def _validate_mode_names(self) -> ArchetypesConfig:
+        """Warn when mode keys don't match a built-in archetype's registered modes.
+
+        Only validates archetypes present in ARCHETYPE_REGISTRY (custom
+        archetypes are exempt). Emits a warning per unknown mode name
+        listing the valid modes for that archetype.
+        """
+        from afcore.archetypes import ARCHETYPE_REGISTRY
+
+        for arch_name, arch_cfg in self.overrides.items():
+            if not arch_cfg.modes:
+                continue
+            registry_entry = ARCHETYPE_REGISTRY.get(arch_name)
+            if registry_entry is None:
+                # Custom archetype — skip validation
+                continue
+            valid_modes = sorted(registry_entry.modes.keys())
+            for mode_name in arch_cfg.modes:
+                if mode_name not in registry_entry.modes:
+                    logger.warning(
+                        "Unknown mode '%s' in [archetypes.overrides.%s.modes]. Valid modes for '%s': %s",
+                        mode_name,
+                        arch_name,
+                        arch_name,
+                        valid_modes,
+                    )
+        return self
 
 
 class ModelPricing(BaseModel):

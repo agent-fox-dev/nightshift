@@ -150,27 +150,39 @@ def resolve_compaction(config: AgentFoxConfig, archetype: str, *, mode: str | No
     return _cascade(config, archetype, mode, attr="compaction", default_fn=lambda e: e.default_compaction)
 
 
-def resolve_max_budget(config: AgentFoxConfig, archetype: str | None = None) -> float | None:
+def resolve_max_budget(
+    config: AgentFoxConfig, archetype: str | None = None, *, mode: str | None = None
+) -> float | None:
     """Resolve max_budget_usd from config.
 
     Resolution order (highest to lowest priority):
-      1. archetypes.overrides.<archetype>.max_budget_usd (per-archetype override)
-      2. orchestrator.max_budget_usd (global default)
+      1. archetypes.overrides.<archetype>.modes.<mode>.max_budget_usd (mode-level override)
+      2. archetypes.overrides.<archetype>.max_budget_usd (per-archetype override)
+      3. orchestrator.max_budget_usd (global default)
 
     Returns None when the resolved value is 0.0 (unlimited).
 
     Requirements: 56-REQ-2.1, 56-REQ-2.2, 56-REQ-2.E1, NS-REQ-3.1
     """
-    # 1. Per-archetype override takes precedence
     if archetype is not None:
         override_cfg = config.archetypes.overrides.get(archetype)
+
+        # 1. Mode-level override (highest priority)
+        if mode is not None and override_cfg is not None:
+            mode_cfg = override_cfg.modes.get(mode)
+            if mode_cfg is not None and mode_cfg.max_budget_usd is not None:
+                if mode_cfg.max_budget_usd == 0.0:
+                    return None
+                return mode_cfg.max_budget_usd
+
+        # 2. Per-archetype override
         if override_cfg is not None and override_cfg.max_budget_usd is not None:
             per_archetype = override_cfg.max_budget_usd
             if per_archetype == 0.0:
                 return None
             return per_archetype
 
-    # 2. Fall back to global orchestrator setting
+    # 3. Fall back to global orchestrator setting
     budget = config.orchestrator.max_budget_usd
     if budget == 0.0:
         return None
@@ -322,7 +334,7 @@ def resolve_session_params(
         max_turns_override if max_turns_override is not None else resolve_max_turns(config, archetype, mode=mode)
     )
     thinking = resolve_thinking(config, archetype, mode=mode)
-    budget = resolve_max_budget(config, archetype)
+    budget = resolve_max_budget(config, archetype, mode=mode)
     effort = resolve_effort(config, archetype, mode=mode)
     compaction = resolve_compaction(config, archetype, mode=mode)
     cache_policy = config.caching.cache_policy.value
