@@ -108,12 +108,15 @@ class TestHelpOutputSubprocess:
         assert flag in result.stdout
 
 
-class TestSmoke6InitFlag:
-    """TS-07-SMOKE-6: nightshift --init exits 0 and creates the config file."""
+class TestSmoke6InitFlagRemoved:
+    """TS-NS-1: nightshift --init is no longer accepted.
+
+    Requirements: NS-REQ-1
+    """
 
     @pytest.mark.smoke
-    def test_init_exits_zero(self, tmp_path: Path) -> None:
-        """nightshift --init exits 0 when run in an empty directory."""
+    def test_init_rejected(self, tmp_path: Path) -> None:
+        """nightshift --init exits non-zero when run."""
         result = subprocess.run(
             [sys.executable, "-m", "nightshift", "--init"],
             capture_output=True,
@@ -121,24 +124,11 @@ class TestSmoke6InitFlag:
             timeout=30,
             cwd=str(tmp_path),
         )
-        assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        assert result.returncode != 0, f"--init should be rejected, stdout: {result.stdout}\nstderr: {result.stderr}"
 
     @pytest.mark.smoke
-    def test_init_creates_config_file(self, tmp_path: Path) -> None:
-        """nightshift --init creates .nightshift/config.toml in the working directory."""
-        subprocess.run(
-            [sys.executable, "-m", "nightshift", "--init"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(tmp_path),
-        )
-        config_path = tmp_path / ".nightshift" / "config.toml"
-        assert config_path.exists(), ".nightshift/config.toml must be created by --init"
-
-    @pytest.mark.smoke
-    def test_init_listed_in_help(self) -> None:
-        """nightshift --help lists --init flag."""
+    def test_init_not_listed_in_help(self) -> None:
+        """nightshift --help does not list --init flag."""
         result = subprocess.run(
             [sys.executable, "-m", "nightshift", "--help"],
             capture_output=True,
@@ -146,4 +136,4 @@ class TestSmoke6InitFlag:
             timeout=30,
         )
         assert result.returncode == 0
-        assert "--init" in result.stdout
+        assert "--init" not in result.stdout

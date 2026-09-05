@@ -707,7 +707,8 @@ def _load_config_global_local() -> AgentFoxConfig:
     used as the **sole** config source — the global config is not read.
 
     Otherwise, the global config (``~/.nightshift/config.toml``) is loaded.
-    If neither exists, a minimal local config is auto-created for reference.
+    If neither exists, a global config is auto-created at
+    ``~/.nightshift/config.toml`` (NS-REQ-4).
     """
     local_path = Path.cwd() / ".nightshift" / "config.toml"
 
@@ -750,8 +751,10 @@ def _load_config_global_local() -> AgentFoxConfig:
             global_dict = _parse_toml_file(global_config_path)
             logger.debug("Loaded global config from %s", global_config_path)
 
-    if not global_dict:
-        _create_minimal_local_config(local_path)
+    # NS-REQ-4: When neither local nor global config exists, auto-create
+    # a global config at ~/.nightshift/config.toml.
+    if not global_dict and home is not None:
+        _create_default_global_config(home / ".nightshift" / "config.toml")
 
     config = _validate_config_dict(global_dict, source="global config")
 
@@ -761,17 +764,21 @@ def _load_config_global_local() -> AgentFoxConfig:
     return config
 
 
-def _create_minimal_local_config(path: Path) -> None:
-    """Create a minimal local config with default values for reference."""
+def _create_default_global_config(path: Path) -> None:
+    """Create a default global config at ``~/.nightshift/config.toml``.
+
+    NS-REQ-4: When neither local nor global config exists, create a global
+    config using the default template.  Failures are logged but do not abort.
+    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         from afcore.core.config_gen import generate_default_config
 
         path.write_text(generate_default_config(), encoding="utf-8")
-        logger.info("Created minimal config at %s", path)
+        logger.info("Created global config at %s", path)
     except OSError:
-        logger.debug("Could not create minimal config at %s", path)
+        logger.debug("Could not create global config at %s", path)
 
 
 def resolve_spec_root(config: AgentFoxConfig, project_root: Path) -> Path:

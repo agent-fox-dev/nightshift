@@ -17,7 +17,6 @@ from afcore.ui.display import create_theme, render_banner
 from afhub.auth import resolve_hub_pat, resolve_hub_url
 
 from nightshift._carry_patch_startup import startup_helper as _carry_patch_startup
-from nightshift._init_command import handle_init as _handle_init
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +24,6 @@ logger = logging.getLogger(__name__)
 @exit_codes(**{"0": "Success", "1": "Startup failure", "130": "Immediate abort"})
 @click.group(cls=AgentFoxGroup, invoke_without_command=True)
 @click.version_option(version=None, package_name="nightshift")
-@click.option(
-    "--init",
-    is_flag=True,
-    is_eager=True,
-    expose_value=False,
-    callback=_handle_init,
-    help="Create .nightshift/config.toml and provision required platform labels, then exit.",
-)
 @click.option("--json/--no-json", "json_flag", default=None, help="Enable/disable JSON output mode")
 @click.option("--hub-url", default=None, help="Hub API base URL")
 @click.option("--workspace", default=None, help="Hub workspace slug")
@@ -128,6 +119,13 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     except IntegrationError as exc:
         click.echo(f"Error: GitHub authentication failed — {exc}", err=True)
         sys.exit(1)
+
+    # NS-REQ-2 / NS-REQ-3: Verify all required labels exist and create any
+    # that are missing.  If label creation fails, exit with a clear message.
+    from nightshift._label_provisioning import ensure_labels
+
+    ensure_labels(platform)
+
     if cleanup_stale_merge_lock(root):
         logger.info("Removed stale merge lock at startup")
 

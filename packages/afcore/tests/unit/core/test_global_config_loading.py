@@ -126,21 +126,23 @@ class TestPostMergeValidation:
 
 
 # ===================================================================
-# TS-13-4: Global config auto-creation
+# TS-13-4: Global config auto-creation (NS-REQ-4)
 # ===================================================================
 class TestGlobalConfigAutoCreation:
-    """TS-13-4: load_config creates minimal local config when neither exists."""
+    """TS-13-4 / NS-REQ-4: load_config creates global config when neither exists."""
 
     def test_auto_creates_global_config(self, fake_home, tmp_path, monkeypatch, clean_af_env):
-        """When no config exists, a minimal local config is auto-created."""
+        """NS-REQ-4: When no config exists, a global config is auto-created at ~/.nightshift/config.toml."""
         repo = tmp_path / "repo"
         repo.mkdir(exist_ok=True)
         monkeypatch.chdir(repo)
 
         config = load_config()
 
+        global_config = fake_home / ".nightshift" / "config.toml"
         local_config = repo / ".nightshift" / "config.toml"
-        assert local_config.exists()
+        assert global_config.exists(), "Global config should be auto-created"
+        assert not local_config.exists(), "Local config should NOT be created"
         assert isinstance(config, AgentFoxConfig)
 
 
@@ -644,11 +646,11 @@ class TestNonexistentCWD:
 # TS-13-P2: Global config not overwritten after first creation
 # ===================================================================
 class TestGlobalConfigNotOverwrittenProperty:
-    """TS-13-P2: Auto-created local config not overwritten on subsequent calls."""
+    """TS-13-P2 / NS-REQ-5: Auto-created global config not overwritten on subsequent calls."""
 
     @pytest.mark.property
     def test_global_config_not_overwritten(self, fake_home, tmp_path, monkeypatch, clean_af_env):
-        """Property: multiple load_config calls don't overwrite auto-created local config."""
+        """Property: multiple load_config calls don't overwrite auto-created global config."""
         from hypothesis import given, settings
         from hypothesis import strategies as st
 
@@ -660,12 +662,12 @@ class TestGlobalConfigNotOverwrittenProperty:
         @settings(max_examples=5)
         def check(n_calls):
             load_config()
-            local_config_path = repo / ".nightshift" / "config.toml"
-            content_after_first = local_config_path.read_text()
+            global_config_path = fake_home / ".nightshift" / "config.toml"
+            content_after_first = global_config_path.read_text()
 
             for _ in range(n_calls - 1):
                 load_config()
-                assert local_config_path.read_text() == content_after_first
+                assert global_config_path.read_text() == content_after_first
 
         check()
 
@@ -809,11 +811,11 @@ class TestSymlinkFinalFileOnlyProperty:
 
 
 class TestSmoke1ZeroConfigFirstRun:
-    """TS-13-SMOKE-1: Zero-config first run auto-creates local config."""
+    """TS-13-SMOKE-1: Zero-config first run auto-creates global config (NS-REQ-4)."""
 
     @pytest.mark.smoke
     def test_zero_config_first_run(self, fake_home, tmp_path, monkeypatch, caplog, clean_af_env):
-        """PATH-1: First load_config() auto-creates local config, emits DEBUG logs."""
+        """PATH-1 / NS-REQ-4: First load_config() auto-creates global config, emits DEBUG logs."""
         repo = tmp_path / "repo"
         repo.mkdir()
         monkeypatch.chdir(repo)
@@ -821,9 +823,11 @@ class TestSmoke1ZeroConfigFirstRun:
         with caplog.at_level(logging.DEBUG):
             config = load_config()
 
-        # Local config auto-created
+        # NS-REQ-4: Global config auto-created, no local config
+        global_config = fake_home / ".nightshift" / "config.toml"
         local_config = repo / ".nightshift" / "config.toml"
-        assert local_config.exists()
+        assert global_config.exists(), "Global config should be auto-created"
+        assert not local_config.exists(), "Local config should NOT be created"
 
         # Valid config returned
         assert isinstance(config, AgentFoxConfig)
