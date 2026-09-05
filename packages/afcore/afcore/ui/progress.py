@@ -71,6 +71,8 @@ class TaskEvent:
     escalated_from: str | None = None  # e.g. "STANDARD"
     escalated_to: str | None = None  # e.g. "ADVANCED"
     predecessor_node: str | None = None  # for disagreement lines
+    input_tokens: int = 0  # cumulative input tokens for this phase
+    output_tokens: int = 0  # cumulative output tokens for this phase
 
 
 ActivityCallback = Callable[[ActivityEvent], None]
@@ -361,16 +363,28 @@ class ProgressDisplay:
         if handler is not None:
             handler.set_live_console(console)
 
+    @staticmethod
+    def _format_token_suffix(input_tokens: int, output_tokens: int) -> str:
+        """Format the token suffix for a task line.
+
+        Returns an empty string when both counts are zero, so no noise
+        is added for phases that produced no API traffic.
+        """
+        if not input_tokens and not output_tokens:
+            return ""
+        return f" · {format_tokens(input_tokens)}↑ {format_tokens(output_tokens)}↓"
+
     def _format_task_line(self, event: TaskEvent) -> Text:
         """Format a permanent line for a task event."""
         duration = format_duration(event.duration_s)
         arch_label = f" [{event.archetype}]" if event.archetype else ""
+        token_suffix = self._format_token_suffix(event.input_tokens, event.output_tokens)
 
         if event.status == "completed":
-            text = f"{_CHECK} {event.node_id}{arch_label} done ({duration})"
+            text = f"{_CHECK} {event.node_id}{arch_label} done ({duration}){token_suffix}"
             return Text(text, style="bold green")
         elif event.status == "failed":
-            text = f"{_CROSS} {event.node_id}{arch_label} failed"
+            text = f"{_CROSS} {event.node_id}{arch_label} failed{token_suffix}"
             return Text(text, style="bold red")
         elif event.status == "blocked":
             text = f"{_CROSS} {event.node_id}{arch_label} blocked"

@@ -1047,9 +1047,16 @@ class FixPipeline:
         Catches exceptions and returns empty TriageResult on failure.
         Catches comment posting errors.
 
+        Side-effect: stores the triage session's token counts in
+        ``_last_triage_input_tokens`` and ``_last_triage_output_tokens``
+        so the caller can include them in the TaskEvent.
+
         Requirements: 82-REQ-3.1, 82-REQ-3.E1, 82-REQ-7.E1
         """
         from afcore.session.review_parser import parse_triage_output
+
+        self._last_triage_input_tokens = 0
+        self._last_triage_output_tokens = 0
 
         node_id = f"fix-issue-{spec.issue_number}:0:triage"
         triage_task = (
@@ -1077,6 +1084,8 @@ class FixPipeline:
                 task_prompt=triage_task,
             )
             self._emit_session_event(outcome, "maintainer", self._run_id, node_id=node_id)
+            self._last_triage_input_tokens = getattr(outcome, "input_tokens", 0)
+            self._last_triage_output_tokens = getattr(outcome, "output_tokens", 0)
         except Exception as exc:
             logger.warning(
                 "Triage session failed for issue #%d: %s",
@@ -1716,6 +1725,8 @@ class FixPipeline:
                         status="completed",
                         duration_s=duration,
                         archetype="maintainer",
+                        input_tokens=getattr(self, "_last_triage_input_tokens", 0),
+                        output_tokens=getattr(self, "_last_triage_output_tokens", 0),
                     )
                 )
             # Count triage session in metrics if it produced output

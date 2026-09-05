@@ -182,7 +182,16 @@ class CoderReviewerLoop:
             )
             duration = time.monotonic() - t0
             if p._task_callback is not None:
-                p._task_callback(TaskEvent(node_id=node_id, status="completed", duration_s=duration, archetype="coder"))
+                p._task_callback(
+                    TaskEvent(
+                        node_id=node_id,
+                        status="completed",
+                        duration_s=duration,
+                        archetype="coder",
+                        input_tokens=getattr(coder_outcome, "input_tokens", 0),
+                        output_tokens=getattr(coder_outcome, "output_tokens", 0),
+                    )
+                )
             return coder_outcome
         except Exception as exc:
             duration = time.monotonic() - t0
@@ -289,7 +298,14 @@ class CoderReviewerLoop:
             duration = time.monotonic() - t0
             if p._task_callback is not None:
                 p._task_callback(
-                    TaskEvent(node_id=node_id, status="completed", duration_s=duration, archetype="reviewer")
+                    TaskEvent(
+                        node_id=node_id,
+                        status="completed",
+                        duration_s=duration,
+                        archetype="reviewer",
+                        input_tokens=getattr(outcome, "input_tokens", 0),
+                        output_tokens=getattr(outcome, "output_tokens", 0),
+                    )
                 )
             return outcome
         except Exception as exc:
@@ -350,7 +366,14 @@ class CoderReviewerLoop:
             duration = time.monotonic() - t0
             if p._task_callback is not None:
                 p._task_callback(
-                    TaskEvent(node_id=retry_node_id, status="completed", duration_s=duration, archetype="reviewer")
+                    TaskEvent(
+                        node_id=retry_node_id,
+                        status="completed",
+                        duration_s=duration,
+                        archetype="reviewer",
+                        input_tokens=getattr(retry_outcome, "input_tokens", 0),
+                        output_tokens=getattr(retry_outcome, "output_tokens", 0),
+                    )
                 )
             retry_response = getattr(retry_outcome, "response", "") or ""
             retry_result = parse_fix_review_output(

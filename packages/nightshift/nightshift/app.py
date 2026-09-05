@@ -191,7 +191,22 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
             except Exception:  # noqa: BLE001, S110
                 pass
     fixed, cost = engine.state.issues_fixed, ds.total_cost
+    total_in = engine.state.total_input_tokens
+    total_out = engine.state.total_output_tokens
     if om.json_mode:
-        om.emit({"status": "stopped", "issues_fixed": fixed, "total_cost": cost})
+        om.emit(
+            {
+                "status": "stopped",
+                "issues_fixed": fixed,
+                "total_cost": cost,
+                "input_tokens": total_in,
+                "output_tokens": total_out,
+            }
+        )
     else:
-        click.echo(f"Nightshift stopped. Issues fixed: {fixed}, Total cost: ${cost:.2f}")
+        from afcore.ui.progress import format_tokens
+
+        token_suffix = ""
+        if total_in or total_out:
+            token_suffix = f", Tokens: {format_tokens(total_in)}↑ {format_tokens(total_out)}↓"
+        click.echo(f"Nightshift stopped. Issues fixed: {fixed}, Total cost: ${cost:.2f}{token_suffix}")

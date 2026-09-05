@@ -282,6 +282,8 @@ class TestExitSummary:
             mock_engine = MagicMock()
             mock_engine.state = MagicMock()
             mock_engine.state.issues_fixed = 3
+            mock_engine.state.total_input_tokens = 0
+            mock_engine.state.total_output_tokens = 0
             MockEngine.return_value = mock_engine
 
             mock_daemon_state = MagicMock()

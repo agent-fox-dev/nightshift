@@ -78,6 +78,16 @@ class NightShiftState:
     issue_outcomes: list[IssueOutcome] = field(default_factory=list)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
+    @property
+    def total_input_tokens(self) -> int:
+        """Sum of input_tokens across all issue outcomes."""
+        return sum(o.input_tokens for o in self.issue_outcomes)
+
+    @property
+    def total_output_tokens(self) -> int:
+        """Sum of output_tokens across all issue outcomes."""
+        return sum(o.output_tokens for o in self.issue_outcomes)
+
     async def add_fix_result(
         self,
         cost: float,
@@ -591,15 +601,19 @@ class NightShiftEngine:
                 exc_info=True,
             )
 
-        from afcore.ui.progress import format_duration
+        from afcore.ui.progress import format_duration, format_tokens
 
         duration_ms = int((time.monotonic() - fix_start) * 1000)
         duration_str = format_duration(duration_ms / 1000)
 
+        token_suffix = ""
+        if input_tokens or output_tokens:
+            token_suffix = f" \u00b7 {format_tokens(input_tokens)}\u2191 {format_tokens(output_tokens)}\u2193"
+
         if succeeded:
-            self._emit_status(f"\u2714 Issue #{issue.number} fixed ({duration_str})", "bold green")
+            self._emit_status(f"\u2714 Issue #{issue.number} fixed ({duration_str}){token_suffix}", "bold green")
         else:
-            self._emit_status(f"\u2718 Issue #{issue.number} failed ({duration_str})", "bold red")
+            self._emit_status(f"\u2718 Issue #{issue.number} failed ({duration_str}){token_suffix}", "bold red")
 
         outcome = IssueOutcome(
             issue_number=issue.number,

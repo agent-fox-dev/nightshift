@@ -1150,7 +1150,7 @@ class TestFixPipelineDbTelemetry:
             async def process_issue(  # type: ignore[override]
                 self, *args: object, **kwargs: object
             ) -> object:
-                return MagicMock(sessions_run=0)
+                return MagicMock(sessions_run=0, input_tokens=0, output_tokens=0)
 
         with patch(
             "afcore.nightshift.engine.FixPipeline",
