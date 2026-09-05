@@ -227,39 +227,23 @@ class TestRetryLine:
         assert "[coder]" in text, f"Expected [coder] in: {text!r}"
 
 
-class TestRetryWithEscalation:
-    """TS-59-27: Retry with escalation includes model tier info.
+class TestRetryNoEscalationFields:
+    """TS-59-27/28: TaskEvent has no escalated_from/escalated_to fields.
 
-    Requirement: 59-REQ-8.3
+    Escalation fields were removed in #22 — retry lines never include
+    escalation text.
     """
 
-    def test_retry_escalation_line_format(self) -> None:
-        """Retry with escalation contains escalation info."""
-        theme, _buf = _make_theme()
-        display = ProgressDisplay(theme, quiet=False)
-        event = TaskEvent(
-            node_id="spec:1",
-            status="retry",
-            duration_s=0,
-            archetype="coder",
-            attempt=2,
-            escalated_from="STANDARD",
-            escalated_to="ADVANCED",
-        )
-        line = display._format_task_line(event)
-        text = str(line)
-        assert "escalated: STANDARD" in text, f"Expected 'escalated: STANDARD' in: {text!r}"
-        assert "ADVANCED" in text, f"Expected 'ADVANCED' in: {text!r}"
+    def test_task_event_has_no_escalation_fields(self) -> None:
+        """TaskEvent dataclass has no escalated_from or escalated_to fields."""
+        import dataclasses
 
+        field_names = {f.name for f in dataclasses.fields(TaskEvent)}
+        assert "escalated_from" not in field_names
+        assert "escalated_to" not in field_names
 
-class TestRetryWithoutEscalation:
-    """TS-59-28: Retry without escalation omits escalation suffix.
-
-    Requirement: 59-REQ-8.E1
-    """
-
-    def test_retry_no_escalation_omits_suffix(self) -> None:
-        """Retry without escalation does not contain 'escalated'."""
+    def test_retry_line_omits_escalation(self) -> None:
+        """Retry event line does not contain 'escalated'."""
         theme, _buf = _make_theme()
         display = ProgressDisplay(theme, quiet=False)
         event = TaskEvent(

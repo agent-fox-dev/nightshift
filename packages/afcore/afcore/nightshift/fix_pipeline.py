@@ -109,8 +109,8 @@ class AssessedComplexity:
     """Complexity assessment embedded in triage output.
 
     Frozen dataclass with tier, confidence, and rationale fields.
-    Used by the nightshift triage model to provide a pre-assessed complexity
-    signal that bypasses the Haiku LLM call for coder nodes.
+    Used as a complexity hint to select compact vs. full prompt
+    rendering for the coder agent.
 
     Requirement: 15-REQ-11.1
     """
@@ -1048,7 +1048,7 @@ class FixPipeline:
         task_prompt: str,
         model_id: str | None = None,
     ) -> object:
-        """Run coder with optional model override for escalation.
+        """Run coder session.
 
         Requirements: 82-REQ-8.3, 98-REQ-2.2
         """
@@ -1089,8 +1089,8 @@ class FixPipeline:
             f"Triage issue #{spec.issue_number}: {spec.title}\n\n"
             "Analyze the issue, identify the root cause and affected files, "
             "and produce a JSON triage report with acceptance criteria.\n\n"
-            "Include an 'assessed_complexity' object in your JSON response to "
-            "recommend the model tier for the coder agent:\n"
+            "Include an 'assessed_complexity' object in your JSON response as a "
+            "complexity hint used for prompt rendering:\n"
             "{\n"
             '  "assessed_complexity": {\n'
             '    "tier": "SIMPLE" | "STANDARD" | "ADVANCED",\n'
@@ -1162,7 +1162,7 @@ class FixPipeline:
         prior_context: str = "",
         knowledge_context: str = "",
     ) -> CoderReviewerResult:
-        """Coder-reviewer loop with retry and escalation.
+        """Coder-reviewer loop with retry.
 
         Delegates to CoderReviewerLoop collaborator class.
         Returns a :class:`CoderReviewerResult` — truthy on PASS, falsy on
@@ -1675,8 +1675,8 @@ class FixPipeline:
     ) -> FixMetrics:
         """Process an af:fix issue through the full pipeline.
 
-        Runs triage -> coder -> reviewer with retry/escalation loop
-        inside an isolated git worktree.
+        Runs triage -> coder -> reviewer with retry loop inside an
+        isolated git worktree.
 
         When ``run_id`` is provided (e.g. by the engine that already emitted
         a ``FIX_START`` lifecycle event), that same id is reused so all audit
@@ -1770,7 +1770,7 @@ class FixPipeline:
 
             prior_context, knowledge_context = self._gather_context(spec, triage)
 
-            # 82-REQ-7.1: coder-reviewer loop with retry/escalation
+            # 82-REQ-7.1: coder-reviewer loop with retry
             success = await self._coder_review_loop(
                 spec,
                 triage,
@@ -1781,7 +1781,7 @@ class FixPipeline:
             )
 
             if not success:
-                # Ladder exhausted — do NOT close issue
+                # Retries exhausted — do NOT close issue
                 self._try_complete_run("completed")
                 return metrics
 

@@ -50,9 +50,17 @@ surrounding prose, no explanatory text before or after the JSON.
       "expected": "What correct behavior looks like after the fix.",
       "assertion": "How to verify the fix is correct (test or check)."
     }
-  ]
+  ],
+  "assessed_complexity": {
+    "tier": "SIMPLE | STANDARD | ADVANCED",
+    "confidence": 0.0,
+    "rationale": "Brief explanation of complexity assessment."
+  }
 }
 ```
+
+The `assessed_complexity` object is a complexity hint used for prompt
+rendering — it does not control coder model selection.
 
 ### Criteria Guidelines
 

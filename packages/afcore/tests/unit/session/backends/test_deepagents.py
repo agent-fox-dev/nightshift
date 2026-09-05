@@ -148,7 +148,9 @@ class TestTypesModuleUnchanged:
 
     # Baseline MD5 hash of types.py before spec-03 changes.
     # If types.py is modified by spec-03 implementation, this test fails.
-    _BASELINE_TYPES_HASH = "f42f25750d82de1bbf5aecbce91f63cf"
+    # Updated in #22: comment wording changed from "escalation retry" to
+    # "retry attempt" to remove stale escalation-ladder references.
+    _BASELINE_TYPES_HASH = "e09775ed1d7cb5594f76865938089e90"
 
     def test_types_module_hash_unchanged(self) -> None:
         """TS-03-3: types.py content hash matches pre-spec-03 baseline."""

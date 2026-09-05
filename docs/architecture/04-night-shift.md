@@ -116,9 +116,10 @@ containing:
 - **`acceptance_criteria`** — an array of structured criteria, each with an
   `id`, `description`, `preconditions`, `expected` outcome, and `assertion`
   pseudocode.
-- **`assessed_complexity`** — a complexity assessment with `tier`
-  (SIMPLE/STANDARD/ADVANCED), `variant` (null/fast/standard/extended),
-  `confidence` (0–1), and `rationale`.
+- **`assessed_complexity`** — a complexity hint with `tier`
+  (SIMPLE/STANDARD/ADVANCED), `confidence` (0–1), and `rationale`.
+  Used for prompt rendering (compact vs. full); does not control
+  coder model selection.
 
 The triage report is posted as a comment on the issue via the platform API,
 providing visibility into the system's analysis. The acceptance criteria are

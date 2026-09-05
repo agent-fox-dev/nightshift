@@ -85,20 +85,18 @@ class TestArchetypeLabelPresence:
 
 
 class TestEventLineFormatCorrectness:
-    """TS-59-P3: Retry events include attempt; escalation iff escalated_from set.
+    """TS-59-P3: Retry events include attempt; no escalation fields.
 
-    Property 3: For any attempt 1-10, escalated_from in {None, SIMPLE, STANDARD},
-    retry #{attempt} is always present; 'escalated:' present iff escalated_from
-    is not None.
+    Property 3: For any attempt 1-10, retry #{attempt} is always present
+    and no escalation text appears (escalation fields removed in #22).
     """
 
     @given(
         attempt=st.integers(min_value=1, max_value=10),
-        esc=st.sampled_from([None, "SIMPLE", "STANDARD"]),
     )
     @settings(max_examples=50)
-    def test_retry_format_correctness(self, attempt: int, esc: str | None) -> None:
-        """Retry lines always have attempt; escalation only when present."""
+    def test_retry_format_correctness(self, attempt: int) -> None:
+        """Retry lines always have attempt; never escalation text."""
         theme, _buf = _make_theme()
         display = ProgressDisplay(theme, quiet=False)
         event = TaskEvent(
@@ -107,10 +105,8 @@ class TestEventLineFormatCorrectness:
             duration_s=0,
             archetype="coder",
             attempt=attempt,
-            escalated_from=esc,
-            escalated_to="ADVANCED" if esc else None,
         )
         line = display._format_task_line(event)
         text = str(line)
         assert f"retry #{attempt}" in text, f"Expected 'retry #{attempt}' in: {text!r}"
-        assert ("escalated:" in text) == (esc is not None), f"Escalation mismatch for esc={esc!r}: {text!r}"
+        assert "escalated:" not in text, f"Unexpected escalation text in: {text!r}"

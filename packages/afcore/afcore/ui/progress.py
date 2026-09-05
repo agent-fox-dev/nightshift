@@ -68,8 +68,6 @@ class TaskEvent:
     error_message: str | None = None
     archetype: str | None = None  # e.g. "coder", "reviewer", "verifier"
     attempt: int | None = None  # retry attempt number
-    escalated_from: str | None = None  # e.g. "STANDARD"
-    escalated_to: str | None = None  # e.g. "ADVANCED"
     predecessor_node: str | None = None  # for disagreement lines
     input_tokens: int = 0  # cumulative input tokens for this phase
     output_tokens: int = 0  # cumulative output tokens for this phase
@@ -396,8 +394,6 @@ class ProgressDisplay:
         elif event.status == "retry":
             attempt = event.attempt or 1
             base = f"{_RETRY} {event.node_id}{arch_label} retry #{attempt}"
-            if event.escalated_from:
-                base += f" (escalated: {event.escalated_from} → {event.escalated_to})"
             return Text(base, style="bold yellow")
         else:
             text = f"{_CROSS} {event.node_id}{arch_label} {event.status}"
