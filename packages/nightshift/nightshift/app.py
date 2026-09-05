@@ -92,6 +92,7 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
         NightShiftEngine,
         validate_night_shift_prerequisites,
     )
+    from afcore.nightshift.pid import PidStatus, check_pid_file
     from afcore.nightshift.platform_factory import create_platform
     from afcore.nightshift.streams import build_streams
     from afcore.ui.progress import ProgressDisplay
@@ -103,6 +104,18 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     root = Path.cwd()
     check_root_permission_mode(config)  # Pre-flight: root + bypassPermissions (#11)
     validate_night_shift_prerequisites(config)
+
+    # NS-REQ-3 / NS-REQ-4: Refuse to start when another daemon instance
+    # is already running.  Stale or absent PID files are ignored.
+    pid_path = root / ".nightshift" / "daemon.pid"
+    pid_status, existing_pid = check_pid_file(pid_path)
+    if pid_status is PidStatus.ALIVE:
+        click.echo(
+            f"Error: another nightshift daemon is already running (PID {existing_pid}). "
+            "Stop the existing instance before starting a new one.",
+            err=True,
+        )
+        sys.exit(1)
 
     # Validate model access before entering the daemon loop (NS-REQ-3).
     from afcore.core.models import validate_model_access

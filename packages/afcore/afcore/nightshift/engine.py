@@ -392,6 +392,34 @@ class NightShiftEngine:
 
         async def _run_one(issue_num: int) -> tuple[int, bool]:
             """Process a single issue and return (issue_num, succeeded)."""
+            # Re-check issue freshness before starting work (NS-REQ-2).
+            # Between the poll that discovered this issue and now, someone
+            # may have closed the issue or removed its af:fix label.
+            try:
+                fresh = await self._platform.get_issue(issue_num)  # type: ignore[attr-defined]
+                # Check closed state (forward-compatible with IssueResult
+                # gaining a ``state`` field in the future).
+                if getattr(fresh, "state", "open") == "closed":
+                    logger.info(
+                        "Issue #%d was closed between poll and dispatch, skipping",
+                        issue_num,
+                    )
+                    return (issue_num, False)
+                # Check that af:fix label is still present.
+                fresh_labels = getattr(fresh, "labels", None)
+                if isinstance(fresh_labels, (tuple, list)) and LABEL_FIX not in fresh_labels:
+                    logger.info(
+                        "Issue #%d no longer has af:fix label, skipping",
+                        issue_num,
+                    )
+                    return (issue_num, False)
+            except Exception:
+                logger.warning(
+                    "Failed to re-check issue #%d freshness, continuing with processing",
+                    issue_num,
+                    exc_info=True,
+                )
+
             issue = issue_map[issue_num]
             fix_succeeded = False
             try:

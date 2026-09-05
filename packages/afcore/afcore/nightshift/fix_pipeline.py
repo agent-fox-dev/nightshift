@@ -505,20 +505,26 @@ class FixPipeline:
     async def _setup_workspace(self, spec: InMemorySpec) -> WorkspaceInfo:
         """Create an isolated worktree for the fix branch.
 
-        Uses the same ``create_worktree`` function as the regular coding
-        path, with a custom branch name to preserve the ``fix/`` prefix
-        convention.
+        Fetches latest code from origin before branching so the worktree
+        starts from the latest upstream tip.  Uses the same
+        ``create_worktree`` function as the regular coding path, with a
+        custom branch name to preserve the ``fix/`` prefix convention.
 
-        Requirements: 61-REQ-6.2
+        Requirements: 61-REQ-6.2, NS-REQ-1
         """
-        from afcore.workspace import create_worktree
+        from afcore.workspace import create_worktree, ensure_integration_branch
 
         repo_root = Path.cwd()
+
+        # Fetch latest code from origin before branching (NS-REQ-1).
+        integration_branch = self._config.workspace.integration_branch
+        await ensure_integration_branch(repo_root, integration_branch)
+
         return await create_worktree(
             repo_root,
             spec_name=f"fix-issue-{spec.issue_number}",
             task_group=0,
-            base_branch=self._config.workspace.integration_branch,
+            base_branch=integration_branch,
             branch_name=spec.branch_name,
         )
 
