@@ -538,14 +538,12 @@ async def _run_feedback_iteration(
             task_group=1,
         )
 
-        model_id = getattr(config.night_shift, "model_id", None)
         try:
             await pipeline._run_coder_session(
                 workspace,
                 spec,
                 system_prompt,
                 task_prompt,
-                model_id=model_id,
             )
         except asyncio.CancelledError:
             raise

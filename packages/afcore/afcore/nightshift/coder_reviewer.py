@@ -172,13 +172,15 @@ class CoderReviewerLoop:
                 model_id=model_id,
             )
             p._accumulate_metrics(metrics, coder_outcome)
-            p._emit_session_event(
+            coder_cost = p._emit_session_event(
                 coder_outcome,
                 "coder",
                 p._run_id,
                 node_id=node_id,
                 attempt=attempt + 1,
+                mode="fix",
             )
+            metrics.cost_usd += coder_cost
             duration = time.monotonic() - t0
             if p._task_callback is not None:
                 p._task_callback(
@@ -202,7 +204,7 @@ class CoderReviewerLoop:
                 archetype="coder",
                 payload={
                     "archetype": "coder",
-                    "model_id": model_id or p._get_model_id("coder"),
+                    "model_id": model_id or p._get_model_id("coder", mode="fix"),
                     "error_message": str(exc),
                     "attempt": attempt + 1,
                 },
@@ -287,13 +289,15 @@ class CoderReviewerLoop:
                 mode="fix-review",
             )
             p._accumulate_metrics(metrics, outcome)
-            p._emit_session_event(
+            reviewer_cost = p._emit_session_event(
                 outcome,
                 "reviewer",
                 p._run_id,
                 node_id=node_id,
                 attempt=attempt + 1,
+                mode="fix-review",
             )
+            metrics.cost_usd += reviewer_cost
             duration = time.monotonic() - t0
             if p._task_callback is not None:
                 p._task_callback(
@@ -317,7 +321,7 @@ class CoderReviewerLoop:
                 archetype="reviewer",
                 payload={
                     "archetype": "reviewer",
-                    "model_id": p._get_model_id("reviewer"),
+                    "model_id": p._get_model_id("reviewer", mode="fix-review"),
                     "error_message": str(exc),
                     "attempt": attempt + 1,
                 },
@@ -355,13 +359,15 @@ class CoderReviewerLoop:
                 mode="fix-review",
             )
             p._accumulate_metrics(metrics, retry_outcome)
-            p._emit_session_event(
+            retry_cost = p._emit_session_event(
                 retry_outcome,
                 "reviewer",
                 p._run_id,
                 node_id=retry_node_id,
                 attempt=attempt + 1,
+                mode="fix-review",
             )
+            metrics.cost_usd += retry_cost
             duration = time.monotonic() - t0
             if p._task_callback is not None:
                 p._task_callback(
@@ -393,7 +399,7 @@ class CoderReviewerLoop:
                 archetype="reviewer",
                 payload={
                     "archetype": "reviewer",
-                    "model_id": p._get_model_id("reviewer"),
+                    "model_id": p._get_model_id("reviewer", mode="fix-review"),
                     "error_message": str(exc),
                     "attempt": attempt + 1,
                 },

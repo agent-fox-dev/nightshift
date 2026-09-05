@@ -547,21 +547,15 @@ class NightShiftEngine:
             _fill_pool()
 
     def _calculate_fix_cost(self, metrics: object) -> float:
-        """Calculate USD cost from FixMetrics token counts."""
-        from afcore.core.config import PricingConfig
-        from afcore.core.models import calculate_cost, resolve_model
+        """Return the accumulated per-session cost from FixMetrics.
 
-        models_config = getattr(self._config, "models", None)
-        model_id = resolve_model("ADVANCED", models_config=models_config)
-        pricing = getattr(self._config, "pricing", PricingConfig())
-        return calculate_cost(
-            getattr(metrics, "input_tokens", 0),
-            getattr(metrics, "output_tokens", 0),
-            model_id,
-            pricing,
-            cache_read_input_tokens=getattr(metrics, "cache_read_input_tokens", 0),
-            cache_creation_input_tokens=getattr(metrics, "cache_creation_input_tokens", 0),
-        )
+        Each session's cost is computed at the model tier that actually ran
+        (e.g. STANDARD for coder, ADVANCED for reviewer) and accumulated
+        into ``FixMetrics.cost_usd`` by the pipeline.  This method simply
+        returns that pre-calculated total instead of re-pricing all tokens
+        at a single tier.
+        """
+        return getattr(metrics, "cost_usd", 0.0)
 
     async def _process_fix(self, issue: object, issue_body: str = "") -> None:
         """Process a single af:fix issue through the fix pipeline.

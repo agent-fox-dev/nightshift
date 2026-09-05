@@ -159,6 +159,7 @@ class FixMetrics:
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
     sessions_run: int = 0
+    cost_usd: float = 0.0
 
 
 def build_pr_body(
@@ -549,19 +550,24 @@ class FixPipeline:
         metrics.cache_creation_input_tokens += getattr(outcome, "cache_creation_input_tokens", 0)
         metrics.sessions_run += 1
 
-    def _get_model_id(self, archetype: str) -> str:
-        """Resolve model_id for the given archetype, with a safe fallback.
+    def _get_model_id(self, archetype: str, *, mode: str | None = None) -> str:
+        """Resolve model_id for the given archetype and mode, with a safe fallback.
+
+        When *mode* is provided the mode-level tier override is applied
+        (e.g. ``fix-review`` promotes ``reviewer`` from STANDARD to ADVANCED).
+        The fallback resolves through ``resolve_model`` using the configured
+        ``tier_defaults`` instead of hardcoding a specific model string.
 
         Requirements: 91-REQ-3.1
         """
-        try:
-            from afcore.core.models import resolve_model
-            from afcore.engine.sdk_params import resolve_model_tier
+        from afcore.core.models import resolve_model
+        from afcore.engine.sdk_params import resolve_model_tier
 
-            tier = resolve_model_tier(self._config, archetype)
-            return resolve_model(tier, models_config=self._config.models)
+        try:
+            tier = resolve_model_tier(self._config, archetype, mode=mode)
         except Exception:
-            return "claude-sonnet-4-6"
+            tier = "STANDARD"
+        return resolve_model(tier, models_config=self._config.models)
 
     def _try_complete_run(self, status: str) -> None:
         """Mark the runs row as finished (best-effort).
@@ -587,6 +593,7 @@ class FixPipeline:
         node_id: str = "",
         attempt: int = 1,
         cost: float = 0.0,
+        model_id: str | None = None,
     ) -> None:
         """Write a session outcome row to session_outcomes and update runs totals.
 
@@ -618,7 +625,7 @@ class FixPipeline:
             spec_name = parts[0] if parts else ""
             task_group = parts[1] if len(parts) > 1 else "0"
 
-            model_id = self._get_model_id(archetype)
+            effective_model_id = model_id or self._get_model_id(archetype)
 
             record = SessionOutcomeRecord(
                 id=str(_uuid.uuid4()),
@@ -634,7 +641,7 @@ class FixPipeline:
                 run_id=run_id,
                 attempt=attempt,
                 cost=cost,
-                model=model_id,
+                model=effective_model_id,
                 archetype=archetype,
                 commit_sha="",
                 error_message=error_message,
@@ -663,11 +670,18 @@ class FixPipeline:
         *,
         node_id: str = "",
         attempt: int = 1,
-    ) -> None:
+        mode: str | None = None,
+    ) -> float:
         """Emit session.complete or session.fail based on outcome status.
 
         Also writes a row to session_outcomes and updates the runs totals via
         _record_session_to_db (best-effort).
+
+        When *mode* is provided the model resolution uses the mode-level tier
+        override (e.g. ``fix-review`` resolves to ADVANCED for the reviewer
+        archetype).
+
+        Returns the session cost (USD).
 
         Best-effort: exceptions from audit infrastructure are logged and
         swallowed so the fix pipeline is never interrupted.
@@ -684,7 +698,7 @@ class FixPipeline:
         duration_ms = getattr(outcome, "duration_ms", 0)
         error_message = getattr(outcome, "error_message", None)
 
-        model_id = self._get_model_id(archetype)
+        model_id = self._get_model_id(archetype, mode=mode)
 
         if status == "completed":
             cost = calculate_session_cost(
@@ -736,6 +750,7 @@ class FixPipeline:
             node_id=node_id,
             attempt=attempt,
             cost=cost,
+            model_id=model_id,
         )
 
         # Ingest knowledge on completed sessions for finding supersession.
@@ -749,6 +764,8 @@ class FixPipeline:
                 archetype=archetype,
                 attempt=attempt,
             )
+
+        return cost
 
     # ------------------------------------------------------------------
     # Comment formatting (82-REQ-3.1, 82-REQ-6.1)
@@ -1062,6 +1079,7 @@ class FixPipeline:
 
         self._last_triage_input_tokens = 0
         self._last_triage_output_tokens = 0
+        self._last_triage_cost: float = 0.0
 
         node_id = f"fix-issue-{spec.issue_number}:0:triage"
         triage_task = (
@@ -1087,9 +1105,16 @@ class FixPipeline:
                 mode="fix-triage",
                 task_prompt=triage_task,
             )
-            self._emit_session_event(outcome, "maintainer", self._run_id, node_id=node_id)
+            triage_cost = self._emit_session_event(
+                outcome,
+                "maintainer",
+                self._run_id,
+                node_id=node_id,
+                mode="fix-triage",
+            )
             self._last_triage_input_tokens = getattr(outcome, "input_tokens", 0)
             self._last_triage_output_tokens = getattr(outcome, "output_tokens", 0)
+            self._last_triage_cost = triage_cost
         except Exception as exc:
             logger.warning(
                 "Triage session failed for issue #%d: %s",
@@ -1104,7 +1129,7 @@ class FixPipeline:
                 archetype="maintainer",
                 payload={
                     "archetype": "maintainer",
-                    "model_id": self._get_model_id("maintainer"),
+                    "model_id": self._get_model_id("maintainer", mode="fix-triage"),
                     "error_message": str(exc),
                     "attempt": 1,
                 },
@@ -1733,9 +1758,12 @@ class FixPipeline:
                         output_tokens=getattr(self, "_last_triage_output_tokens", 0),
                     )
                 )
-            # Count triage session in metrics if it produced output
+            # Accumulate triage session metrics if it produced output (AC-3).
             if triage.criteria or triage.summary:
+                metrics.input_tokens += getattr(self, "_last_triage_input_tokens", 0)
+                metrics.output_tokens += getattr(self, "_last_triage_output_tokens", 0)
                 metrics.sessions_run += 1
+                metrics.cost_usd += getattr(self, "_last_triage_cost", 0.0)
 
             prior_context, knowledge_context = self._gather_context(spec, triage)
 
