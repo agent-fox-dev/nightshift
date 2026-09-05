@@ -113,6 +113,12 @@ async def _run_agent_session(
     )
 
     try:
+        # Note: effort, compaction, and cache_policy are intentionally omitted.
+        # The merge agent is a narrow, single-purpose tool for conflict
+        # resolution — it does not use resolve_session_params or the
+        # archetype config cascade.  The caller supplies model_id directly
+        # (resolved from ADVANCED tier) and SDK defaults suffice for the
+        # remaining parameters.  See issue #20.
         outcome = await run_session(
             workspace=workspace,
             node_id="merge-agent",

@@ -1412,3 +1412,218 @@ class TestExceptionSanitizationInFailureComment:
             assert "Exception" in fc, f"Exception class name missing from: {fc!r}"
             # Ensure the comment is well-formed
             assert "Fix session failed: Exception" in fc
+
+
+# ---------------------------------------------------------------------------
+# Issue #20: effort, compaction, cache_policy forwarded to run_session
+# Requirements: NS-REQ-1, NS-REQ-2, NS-REQ-3, NS-REQ-4
+# ---------------------------------------------------------------------------
+
+
+class TestSessionParamsForwarding:
+    """Verify _run_session forwards effort, compaction, cache_policy to run_session.
+
+    Test Spec: TS-NS-1, TS-NS-2, TS-NS-3, TS-NS-4
+    """
+
+    @pytest.mark.asyncio
+    async def test_coder_default_effort_and_compaction(self) -> None:
+        """TS-NS-1: Default coder fix session forwards effort=xhigh, compaction=True.
+
+        Requirements: NS-REQ-1
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.fix_pipeline import FixPipeline
+
+        config = MagicMock()
+        config.archetypes.overrides.get.return_value = None
+        config.caching.cache_policy.value = "NONE"
+        mock_platform = AsyncMock()
+
+        pipeline = FixPipeline(config=config, platform=mock_platform)
+        pipeline._run_id = "test_run"
+
+        workspace = _mock_workspace()
+        spec = MagicMock()
+        spec.issue_number = 42
+        spec.title = "Fix something"
+        spec.system_context = "ctx"
+        spec.task_prompt = "task"
+
+        with patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = MagicMock(status="completed", response="")
+            await pipeline._run_session(
+                "coder",
+                workspace,
+                spec=spec,
+                mode="fix",
+            )
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["effort"] == "xhigh", f"Expected effort='xhigh', got {kwargs.get('effort')!r}"
+        assert kwargs["compaction"] is True, f"Expected compaction=True, got {kwargs.get('compaction')!r}"
+
+    @pytest.mark.asyncio
+    async def test_coder_effort_override_honoured(self) -> None:
+        """TS-NS-2: Config override effort='low' is forwarded to run_session.
+
+        Requirements: NS-REQ-2
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.fix_pipeline import FixPipeline
+
+        # Build a config mock where the coder archetype has effort='low' override
+        override = MagicMock()
+        override.effort = "low"
+        override.compaction = None
+        override.max_turns = None
+        override.thinking_mode = None
+        override.max_budget_usd = None
+        override.model_tier = None
+        override.allowlist = None
+        override.modes = {}
+
+        config = MagicMock()
+        config.archetypes.overrides.get.side_effect = lambda name: override if name == "coder" else None
+        config.caching.cache_policy.value = "NONE"
+        config.orchestrator.max_budget_usd = 0.0
+        mock_platform = AsyncMock()
+
+        pipeline = FixPipeline(config=config, platform=mock_platform)
+        pipeline._run_id = "test_run"
+
+        workspace = _mock_workspace()
+        spec = MagicMock()
+        spec.issue_number = 42
+        spec.title = "Fix something"
+        spec.system_context = "ctx"
+        spec.task_prompt = "task"
+
+        with patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = MagicMock(status="completed", response="")
+            await pipeline._run_session(
+                "coder",
+                workspace,
+                spec=spec,
+                mode="fix",
+            )
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["effort"] == "low", f"Expected effort='low', got {kwargs.get('effort')!r}"
+
+    @pytest.mark.asyncio
+    async def test_cache_policy_forwarded(self) -> None:
+        """TS-NS-3: cache_policy from config.caching is forwarded to run_session.
+
+        Requirements: NS-REQ-3
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.fix_pipeline import FixPipeline
+
+        config = MagicMock()
+        config.archetypes.overrides.get.return_value = None
+        config.caching.cache_policy.value = "EXTENDED"
+        mock_platform = AsyncMock()
+
+        pipeline = FixPipeline(config=config, platform=mock_platform)
+        pipeline._run_id = "test_run"
+
+        workspace = _mock_workspace()
+        spec = MagicMock()
+        spec.issue_number = 42
+        spec.title = "Fix something"
+        spec.system_context = "ctx"
+        spec.task_prompt = "task"
+
+        with patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = MagicMock(status="completed", response="")
+            await pipeline._run_session(
+                "coder",
+                workspace,
+                spec=spec,
+                mode="fix",
+            )
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["cache_policy"] == "EXTENDED", (
+            f"Expected cache_policy='EXTENDED', got {kwargs.get('cache_policy')!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_reviewer_default_effort_and_compaction(self) -> None:
+        """TS-NS-4: Reviewer fix-review session forwards effort='high', compaction=False.
+
+        Requirements: NS-REQ-4
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.fix_pipeline import FixPipeline
+
+        config = MagicMock()
+        config.archetypes.overrides.get.return_value = None
+        config.caching.cache_policy.value = "NONE"
+        mock_platform = AsyncMock()
+
+        pipeline = FixPipeline(config=config, platform=mock_platform)
+        pipeline._run_id = "test_run"
+
+        workspace = _mock_workspace()
+        spec = MagicMock()
+        spec.issue_number = 42
+        spec.title = "Fix something"
+        spec.system_context = "ctx"
+        spec.task_prompt = "task"
+
+        with patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = MagicMock(status="completed", response="")
+            await pipeline._run_session(
+                "reviewer",
+                workspace,
+                spec=spec,
+                mode="fix-review",
+            )
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["effort"] == "high", f"Expected effort='high', got {kwargs.get('effort')!r}"
+        assert kwargs["compaction"] is False, f"Expected compaction=False, got {kwargs.get('compaction')!r}"
+
+    @pytest.mark.asyncio
+    async def test_maintainer_triage_effort_forwarded(self) -> None:
+        """Maintainer fix-triage session forwards effort='medium', compaction=False.
+
+        Requirements: NS-REQ-4
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.fix_pipeline import FixPipeline
+
+        config = MagicMock()
+        config.archetypes.overrides.get.return_value = None
+        config.caching.cache_policy.value = "NONE"
+        mock_platform = AsyncMock()
+
+        pipeline = FixPipeline(config=config, platform=mock_platform)
+        pipeline._run_id = "test_run"
+
+        workspace = _mock_workspace()
+        spec = MagicMock()
+        spec.issue_number = 42
+        spec.title = "Fix something"
+        spec.system_context = "ctx"
+        spec.task_prompt = "task"
+
+        with patch("afcore.session.session.run_session", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = MagicMock(status="completed", response="")
+            await pipeline._run_session(
+                "maintainer",
+                workspace,
+                spec=spec,
+                mode="fix-triage",
+            )
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["effort"] == "medium", f"Expected effort='medium', got {kwargs.get('effort')!r}"
+        assert kwargs["compaction"] is False, f"Expected compaction=False, got {kwargs.get('compaction')!r}"
