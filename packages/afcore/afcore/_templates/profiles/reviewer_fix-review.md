@@ -28,8 +28,8 @@ alone and produce a single overall verdict.
 ## Constraints
 
 Read-only session. Do not create, modify, or delete any files.
-Run tests via `spec_tests`, `all_tests`, `linter` from `## Test Commands`,
-or `make check`.
+Run `make check` (lint + all tests) to verify the fix, or run targeted
+tests for the affected packages.
 
 ## Output Format
 

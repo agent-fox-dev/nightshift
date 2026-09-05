@@ -105,7 +105,7 @@ specs rather than human-authored ones.
 
 A Maintainer agent in `fix-triage` mode analyzes the issue. This agent has
 read-only access to the codebase (`ls`, `cat`, `git`, `wc`, `head`,
-`tail`) and operates at the STANDARD model tier.
+`tail`, `grep`) and operates at the STANDARD model tier.
 
 The triage agent explores the codebase, traces the code path related to the
 issue, identifies the root cause, and produces a structured JSON report

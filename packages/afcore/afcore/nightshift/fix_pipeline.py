@@ -949,8 +949,14 @@ class FixPipeline:
             project_dir=Path.cwd(),
         )
 
-        # Build task prompt with subtask list reference
-        task_prompt = f"{spec.task_prompt}\n\nRefer to the tasks subtask list in the context above"
+        # Build task prompt — include subtask list reference only when the
+        # full afspec context (with a ## Tasks section) was rendered.
+        # On the compact path (SIMPLE tier, ≤2 criteria) no tasks section
+        # exists, so the reference would point at nothing.
+        if use_compact:
+            task_prompt = spec.task_prompt
+        else:
+            task_prompt = f"{spec.task_prompt}\n\nRefer to the tasks subtask list in the context above"
 
         # Inject prior attempt context (prepended) and review feedback (appended)
         if prior_context:

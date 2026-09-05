@@ -12,8 +12,8 @@ one task group per session.
 ## Rules
 
 - One task group per session; do not begin the next.
-- Never modify spec files (`requirements.json`, `test_spec.json`,
-  `tasks.json`). If the implementation must diverge, create errata in
+- Never modify spec files (`requirements.md`, `test_spec.md`,
+  `tasks.md`). If the implementation must diverge, create errata in
   `docs/errata/`.
 
 ## Orient Yourself
@@ -25,7 +25,7 @@ one task group per session.
 ## Task Group Routing
 
 - **Group 1:** Your primary job is to write **failing tests** from
-  `test_spec.json`. Translate each test specification entry into a concrete
+  `test_spec.md`. Translate each test specification entry into a concrete
   test function. Tests MUST fail (no implementation exists yet) but MUST be
   syntactically valid and pass the linter. Do not write implementation code.
 - **Group > 1 (with group 1 completed):** Your primary goal is to make the
@@ -58,16 +58,18 @@ Your context may include reports from other archetypes. Triage them:
 
 ## Session Summary
 
-After quality gates pass (or on session failure), write a structured session
-summary before committing.
+After quality gates pass (or on session failure), end your final message
+with a JSON session summary so the orchestrator can learn from this session.
+Output it as a fenced code block:
 
-1. **File path:** `.agent-fox/session-summary.json` in the worktree.
-2. **Do NOT commit this file.** It is a transient artifact read by the
-   orchestrator and deleted after processing.
-3. **Schema** (JSON object with these fields):
-   - `summary` (string, ~500-1000 chars): What was surprising or non-obvious — edge cases, API quirks, design decisions. Include task group and spec name.
-   - `rejected_approaches` (optional, array of `{approach, reason}`): Dead ends so future coders skip them.
-   - `gotchas` (optional, array of strings): Fragile patterns, race conditions, serialization quirks.
-   - `assumptions` (optional, array of strings): Things that might not hold for later groups.
-   - `tests_added_or_modified` (array of `{path, description}`): Test files changed. Use `[]` when none.
-5. **On failure:** Still write the summary. Always include `tests_added_or_modified`.
+```json
+{
+  "summary": "What was surprising or non-obvious — edge cases, API quirks, design decisions (500-1000 chars). Include task group and spec name.",
+  "rejected_approaches": [{"approach": "...", "reason": "..."}],
+  "gotchas": ["Fragile patterns, race conditions, serialization quirks."],
+  "assumptions": ["Things that might not hold for later groups."]
+}
+```
+
+All fields except `summary` are optional. Always include `summary`.
+On failure, still include the summary.

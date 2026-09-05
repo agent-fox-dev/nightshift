@@ -147,11 +147,11 @@ ARCHETYPE_REGISTRY: dict[str, ArchetypeEntry] = {
             "hunt": ModeConfig(
                 model_tier="SIMPLE",
                 # Read-only analysis allowlist (100-REQ-1.2)
-                allowlist=["ls", "cat", "git", "wc", "head", "tail"],
+                allowlist=["ls", "cat", "git", "wc", "head", "tail", "grep"],
             ),
             "fix-triage": ModeConfig(
                 # Read-only analysis for single-issue triage (fixes #383)
-                allowlist=["ls", "cat", "git", "wc", "head", "tail"],
+                allowlist=["ls", "cat", "git", "wc", "head", "tail", "grep"],
             ),
             "extraction": ModeConfig(
                 model_tier="SIMPLE",

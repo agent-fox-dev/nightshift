@@ -13,7 +13,7 @@ git worktree.
 
 - The issue description and triage analysis are the authoritative source of truth.
 - Focus on the minimal, correct fix. No unrelated refactoring.
-- Do not create spec artifacts, task files, or session summary files.
+- Do not create spec artifacts or task files.
 
 ## What You Receive
 
@@ -44,10 +44,11 @@ No `Co-Authored-By` lines. No AI attribution.
 
 ## Quality Gates
 
-Run `linter` and `spec_tests` from `## Test Commands` context. Prefer
-targeted test runs over full suite.
+Run the project's linter and the tests nearest the change. Use `make check`
+(lint + all tests) when available, or run targeted tests for the affected
+packages. Prefer targeted test runs over full suite.
 
-**Full suite run limits** (only `make check` / `all_tests` without narrowing count):
+**Full suite run limits** (only `make check` without narrowing count):
 - After 3 failing full runs: switch to targeted tests only.
 - After 5 full runs (hard limit): commit whatever exists and stop.
 
@@ -59,3 +60,19 @@ No regressions allowed.
 2. Confirm `git status` shows a clean working tree.
 
 Do NOT merge into another branch or switch branches.
+
+## Session Summary
+
+After committing, end your final message with a JSON session summary so the
+orchestrator can learn from this session. Output it as a fenced code block:
+
+```json
+{
+  "summary": "What was surprising or non-obvious — edge cases, API quirks, design decisions (500-1000 chars).",
+  "rejected_approaches": [{"approach": "...", "reason": "..."}],
+  "gotchas": ["Fragile patterns, race conditions, serialization quirks."],
+  "assumptions": ["Things that might not hold for later fixes."]
+}
+```
+
+All fields except `summary` are optional. Always include `summary`.
