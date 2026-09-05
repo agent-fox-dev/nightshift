@@ -186,6 +186,31 @@ No per-archetype `model_tier` lines are needed in step 3 if the tier-default
 remapping in step 2 already gives you the right model — only add them when one
 archetype needs to differ from the tier default.
 
+## Auxiliary AI Calls (Batch Triage and Staleness)
+
+In addition to `run_session`-based archetype sessions, the fix pipeline makes
+two direct API calls that bypass the session layer. Both honour
+`[models.tier_defaults]` and `[archetypes.overrides]`:
+
+| Call | Archetype Identity | Default Tier | Config Override Path |
+|------|-------------------|--------------|---------------------|
+| **Batch triage** | `maintainer:hunt` | SIMPLE | `[archetypes.overrides.maintainer]` / `[archetypes.overrides.maintainer.modes.hunt]` |
+| **Staleness check** | `maintainer:hunt` | SIMPLE | `[archetypes.overrides.maintainer]` / `[archetypes.overrides.maintainer.modes.hunt]` |
+
+Both calls resolve their model tier through `resolve_model_tier(config,
+"maintainer", mode="hunt")`, then pass the resolved tier through
+`resolve_model(tier, models_config=config.models)` so that
+`[models.tier_defaults]` remapping takes effect. The cost event emitted by
+each call records the remapped model ID.
+
+To override the model used by batch triage and staleness, either:
+
+- Remap the tier globally via `[models.tier_defaults]`, or
+- Override the maintainer archetype via `[archetypes.overrides.maintainer]`
+  (applies to all maintainer modes including hunt), or
+- Override just the hunt mode via
+  `[archetypes.overrides.maintainer.modes.hunt]`.
+
 ## Retry Behavior
 
 When a session fails, the orchestrator applies a simple retry counter.

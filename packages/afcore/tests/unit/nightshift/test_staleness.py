@@ -45,24 +45,30 @@ class TestParseStatenessResponse:
 
 
 # ---------------------------------------------------------------------------
-# Issue #740: model tier used by _run_ai_staleness
+# Model tier used by _run_ai_staleness (updated for issue #26)
 # ---------------------------------------------------------------------------
 
 
 class TestRunAiStalenessModelTier:
-    """_run_ai_staleness uses the STANDARD model tier."""
+    """_run_ai_staleness resolves tier via maintainer:hunt archetype identity."""
 
     @pytest.mark.asyncio
-    async def test_uses_standard_model_tier(self) -> None:
-        """nightshift_ai_call is invoked with model_tier='STANDARD'."""
+    async def test_uses_maintainer_hunt_default_tier(self) -> None:
+        """nightshift_ai_call is invoked with the maintainer:hunt default tier (SIMPLE).
+
+        Issue #26: staleness now resolves via resolve_model_tier(config,
+        "maintainer", mode="hunt") instead of hardcoding "STANDARD".
+        """
         from unittest.mock import AsyncMock, MagicMock, patch
 
+        from afcore.core.config import ArchetypesConfig
         from afcore.nightshift.staleness import _run_ai_staleness
         from afissues.protocol import IssueResult
 
         fixed = IssueResult(number=1, title="Fixed", html_url="", body="")
         remaining = [IssueResult(number=2, title="Remaining", html_url="", body="")]
         config = MagicMock()
+        config.archetypes = ArchetypesConfig(overrides={})
 
         mock_ai_call = AsyncMock(
             return_value=('{"obsolete": []}', MagicMock()),
@@ -76,7 +82,9 @@ class TestRunAiStalenessModelTier:
 
         mock_ai_call.assert_called_once()
         _, kwargs = mock_ai_call.call_args
-        assert kwargs["model_tier"] == "STANDARD"
+        assert kwargs["model_tier"] == "SIMPLE", (
+            "staleness should use maintainer:hunt default tier (SIMPLE), not hardcoded STANDARD"
+        )
 
 
 # ---------------------------------------------------------------------------

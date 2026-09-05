@@ -100,16 +100,30 @@ async def _run_ai_staleness(
     sink: SinkDispatcher | None = None,
     run_id: str = "",
 ) -> StalenessResult:
-    """Internal: run the actual AI staleness evaluation using STANDARD tier.
+    """Internal: run the AI staleness evaluation via maintainer:hunt archetype.
+
+    Resolves model tier through the maintainer:hunt archetype identity so
+    that ``[archetypes.overrides.maintainer]`` applies.  Falls back to the
+    hardcoded maintainer:hunt default (SIMPLE) when no override is set.
 
     Requirements: 71-REQ-5.1
     """
     from afcore.nightshift.cost_helpers import nightshift_ai_call
 
+    # Resolve tier via archetype identity rather than hardcoding a tier.
+    # This makes staleness honour [archetypes.overrides.maintainer] the
+    # same way batch triage already does.
+    try:
+        from afcore.engine.sdk_params import resolve_model_tier
+
+        tier = resolve_model_tier(config, "maintainer", mode="hunt")  # type: ignore[arg-type]
+    except Exception:
+        tier = "SIMPLE"
+
     prompt = _build_staleness_prompt(fixed_issue, remaining_issues, fix_diff)
 
     response_text, _response = await nightshift_ai_call(
-        model_tier="STANDARD",
+        model_tier=tier,
         max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
         context="staleness check",

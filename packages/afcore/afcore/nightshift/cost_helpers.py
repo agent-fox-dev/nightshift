@@ -165,6 +165,10 @@ async def nightshift_ai_call(
     ``emit_auxiliary_cost`` on success or ``emit_auxiliary_cost_fail``
     on API failure.
 
+    Reads ``config.models`` (if present) and forwards it to
+    :func:`~afcore.core.client.ai_call` so that ``[models.tier_defaults]``
+    and ``[models.registry]`` overrides take effect for auxiliary calls.
+
     Returns:
         A tuple of (response_text_or_none, raw_response).
     """
@@ -172,7 +176,8 @@ async def nightshift_ai_call(
     from afcore.core.config import PricingConfig
     from afcore.core.models import resolve_model
 
-    model_id = resolve_model(model_tier)
+    models_config = getattr(config, "models", None)
+    model_id = resolve_model(model_tier, models_config=models_config)
 
     try:
         text, response = await ai_call(
@@ -181,6 +186,7 @@ async def nightshift_ai_call(
             messages=messages,
             system=system,
             context=context,
+            models_config=models_config,
         )
     except Exception as exc:
         emit_auxiliary_cost_fail(sink, run_id, cost_label, exc, model_id)

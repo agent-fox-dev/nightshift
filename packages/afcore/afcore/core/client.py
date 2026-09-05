@@ -404,6 +404,7 @@ async def ai_call(
     system: str | list[dict[str, Any]] | None = None,
     context: str,
     cache_policy: CachePolicy = CachePolicy.DEFAULT,
+    models_config: Any = None,
     **kwargs: Any,
 ) -> tuple[str | None, Any]:
     """Async AI call: resolve model, create client, retry, track usage, extract text.
@@ -416,6 +417,12 @@ async def ai_call(
     are forwarded to ``cached_messages_create()`` and ultimately to
     ``client.messages.create()``.
 
+    Args:
+        models_config: Optional :class:`~afcore.core.config.ModelsConfig`
+            overlay.  When provided, ``resolve_model`` uses the user's
+            registry and tier-default overrides instead of the hardcoded
+            defaults.
+
     Returns:
         A tuple of (response_text_or_none, raw_response). Callers should
         check for None text and handle accordingly.
@@ -423,7 +430,7 @@ async def ai_call(
     from afcore.core.models import resolve_model
     from afcore.core.token_tracker import track_response_usage
 
-    model_id = resolve_model(model_tier)
+    model_id = resolve_model(model_tier, models_config=models_config)
 
     async def _call() -> Any:
         client = create_async_anthropic_client()
@@ -453,6 +460,7 @@ def ai_call_sync(
     system: str | list[dict[str, Any]] | None = None,
     context: str,
     cache_policy: CachePolicy = CachePolicy.DEFAULT,
+    models_config: Any = None,
     **kwargs: Any,
 ) -> tuple[str | None, Any]:
     """Synchronous AI call: resolve model, create client, retry, track usage, extract text.
@@ -463,13 +471,19 @@ def ai_call_sync(
     are forwarded to ``cached_messages_create_sync()`` and ultimately to
     ``client.messages.create()``.
 
+    Args:
+        models_config: Optional :class:`~afcore.core.config.ModelsConfig`
+            overlay.  When provided, ``resolve_model`` uses the user's
+            registry and tier-default overrides instead of the hardcoded
+            defaults.
+
     Returns:
         A tuple of (response_text_or_none, raw_response).
     """
     from afcore.core.models import resolve_model
     from afcore.core.token_tracker import track_response_usage
 
-    model_id = resolve_model(model_tier)
+    model_id = resolve_model(model_tier, models_config=models_config)
     client = create_anthropic_client()
 
     def _call() -> Any:
