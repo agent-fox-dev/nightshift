@@ -229,6 +229,14 @@ Transient connection errors are retried internally by the Claude backend with
 exponential backoff (up to 3 retries). If the error surfaces to the
 orchestrator, the task is reset to `pending` without consuming a retry attempt.
 
+In the Night Shift fix pipeline's coder-reviewer loop, the same principle
+applies: a coder session that fails with `is_transport_error=True` is
+retried without consuming an attempt, bounded by a cap of 2 transport
+retries. When the cap is exceeded, the pipeline aborts with a comment
+naming the transport failure (not the fix quality). Non-transport coder
+failures (including timeouts) skip the reviewer phase entirely — reviewing
+an unchanged worktree would waste an ADVANCED-tier session.
+
 ### Review-Triggered Retries
 
 Two archetype modes have `retry_predecessor = true`:

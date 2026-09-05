@@ -504,3 +504,532 @@ class TestCoderReviewerBoolCompatibility:
             )
 
         assert not result, "Return object should be falsy on exhaustion"
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-1: Transport-error coder sessions do not trigger reviewer
+# Requirement: NS-REQ-1
+# ---------------------------------------------------------------------------
+
+
+class TestCoderTransportError:
+    """Verify transport-error coder sessions skip reviewer and don't consume attempt.
+
+    Test Spec: TS-NS-1
+    Requirements: NS-REQ-1
+    """
+
+    async def test_transport_error_skips_reviewer_does_not_consume_attempt(self) -> None:
+        """AC-1: Transport error → no reviewer, attempt not incremented, retries coder."""
+        pipeline = _make_mock_pipeline()
+        pipeline._config.orchestrator.max_retries = 1
+        loop = CoderReviewerLoop(pipeline)
+
+        transport_outcome = _make_coder_outcome(response="")
+        transport_outcome.status = "failed"
+        transport_outcome.is_transport_error = True
+
+        success_outcome = _make_coder_outcome(response="Fixed it.")
+        success_outcome.status = "completed"
+        success_outcome.is_transport_error = False
+
+        review_result = FixReviewResult(overall_verdict="PASS")
+
+        coder_calls: list[int] = []
+        reviewer_calls: list[int] = []
+
+        async def mock_coder(*args: object, **kwargs: object) -> object:
+            attempt = args[7] if len(args) > 7 else kwargs.get("attempt", 0)
+            coder_calls.append(attempt)
+            if len(coder_calls) == 1:
+                return transport_outcome
+            return success_outcome
+
+        async def mock_reviewer(*args: object, **kwargs: object) -> FixReviewResult:
+            reviewer_calls.append(1)
+            return review_result
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", side_effect=mock_coder),
+            patch.object(loop, "_run_reviewer_phase", side_effect=mock_reviewer),
+        ):
+            result = await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(affected_files=["src/handler.py"]),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        assert result.success is True
+        assert len(coder_calls) == 2, "Coder should be called twice (transport retry + success)"
+        assert len(reviewer_calls) == 1, "Reviewer should be called only once (after success)"
+        # Both coder calls should have attempt=0 (transport error doesn't increment)
+        assert coder_calls[0] == 0
+        assert coder_calls[1] == 0
+
+    async def test_transport_error_bounded_by_max_retries(self) -> None:
+        """AC-1: Transport retries are bounded by MAX_TRANSPORT_RETRIES."""
+        pipeline = _make_mock_pipeline()
+        pipeline._config.orchestrator.max_retries = 3
+        loop = CoderReviewerLoop(pipeline)
+
+        transport_outcome = _make_coder_outcome(response="")
+        transport_outcome.status = "failed"
+        transport_outcome.is_transport_error = True
+
+        coder_calls: list[int] = []
+
+        async def mock_coder(*args: object, **kwargs: object) -> object:
+            coder_calls.append(1)
+            return transport_outcome
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", side_effect=mock_coder),
+        ):
+            result = await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        assert result.success is False
+        # Should be called MAX_TRANSPORT_RETRIES + 1 times (initial + retries)
+        assert len(coder_calls) == CoderReviewerLoop.MAX_TRANSPORT_RETRIES + 1
+
+    async def test_transport_error_posts_transport_comment(self) -> None:
+        """AC-1: When transport retries exhausted, comment names transport error."""
+        pipeline = _make_mock_pipeline()
+        pipeline._config.orchestrator.max_retries = 3
+        loop = CoderReviewerLoop(pipeline)
+
+        transport_outcome = _make_coder_outcome(response="")
+        transport_outcome.status = "failed"
+        transport_outcome.is_transport_error = True
+
+        async def mock_coder(*args: object, **kwargs: object) -> object:
+            return transport_outcome
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", side_effect=mock_coder),
+        ):
+            await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        # Check that the posted comment names transport errors
+        posted = [str(call) for call in pipeline._post_comment.call_args_list]
+        assert any("transport" in c.lower() for c in posted), f"Expected transport error comment, got: {posted}"
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-2: Timeout coder sessions skip reviewer
+# Requirement: NS-REQ-2
+# ---------------------------------------------------------------------------
+
+
+class TestCoderTimeout:
+    """Verify timeout coder sessions skip reviewer and post timeout comment.
+
+    Test Spec: TS-NS-2
+    Requirements: NS-REQ-2
+    """
+
+    async def test_timeout_skips_reviewer_and_posts_timeout_comment(self) -> None:
+        """AC-2: Timeout → reviewer not called, comment names 'timeout'."""
+        pipeline = _make_mock_pipeline()
+        pipeline._config.orchestrator.max_retries = 0  # One attempt only
+        loop = CoderReviewerLoop(pipeline)
+
+        timeout_outcome = _make_coder_outcome(response="")
+        timeout_outcome.status = "timeout"
+        timeout_outcome.is_transport_error = False
+
+        reviewer_calls: list[int] = []
+
+        async def mock_reviewer(*args: object, **kwargs: object) -> FixReviewResult:
+            reviewer_calls.append(1)
+            return FixReviewResult(overall_verdict="FAIL")
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=timeout_outcome),
+            patch.object(loop, "_run_reviewer_phase", side_effect=mock_reviewer),
+        ):
+            result = await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        assert result.success is False
+        assert len(reviewer_calls) == 0, "Reviewer must not be called on timeout"
+
+        # Check comment names timeout
+        posted = [str(call) for call in pipeline._post_comment.call_args_list]
+        assert any("timed out" in c.lower() for c in posted), f"Expected 'timed out' in comment, got: {posted}"
+        # Comment should NOT contain "Overall verdict: FAIL"
+        assert not any("overall verdict: fail" in c.lower() for c in posted), (
+            f"Comment should not contain 'Overall verdict: FAIL', got: {posted}"
+        )
+
+    async def test_failed_coder_skips_reviewer(self) -> None:
+        """Non-transport failure also skips reviewer and posts failure comment."""
+        pipeline = _make_mock_pipeline()
+        pipeline._config.orchestrator.max_retries = 0
+        loop = CoderReviewerLoop(pipeline)
+
+        failed_outcome = _make_coder_outcome(response="")
+        failed_outcome.status = "failed"
+        failed_outcome.is_transport_error = False
+
+        reviewer_calls: list[int] = []
+
+        async def mock_reviewer(*args: object, **kwargs: object) -> FixReviewResult:
+            reviewer_calls.append(1)
+            return FixReviewResult(overall_verdict="FAIL")
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=failed_outcome),
+            patch.object(loop, "_run_reviewer_phase", side_effect=mock_reviewer),
+        ):
+            result = await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        assert result.success is False
+        assert len(reviewer_calls) == 0, "Reviewer must not be called on coder failure"
+
+        # Check comment mentions failure
+        posted = [str(call) for call in pipeline._post_comment.call_args_list]
+        assert any("failed" in c.lower() for c in posted), f"Expected 'failed' in comment, got: {posted}"
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-3: Double parse failure posts distinct comment, no empty feedback
+# Requirement: NS-REQ-3
+# ---------------------------------------------------------------------------
+
+
+class TestDoubleParseFailure:
+    """Verify double parse failure posts parse-error comment, no empty feedback.
+
+    Test Spec: TS-NS-3
+    Requirements: NS-REQ-3
+    """
+
+    async def test_parse_failure_does_not_inject_empty_feedback(self) -> None:
+        """AC-3: Parse failure result is not used as review_feedback for next attempt."""
+        pipeline = _make_mock_pipeline()
+        pipeline._config.orchestrator.max_retries = 1  # Two attempts total
+        loop = CoderReviewerLoop(pipeline)
+
+        coder_outcome = _make_coder_outcome(response="Attempted fix.")
+        coder_outcome.status = "completed"
+        coder_outcome.is_transport_error = False
+
+        parse_failure = FixReviewResult(
+            is_parse_failure=True,
+            overall_verdict="FAIL",
+            verdicts=[],
+            summary="",
+        )
+
+        coder_phase_calls: list[object] = []
+
+        async def mock_coder(*args: object, **kwargs: object) -> object:
+            # Capture the review_feedback argument (positional arg 5)
+            feedback = args[5] if len(args) > 5 else kwargs.get("review_feedback")
+            coder_phase_calls.append(feedback)
+            return coder_outcome
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", side_effect=mock_coder),
+            patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=parse_failure),
+        ):
+            result = await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        assert result.success is False
+        # First coder call should have None feedback, second should ALSO have None
+        # (parse failure should not be injected)
+        assert len(coder_phase_calls) == 2
+        assert coder_phase_calls[0] is None, "First attempt should have no feedback"
+        assert coder_phase_calls[1] is None, "Second attempt should have no feedback (parse failure not injected)"
+
+    async def test_parse_failure_posts_parse_error_comment(self) -> None:
+        """AC-3: Comment states review could not be parsed, not 'Overall verdict: FAIL'."""
+        pipeline = _make_mock_pipeline()
+        pipeline._config.orchestrator.max_retries = 0  # One attempt only
+        loop = CoderReviewerLoop(pipeline)
+
+        coder_outcome = _make_coder_outcome(response="")
+        coder_outcome.status = "completed"
+        coder_outcome.is_transport_error = False
+
+        parse_failure = FixReviewResult(
+            is_parse_failure=True,
+            overall_verdict="FAIL",
+            verdicts=[],
+            summary="",
+        )
+
+        # Use the real _format_review_comment from FixPipeline
+        from afcore.nightshift.fix_pipeline import FixPipeline
+
+        pipeline._format_review_comment = FixPipeline._format_review_comment.__get__(pipeline, type(pipeline))
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
+            patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=parse_failure),
+        ):
+            await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        posted = [str(call) for call in pipeline._post_comment.call_args_list]
+        # Should contain parse failure indicator
+        assert any("could not be parsed" in c.lower() for c in posted), (
+            f"Expected 'could not be parsed' in comment, got: {posted}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-4: _format_review_comment renders is_parse_failure explicitly
+# Requirement: NS-REQ-4
+# ---------------------------------------------------------------------------
+
+
+class TestFormatReviewCommentParseFailure:
+    """Verify _format_review_comment renders parse failure explicitly.
+
+    Test Spec: TS-NS-4
+    Requirements: NS-REQ-4
+    """
+
+    def test_parse_failure_renders_parse_error_indicator(self) -> None:
+        """AC-4: Output includes parse-failure indicator, not bare 'Overall verdict: FAIL'."""
+        from afcore.nightshift.fix_pipeline import FixPipeline
+
+        review = FixReviewResult(
+            is_parse_failure=True,
+            overall_verdict="FAIL",
+            verdicts=[],
+            summary="",
+        )
+        # Use a minimal mock pipeline to call the static-like method
+        pipeline = MagicMock(spec=FixPipeline)
+        output = FixPipeline._format_review_comment(pipeline, review)
+
+        assert "parse" in output.lower(), f"Expected 'parse' in output, got: {output!r}"
+        assert "could not be parsed" in output.lower(), f"Expected 'could not be parsed' in output, got: {output!r}"
+        # Should NOT render "Overall verdict: FAIL" as the main content
+        assert "**overall verdict:** fail" not in output.lower(), (
+            f"Parse failure should not render as 'Overall verdict: FAIL', got: {output!r}"
+        )
+
+    def test_normal_fail_still_renders_verdict(self) -> None:
+        """AC-5: Normal FAIL (not parse failure) still renders verdict as before."""
+        from afcore.nightshift.fix_pipeline import FixPipeline, FixReviewVerdict
+
+        review = FixReviewResult(
+            is_parse_failure=False,
+            overall_verdict="FAIL",
+            verdicts=[FixReviewVerdict(criterion_id="AC-1", verdict="FAIL", evidence="broken")],
+            summary="Tests still fail",
+        )
+        pipeline = MagicMock(spec=FixPipeline)
+        # Need to use the real _render_verdict_section
+        pipeline._render_verdict_section = FixPipeline._render_verdict_section
+        output = FixPipeline._format_review_comment(pipeline, review)
+
+        assert "**Overall verdict:** FAIL" in output
+        assert "AC-1" in output
+        assert "Tests still fail" in output
+
+    def test_normal_pass_renders_verdict(self) -> None:
+        """AC-5: Normal PASS renders verdict as before."""
+        from afcore.nightshift.fix_pipeline import FixPipeline, FixReviewVerdict
+
+        review = FixReviewResult(
+            is_parse_failure=False,
+            overall_verdict="PASS",
+            verdicts=[FixReviewVerdict(criterion_id="AC-1", verdict="PASS", evidence="ok")],
+            summary="All criteria met",
+        )
+        pipeline = MagicMock(spec=FixPipeline)
+        pipeline._render_verdict_section = FixPipeline._render_verdict_section
+        output = FixPipeline._format_review_comment(pipeline, review)
+
+        assert "**Overall verdict:** PASS" in output
+        assert "AC-1" in output
+        assert "All criteria met" in output
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-5: Normal PASS/FAIL flow unchanged
+# Requirement: NS-REQ-5
+# ---------------------------------------------------------------------------
+
+
+class TestNormalFlowUnchanged:
+    """Verify normal PASS/FAIL flow is unchanged by the new checks.
+
+    Test Spec: TS-NS-5
+    Requirements: NS-REQ-5
+    """
+
+    async def test_normal_pass_returns_success(self) -> None:
+        """Normal completed coder + PASS reviewer returns success."""
+        pipeline = _make_mock_pipeline()
+        loop = CoderReviewerLoop(pipeline)
+
+        coder_outcome = _make_coder_outcome(response="Fixed it.")
+        coder_outcome.status = "completed"
+        coder_outcome.is_transport_error = False
+
+        review_result = FixReviewResult(overall_verdict="PASS")
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
+            patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
+        ):
+            result = await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(affected_files=["src/main.py"]),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        assert result.success is True
+        assert result.response == "Fixed it."
+        assert result.affected_files == ["src/main.py"]
+
+    async def test_normal_fail_exhaustion_posts_manual_intervention(self) -> None:
+        """Normal completed coder + FAIL reviewer exhaustion posts manual intervention."""
+        pipeline = _make_mock_pipeline()
+        pipeline._config.orchestrator.max_retries = 0  # One attempt
+        loop = CoderReviewerLoop(pipeline)
+
+        coder_outcome = _make_coder_outcome(response="Attempted fix.")
+        coder_outcome.status = "completed"
+        coder_outcome.is_transport_error = False
+
+        review_result = FixReviewResult(
+            overall_verdict="FAIL",
+            summary="Tests fail",
+            is_parse_failure=False,
+        )
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
+            patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
+        ):
+            result = await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        assert result.success is False
+        posted = [str(call) for call in pipeline._post_comment.call_args_list]
+        assert any("manual intervention" in c.lower() for c in posted), (
+            f"Expected 'manual intervention' in comment, got: {posted}"
+        )
+
+    async def test_normal_fail_with_retries_updates_feedback(self) -> None:
+        """FAIL with retries remaining updates review_feedback for next coder."""
+        pipeline = _make_mock_pipeline()
+        pipeline._config.orchestrator.max_retries = 1
+        loop = CoderReviewerLoop(pipeline)
+
+        coder_outcome = _make_coder_outcome(response="Attempted fix.")
+        coder_outcome.status = "completed"
+        coder_outcome.is_transport_error = False
+
+        from afcore.nightshift.fix_pipeline import FixReviewVerdict
+
+        fail_review = FixReviewResult(
+            overall_verdict="FAIL",
+            summary="Tests fail",
+            verdicts=[FixReviewVerdict(criterion_id="AC-1", verdict="FAIL", evidence="broken")],
+            is_parse_failure=False,
+        )
+        pass_review = FixReviewResult(overall_verdict="PASS")
+
+        reviewer_call_count = 0
+        coder_phase_calls: list[object] = []
+
+        async def mock_coder(*args: object, **kwargs: object) -> object:
+            feedback = args[5] if len(args) > 5 else kwargs.get("review_feedback")
+            coder_phase_calls.append(feedback)
+            return coder_outcome
+
+        async def mock_reviewer(*args: object, **kwargs: object) -> FixReviewResult:
+            nonlocal reviewer_call_count
+            reviewer_call_count += 1
+            if reviewer_call_count == 1:
+                return fail_review
+            return pass_review
+
+        p1, p2 = _patch_model_resolution()
+        with (
+            p1,
+            p2,
+            patch.object(loop, "_run_coder_phase", side_effect=mock_coder),
+            patch.object(loop, "_run_reviewer_phase", side_effect=mock_reviewer),
+        ):
+            result = await loop.run(
+                spec=_make_spec(),
+                triage=_make_triage(affected_files=["src/main.py"]),
+                metrics=FixMetrics(),
+                workspace=_make_workspace(),
+            )
+
+        assert result.success is True
+        assert len(coder_phase_calls) == 2
+        # First attempt has no feedback
+        assert coder_phase_calls[0] is None
+        # Second attempt has the FAIL review as feedback
+        assert coder_phase_calls[1] is fail_review

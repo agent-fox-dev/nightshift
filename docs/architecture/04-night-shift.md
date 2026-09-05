@@ -180,11 +180,26 @@ On retry attempts (attempt > 1), the previous review feedback is rendered
 and injected as "Previous Review Feedback (FAILED)" context, giving the
 coder specific guidance on what to fix.
 
+**Coder outcome checking.** Before invoking the reviewer, the loop
+inspects the coder session's status:
+
+- **Transport errors** (`status="failed"`, `is_transport_error=True`):
+  The coder is retried without consuming an attempt, bounded by a cap of
+  2 transport retries. If the cap is exceeded, a comment naming the
+  transport failure is posted and the pipeline aborts.
+- **Timeout or other failures** (`status="timeout"` or non-transport
+  `status="failed"`): The reviewer is skipped (reviewing an unchanged
+  worktree would be meaningless). A comment naming the failure reason is
+  posted on the issue, and the attempt is consumed.
+
 **Reviewer phase.** A Reviewer agent in `fix-review` mode (ADVANCED model
 tier) reviews the patch. It produces a structured JSON verdict with
 per-criterion assessments and an overall verdict (PASS/FAIL). If the
-reviewer's output cannot be parsed, the system retries the reviewer once
-before treating it as a parse failure.
+reviewer's output cannot be parsed, the system retries the reviewer once.
+If both attempts produce unparseable output, a distinct "review output
+could not be parsed" comment is posted (rather than a bare FAIL verdict),
+and the parse-failure result is *not* injected as feedback into the next
+coder attempt.
 
 The review verdict is posted as a comment on the issue via the platform API.
 

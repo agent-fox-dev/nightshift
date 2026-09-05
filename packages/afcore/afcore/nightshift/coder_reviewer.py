@@ -56,6 +56,10 @@ class CoderReviewerLoop:
     def __init__(self, pipeline: Any) -> None:
         self._pipeline = pipeline
 
+    # Maximum transport-error retries before aborting.  Keeps the loop
+    # bounded when the backend is persistently unreachable.
+    MAX_TRANSPORT_RETRIES: int = 2
+
     async def run(
         self,
         spec: InMemorySpec,
@@ -71,6 +75,18 @@ class CoderReviewerLoop:
         exhaustion — with ``response`` and ``affected_files`` populated on
         success.
 
+        Coder session failures are checked before invoking the reviewer:
+
+        - **Transport errors** (``status="failed"``, ``is_transport_error=True``)
+          retry the coder without consuming an attempt, bounded by
+          ``MAX_TRANSPORT_RETRIES``.
+        - **Timeout / other failures** skip the reviewer on the unchanged
+          worktree, post a comment naming the failure reason, and consume
+          an attempt.
+        - **Unparseable reviewer output** (``is_parse_failure``) is posted as
+          a distinct parse-error comment and does *not* inject empty feedback
+          into the next coder prompt.
+
         Requirements: 05-REQ-9.1, 05-REQ-9.2, 05-REQ-9.3
         """
         from afcore.core.models import resolve_model
@@ -78,14 +94,20 @@ class CoderReviewerLoop:
 
         p = self._pipeline
 
-        max_retries = getattr(p._config.orchestrator, "max_retries", 3)
+        max_retries_raw = getattr(p._config.orchestrator, "max_retries", 3)
+        try:
+            max_retries: int = int(max_retries_raw)
+        except (TypeError, ValueError):
+            max_retries = 3
 
         tier = resolve_model_tier(p._config, "coder", mode="fix")
         model_id: str | None = resolve_model(tier, models_config=p._config.models)
 
         review_feedback: FixReviewResult | None = None
+        transport_retries = 0
+        attempt = 0
 
-        for attempt in range(max_retries + 1):
+        while attempt <= max_retries:
             coder_outcome = await self._run_coder_phase(
                 spec,
                 triage,
@@ -98,6 +120,48 @@ class CoderReviewerLoop:
                 knowledge_context=knowledge_context,
             )
 
+            # --- Check coder session status before running reviewer ---
+            coder_status = getattr(coder_outcome, "status", "completed")
+            coder_is_transport = getattr(coder_outcome, "is_transport_error", False)
+
+            # AC-1: Transport error — skip reviewer, do not consume attempt
+            if coder_status == "failed" and coder_is_transport:
+                transport_retries += 1
+                if transport_retries > self.MAX_TRANSPORT_RETRIES:
+                    await p._post_comment(
+                        spec.issue_number,
+                        "Coder session failed due to repeated transport errors. "
+                        f"Manual intervention is required. (run: `{p._run_id}`)",
+                    )
+                    return CoderReviewerResult(success=False)
+                logger.warning(
+                    "Coder transport error for issue #%d (retry %d/%d), retrying without consuming attempt",
+                    spec.issue_number,
+                    transport_retries,
+                    self.MAX_TRANSPORT_RETRIES,
+                )
+                continue
+
+            # AC-2: Timeout or non-transport failure — skip reviewer
+            if coder_status in ("timeout", "failed"):
+                reason = "timed out" if coder_status == "timeout" else "failed"
+                await p._post_comment(
+                    spec.issue_number,
+                    f"Coder session {reason} for issue #{spec.issue_number}. "
+                    f"Skipping review of unchanged worktree. (run: `{p._run_id}`)",
+                )
+                attempt += 1
+                if attempt > max_retries:
+                    await p._post_comment(
+                        spec.issue_number,
+                        "Fix pipeline exhausted all retries. "
+                        "The issue could not be resolved automatically. "
+                        f"Manual intervention is required. (run: `{p._run_id}`)",
+                    )
+                    return CoderReviewerResult(success=False)
+                continue
+
+            # --- Coder succeeded — run reviewer ---
             review_result = await self._run_reviewer_phase(
                 spec,
                 triage,
@@ -118,7 +182,12 @@ class CoderReviewerLoop:
                     affected_files=list(triage.affected_files),
                 )
 
-            if attempt >= max_retries:
+            # AC-3: Do not inject empty feedback from parse failures
+            if not review_result.is_parse_failure:
+                review_feedback = review_result
+
+            attempt += 1
+            if attempt > max_retries:
                 await p._post_comment(
                     spec.issue_number,
                     "Fix pipeline exhausted all retries. "
@@ -126,8 +195,6 @@ class CoderReviewerLoop:
                     f"Manual intervention is required. (run: `{p._run_id}`)",
                 )
                 return CoderReviewerResult(success=False)
-
-            review_feedback = review_result
 
         return CoderReviewerResult(success=False)  # pragma: no cover
 

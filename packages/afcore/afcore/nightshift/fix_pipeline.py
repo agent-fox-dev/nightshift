@@ -829,8 +829,24 @@ class FixPipeline:
     def _format_review_comment(self, review: FixReviewResult) -> str:
         """Render FixReviewResult as markdown for issue comment.
 
+        When ``is_parse_failure`` is set, renders a distinct parse-error
+        message instead of a bare "Overall verdict: FAIL" with no findings.
+
         Requirements: 82-REQ-6.1
         """
+        if review.is_parse_failure:
+            return "\n".join(
+                [
+                    "## Fix Review Report",
+                    "",
+                    "⚠️ **Review output could not be parsed**",
+                    "",
+                    "The reviewer session completed but its output could not be "
+                    "parsed into a structured verdict. This is not a fix quality "
+                    "assessment.",
+                ]
+            )
+
         lines: list[str] = [
             "## Fix Review Report",
             "",
