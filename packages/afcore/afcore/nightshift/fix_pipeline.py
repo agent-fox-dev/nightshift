@@ -108,7 +108,7 @@ class AcceptanceCriterion:
 class AssessedComplexity:
     """Complexity assessment embedded in triage output.
 
-    Frozen dataclass with tier, variant, confidence, and rationale fields.
+    Frozen dataclass with tier, confidence, and rationale fields.
     Used by the nightshift triage model to provide a pre-assessed complexity
     signal that bypasses the Haiku LLM call for coder nodes.
 
@@ -116,7 +116,6 @@ class AssessedComplexity:
     """
 
     tier: str
-    variant: str | None
     confidence: float
     rationale: str
 
@@ -1070,16 +1069,15 @@ class FixPipeline:
             "Analyze the issue, identify the root cause and affected files, "
             "and produce a JSON triage report with acceptance criteria.\n\n"
             "Include an 'assessed_complexity' object in your JSON response to "
-            "recommend the model tier and variant for the coder agent:\n"
+            "recommend the model tier for the coder agent:\n"
             "{\n"
             '  "assessed_complexity": {\n'
             '    "tier": "SIMPLE" | "STANDARD" | "ADVANCED",\n'
-            '    "variant": null | "fast" | "standard" | "extended",\n'
             '    "confidence": <float between 0.0 and 1.0>,\n'
             '    "rationale": "<brief explanation of complexity assessment>"\n'
             "  }\n"
             "}\n"
-            "Use EXACT case as shown for tier and variant values."
+            "Use EXACT case as shown for tier values."
         )
         try:
             outcome = await self._run_session(

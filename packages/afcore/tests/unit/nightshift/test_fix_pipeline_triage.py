@@ -214,7 +214,6 @@ def _make_triage_with_complexity(
         issue_body="Fix the bug",
         assessed_complexity=AssessedComplexity(
             tier=tier,
-            variant=None,
             confidence=0.9,
             rationale="Test rationale",
         ),

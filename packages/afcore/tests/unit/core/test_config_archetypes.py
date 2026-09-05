@@ -31,6 +31,38 @@ class TestModelTierOverride:
 
 
 # ---------------------------------------------------------------------------
+# TS-NS-1: Removed model_variant field raises ConfigError at startup
+# Requirement: NS-REQ-1
+# ---------------------------------------------------------------------------
+
+
+class TestRemovedModelVariantField:
+    """Verify that model_variant in config raises a clear error."""
+
+    def test_model_variant_in_archetype_override_rejected(self) -> None:
+        """A config.toml containing model_variant = '...' must raise ConfigError."""
+        from afcore.core.config import PerArchetypeConfig
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="model_variant.*removed"):
+            PerArchetypeConfig(model_variant="extended")
+
+    def test_model_variant_in_full_config_rejected(
+        self,
+        tmp_path: pytest.TempPathFactory,
+    ) -> None:
+        """Loading a config.toml with model_variant raises ConfigError."""
+        from afcore.core.config import load_config
+        from afcore.core.errors import ConfigError
+
+        config_path = tmp_path / "config.toml"  # type: ignore[operator]
+        config_path.write_text('[archetypes.overrides.coder]\nmodel_variant = "extended"\n')
+
+        with pytest.raises(ConfigError, match="model_variant.*removed"):
+            load_config(config_path)
+
+
+# ---------------------------------------------------------------------------
 # TS-26-25: Allowlist override per archetype
 # Requirement: 26-REQ-6.4
 # ---------------------------------------------------------------------------

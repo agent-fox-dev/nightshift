@@ -19,7 +19,7 @@ from afcore.core.models import (
 
 
 class TestCollectConfiguredModelIds:
-    """Collect all model IDs from archetype tier/variant combos.
+    """Collect all model IDs from archetype tier combos.
 
     Requirements: NS-REQ-4
     """
@@ -42,8 +42,8 @@ class TestCollectConfiguredModelIds:
         ids = collect_configured_model_ids(models_config=models_cfg)
         assert "claude-haiku-4-5" in ids
 
-    def test_covers_mode_variants(self) -> None:
-        """Mode-specific tier/variant combos produce additional model IDs.
+    def test_covers_mode_tiers(self) -> None:
+        """Mode-specific tier combos produce additional model IDs.
 
         The reviewer archetype has modes that use ADVANCED tier, so those
         model IDs should be collected.
@@ -161,7 +161,7 @@ class TestValidateModelAccess:
     def test_models_config_passed_to_collector(self) -> None:
         """validate_model_access passes models_config through to collect_configured_model_ids.
 
-        TS-NS-4: Variant model ID is checked against API response.
+        TS-NS-4: Model ID is checked against API response.
         Requirements: NS-REQ-4
         """
         models_cfg = ModelsConfig()
@@ -187,25 +187,22 @@ class TestValidateModelAccess:
     def test_collect_with_custom_registry_entry(self) -> None:
         """collect_configured_model_ids includes models from custom registry entries.
 
-        TS-NS-4: Variant-level model IDs are enumerated.
+        TS-NS-4: Tier-level model IDs are enumerated.
         Requirements: NS-REQ-4
         """
-        # Add a custom model entry with a novel variant so it becomes a
-        # unique (tier, variant) pair that no hardcoded entry shadows.
+        # Add a custom model entry at the ADVANCED tier.
         models_cfg = ModelsConfig(
             registry={
-                "custom-advanced-ext": {
+                "custom-advanced-model": {
                     "tier": "ADVANCED",
-                    "variant": "turbo",
                 },
             },
         )
         ids = collect_configured_model_ids(models_config=models_cfg)
-        # The custom variant is never referenced by any archetype, so it
-        # won't appear. But existing archetype models should be collected.
-        assert "claude-opus-4-6" in ids  # reviewer:pre-flight uses ADVANCED/standard
-        assert "claude-sonnet-4-6" in ids  # coder uses STANDARD/standard
-        assert "claude-haiku-4-5" in ids  # maintainer:hunt uses SIMPLE/standard
+        # Existing archetype models should be collected.
+        assert "claude-opus-4-6" in ids  # reviewer:pre-flight uses ADVANCED
+        assert "claude-sonnet-4-6" in ids  # coder uses STANDARD
+        assert "claude-haiku-4-5" in ids  # maintainer:hunt uses SIMPLE
 
     def test_client_closed_on_success(self) -> None:
         """The Anthropic client is closed after successful validation."""

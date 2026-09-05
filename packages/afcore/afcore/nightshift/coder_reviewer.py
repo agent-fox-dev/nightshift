@@ -74,15 +74,14 @@ class CoderReviewerLoop:
         Requirements: 05-REQ-9.1, 05-REQ-9.2, 05-REQ-9.3
         """
         from afcore.core.models import resolve_model
-        from afcore.engine.sdk_params import resolve_model_tier, resolve_model_variant
+        from afcore.engine.sdk_params import resolve_model_tier
 
         p = self._pipeline
 
         max_retries = getattr(p._config.orchestrator, "max_retries", 3)
 
         tier = resolve_model_tier(p._config, "coder", mode="fix")
-        variant = resolve_model_variant(p._config, "coder", mode="fix")
-        model_id: str | None = resolve_model(tier, variant=variant, models_config=p._config.models)
+        model_id: str | None = resolve_model(tier, models_config=p._config.models)
 
         review_feedback: FixReviewResult | None = None
 

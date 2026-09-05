@@ -126,7 +126,7 @@ class TestConfigDrivenModelRegistry:
     def test_ac1_tier_default_override_redirects_resolution(self) -> None:
         """AC-1: tier_defaults redirects ADVANCED to a user-registered model."""
         cfg = self._make_models_config(
-            registry={"claude-fable-5-1": {"tier": "ADVANCED", "variant": "standard"}},
+            registry={"claude-fable-5-1": {"tier": "ADVANCED"}},
             tier_defaults={"ADVANCED": "claude-fable-5-1"},
         )
         result = resolve_model("ADVANCED", models_config=cfg)
@@ -135,7 +135,7 @@ class TestConfigDrivenModelRegistry:
     def test_ac1_does_not_affect_other_tiers(self) -> None:
         """AC-1 corollary: overriding ADVANCED leaves SIMPLE and STANDARD unchanged."""
         cfg = self._make_models_config(
-            registry={"claude-fable-5-1": {"tier": "ADVANCED", "variant": "standard"}},
+            registry={"claude-fable-5-1": {"tier": "ADVANCED"}},
             tier_defaults={"ADVANCED": "claude-fable-5-1"},
         )
         assert resolve_model("SIMPLE", models_config=cfg) == resolve_model("SIMPLE")
@@ -168,7 +168,7 @@ class TestConfigDrivenModelRegistry:
     def test_ac4_registry_only_makes_new_id_resolvable(self) -> None:
         """AC-4: model in registry but tier_defaults unchanged — direct ID lookup works."""
         cfg = self._make_models_config(
-            registry={"claude-fable-5-1": {"tier": "ADVANCED", "variant": "standard"}},
+            registry={"claude-fable-5-1": {"tier": "ADVANCED"}},
         )
         result = resolve_model("claude-fable-5-1", models_config=cfg)
         assert result == "claude-fable-5-1"
@@ -178,18 +178,10 @@ class TestConfigDrivenModelRegistry:
         from afcore.core.models import TIER_DEFAULTS, ModelTier
 
         cfg = self._make_models_config(
-            registry={"claude-fable-5-1": {"tier": "ADVANCED", "variant": "standard"}},
+            registry={"claude-fable-5-1": {"tier": "ADVANCED"}},
         )
         hardcoded_advanced = TIER_DEFAULTS[ModelTier.ADVANCED]
         assert resolve_model("ADVANCED", models_config=cfg) == hardcoded_advanced
-
-    def test_variant_resolution_uses_user_registry(self) -> None:
-        """Config registry entries with a new variant are found by variant scan."""
-        cfg = self._make_models_config(
-            registry={"claude-fable-5-1": {"tier": "ADVANCED", "variant": "fable"}},
-        )
-        result = resolve_model("ADVANCED", variant="fable", models_config=cfg)
-        assert result == "claude-fable-5-1"
 
     def test_model_entry_config_rejects_invalid_tier(self) -> None:
         """ModelEntryConfig raises on unrecognized tier string."""
@@ -200,8 +192,12 @@ class TestConfigDrivenModelRegistry:
         """ModelEntryConfig.to_model_entry() produces the correct ModelEntry."""
         from afcore.core.models import ModelTier
 
-        entry_cfg = ModelEntryConfig(tier="ADVANCED", variant="standard")
+        entry_cfg = ModelEntryConfig(tier="ADVANCED")
         entry = entry_cfg.to_model_entry("claude-fable-5-1")
         assert entry.model_id == "claude-fable-5-1"
         assert entry.tier == ModelTier.ADVANCED
-        assert entry.variant == "standard"
+
+    def test_model_entry_config_rejects_unknown_fields(self) -> None:
+        """ModelEntryConfig with extra='forbid' rejects unknown fields like variant."""
+        with pytest.raises((ValueError, Exception)):
+            ModelEntryConfig(tier="ADVANCED", variant="standard")  # type: ignore[call-arg]

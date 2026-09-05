@@ -40,22 +40,12 @@ class ModelTier(StrEnum):
 class ModelEntry:
     model_id: str
     tier: ModelTier
-    variant: str | None = None
 
-    def __post_init__(self) -> None:
-        if self.variant is not None and not isinstance(self.variant, str):
-            raise TypeError(f"variant must be str or None, got {type(self.variant).__name__}")
-
-
-# Canonical variant label ordering for upgrade comparisons.
-# Models with variant=None do not participate in variant ordering.
-VARIANT_ORDER: dict[str, int] = {"fast": 0, "standard": 1, "extended": 2}
 
 MODEL_REGISTRY: dict[str, ModelEntry] = {
-    "claude-haiku-4-5": ModelEntry("claude-haiku-4-5", ModelTier.SIMPLE, variant="standard"),
-    "claude-sonnet-4-6": ModelEntry("claude-sonnet-4-6", ModelTier.STANDARD, variant="standard"),
-    "claude-opus-4-6": ModelEntry("claude-opus-4-6", ModelTier.ADVANCED, variant="standard"),
-    "claude-opus-4-6[1m]": ModelEntry("claude-opus-4-6[1m]", ModelTier.ADVANCED, variant="extended"),
+    "claude-haiku-4-5": ModelEntry("claude-haiku-4-5", ModelTier.SIMPLE),
+    "claude-sonnet-4-6": ModelEntry("claude-sonnet-4-6", ModelTier.STANDARD),
+    "claude-opus-4-6": ModelEntry("claude-opus-4-6", ModelTier.ADVANCED),
 }
 
 TIER_DEFAULTS: dict[ModelTier, str] = {
@@ -69,15 +59,14 @@ class ModelEntryConfig(BaseModel):
     """User-configurable model registry entry for [models.registry.<id>] TOML tables.
 
     Pydantic-compatible twin of :class:`ModelEntry` that accepts unvalidated
-    tier/variant strings from TOML and converts them on demand.
+    tier strings from TOML and converts them on demand.
 
     Requirements: 01-REQ-5.1
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     tier: str = Field(description="Model tier: SIMPLE, STANDARD, or ADVANCED")
-    variant: str | None = Field(default=None, description="Model variant: fast, standard, or extended")
 
     @model_validator(mode="after")
     def _validate_tier(self) -> ModelEntryConfig:
@@ -90,23 +79,16 @@ class ModelEntryConfig(BaseModel):
 
     def to_model_entry(self, model_id: str) -> ModelEntry:
         """Convert to a frozen :class:`ModelEntry` dataclass."""
-        return ModelEntry(model_id=model_id, tier=ModelTier(self.tier), variant=self.variant)
+        return ModelEntry(model_id=model_id, tier=ModelTier(self.tier))
 
 
-def resolve_model(name: str, *, variant: str | None = None, models_config: ModelsConfig | None = None) -> str:
+def resolve_model(name: str, *, models_config: ModelsConfig | None = None) -> str:
     """Resolve a tier name or model ID to a model ID string.
 
     Accepts either a tier name (e.g. "SIMPLE", "STANDARD", "ADVANCED")
     or a specific model ID (e.g. "claude-sonnet-4-6").
 
-    When *variant* is ``None`` (the default), returns the model ID from
-    the effective tier-defaults for the requested tier — identical to
-    pre-variant behavior.
-
-    When *variant* is provided, scans the effective registry for a
-    ``(tier, variant)`` match.  If no match is found, falls back to the
-    tier default and emits a DEBUG-level log.  No exception is ever raised
-    for an unmatched or unrecognized variant string.
+    Returns the tier-default model ID for the requested tier.
 
     When *models_config* is provided, user-supplied registry entries and
     tier-defaults from ``[models]`` in ``config.toml`` are overlaid on top
@@ -114,18 +96,17 @@ def resolve_model(name: str, *, variant: str | None = None, models_config: Model
 
     Args:
         name: A tier name (e.g. ``"ADVANCED"``) or a model ID string.
-        variant: Optional variant label (e.g. ``"extended"``).
         models_config: Optional config-driven model overrides. When provided,
             user entries overlay the hardcoded registry and tier defaults.
 
     Returns:
-        A model ID string (e.g. ``"claude-opus-4-6[1m]"``).
+        A model ID string (e.g. ``"claude-opus-4-6"``).
 
     Raises:
         ConfigError: If *name* is not a recognized tier or model ID.
 
     Requirements: 14-REQ-7.1, 14-REQ-7.2, 14-REQ-7.3, 14-REQ-7.4,
-                  14-REQ-9.1, 14-REQ-9.2, 14-REQ-9.3, 01-REQ-5.1
+                  01-REQ-5.1
     """
     from afcore.core.errors import ConfigError
 
@@ -151,22 +132,6 @@ def resolve_model(name: str, *, variant: str | None = None, models_config: Model
         tier = None
 
     if tier is not None:
-        if variant is None:
-            # Backward-compatible path: return tier-default model ID.
-            return effective_tier_defaults[tier]
-
-        # Scan effective registry for an entry matching (tier, variant).
-        for entry in effective_registry.values():
-            if entry.tier == tier and entry.variant == variant:
-                return entry.model_id
-
-        # Fallback: no match found for (tier, variant).
-        logger.debug(
-            "No model found for tier=%s variant=%s; falling back to tier default %s",
-            tier,
-            variant,
-            effective_tier_defaults[tier],
-        )
         return effective_tier_defaults[tier]
 
     # Try as a direct model ID
@@ -184,9 +149,9 @@ def resolve_model(name: str, *, variant: str | None = None, models_config: Model
 def collect_configured_model_ids(models_config: ModelsConfig | None = None) -> set[str]:
     """Collect all unique model IDs that nightshift archetypes will use.
 
-    Iterates over every archetype and its mode variants, resolving each
-    tier+variant pair to a concrete model ID. Returns the deduplicated
-    set of model IDs.
+    Iterates over every archetype and its mode overrides, resolving each
+    tier to a concrete model ID. Returns the deduplicated set of model
+    IDs.
 
     Args:
         models_config: Optional config-driven model overrides from
@@ -201,12 +166,11 @@ def collect_configured_model_ids(models_config: ModelsConfig | None = None) -> s
 
     model_ids: set[str] = set()
     for entry in ARCHETYPE_REGISTRY.values():
-        # Base archetype tier/variant
+        # Base archetype tier
         try:
             model_ids.add(
                 resolve_model(
                     entry.default_model_tier,
-                    variant=entry.default_model_variant,
                     models_config=models_config,
                 )
             )
@@ -220,7 +184,6 @@ def collect_configured_model_ids(models_config: ModelsConfig | None = None) -> s
                 model_ids.add(
                     resolve_model(
                         resolved.default_model_tier,
-                        variant=resolved.default_model_variant,
                         models_config=models_config,
                     )
                 )

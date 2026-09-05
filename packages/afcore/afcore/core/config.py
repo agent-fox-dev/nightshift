@@ -204,13 +204,21 @@ class PerArchetypeConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_variant_field(cls, data: Any) -> Any:
+        """Reject the removed ``model_variant`` field with a clear error."""
+        if isinstance(data, dict) and "model_variant" in data:
+            raise ValueError(
+                "The 'model_variant' field has been removed. "
+                "Model selection now uses 'model_tier' only. "
+                "Remove 'model_variant' from your config.toml."
+            )
+        return data
+
     model_tier: str | None = Field(
         default=None,
         description="Model tier override (SIMPLE, STANDARD, ADVANCED). None = use registry default.",
-    )
-    model_variant: str | None = Field(
-        default=None,
-        description="Model variant override (fast, standard, extended). None = use registry default.",
     )
     max_turns: int | None = Field(
         default=None,
@@ -321,13 +329,6 @@ def _default_pricing_models() -> dict[str, ModelPricing]:
             cache_read_price_per_m=0.50,
             cache_creation_price_per_m=6.25,
         ),
-        # Rates retrieved from https://www.anthropic.com/pricing on 2026-06-29
-        "claude-opus-4-6[1m]": ModelPricing(
-            input_price_per_m=5.00,
-            output_price_per_m=25.00,
-            cache_read_price_per_m=0.50,
-            cache_creation_price_per_m=6.25,
-        ),
     }
 
 
@@ -360,7 +361,6 @@ class ModelsConfig(BaseModel):
 
         [models.registry.claude-fable-5-1]
         tier = "ADVANCED"
-        variant = "standard"
 
     Requirements: 01-REQ-5.1
     """
@@ -371,7 +371,7 @@ class ModelsConfig(BaseModel):
         default_factory=dict,
         description=(
             "Additional model registry entries keyed by model ID. "
-            "Each value is a {tier, variant?} table. "
+            "Each value is a {tier} table. "
             "TOML: [models.registry.<model-id>]"
         ),
     )

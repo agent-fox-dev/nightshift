@@ -261,7 +261,7 @@ class TestModelsConfig:
     def test_registry_entry_parsed_from_toml(self, tmp_path: Path) -> None:
         """A [models.registry.<id>] table is parsed into the config."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text('[models.registry.claude-fable-5-1]\ntier = "ADVANCED"\nvariant = "standard"\n')
+        config_file.write_text('[models.registry.claude-fable-5-1]\ntier = "ADVANCED"\n')
         config = load_config(path=config_file)
         assert "claude-fable-5-1" in config.models.registry
 
@@ -271,13 +271,19 @@ class TestModelsConfig:
         config_file.write_text(
             "[models.registry.claude-fable-5-1]\n"
             'tier = "ADVANCED"\n'
-            'variant = "standard"\n'
             "\n"
             "[models.tier_defaults]\n"
             'ADVANCED = "claude-fable-5-1"\n'
         )
         config = load_config(path=config_file)
         assert config.models.tier_defaults["ADVANCED"] == "claude-fable-5-1"
+
+    def test_registry_entry_with_variant_raises_config_error(self, tmp_path: Path) -> None:
+        """A config.toml containing model_variant raises ConfigError (unknown field)."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[models.registry.claude-fable-5-1]\ntier = "ADVANCED"\nvariant = "standard"\n')
+        with pytest.raises((ConfigError, Exception)):
+            load_config(path=config_file)
 
     def test_tier_default_pointing_to_unknown_model_raises(self, tmp_path: Path) -> None:
         """tier_defaults pointing to an unregistered model ID raises ConfigError."""

@@ -834,11 +834,10 @@ def parse_triage_output(
             from afcore.nightshift.fix_pipeline import AssessedComplexity
 
             ac_tier = raw_ac.get("tier")
-            ac_variant = raw_ac.get("variant")
             ac_confidence = raw_ac.get("confidence")
             ac_rationale = raw_ac.get("rationale")
 
-            # All four fields required (15-REQ-11.E2: no partial salvaging)
+            # All three fields required (15-REQ-11.E2: no partial salvaging)
             if ac_tier is None or ac_rationale is None or ac_confidence is None:
                 raise ValueError("Missing required fields in assessed_complexity")
 
@@ -846,11 +845,6 @@ def parse_triage_output(
             valid_tiers = {"SIMPLE", "STANDARD", "ADVANCED"}
             if ac_tier not in valid_tiers:
                 raise ValueError(f"Unrecognised tier value: {ac_tier!r}")
-
-            # Case-sensitive variant validation
-            valid_variants = {None, "fast", "standard", "extended"}
-            if ac_variant not in valid_variants:
-                raise ValueError(f"Unrecognised variant value: {ac_variant!r}")
 
             # Confidence range check
             if not isinstance(ac_confidence, (int, float)):
@@ -861,7 +855,6 @@ def parse_triage_output(
 
             assessed_complexity = AssessedComplexity(
                 tier=ac_tier,
-                variant=ac_variant,
                 confidence=ac_confidence,
                 rationale=str(ac_rationale),
             )

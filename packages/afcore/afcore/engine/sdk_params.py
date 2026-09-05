@@ -247,29 +247,6 @@ def resolve_model_tier(config: AgentFoxConfig, archetype: str, *, mode: str | No
     return effective.default_model_tier
 
 
-def resolve_model_variant(config: AgentFoxConfig, archetype: str, *, mode: str | None = None) -> str | None:
-    """Resolve model variant for the given archetype.
-
-    Priority (highest to lowest):
-      1. archetypes.overrides.<name>.modes.<mode>.model_variant (mode-level override)
-      2. archetypes.overrides.<name>.model_variant (unified table)
-      3. Archetype registry default (via resolve_effective_config for mode)
-
-    Returns None when no variant is configured at any layer, leaving
-    resolve_model() to fall back to TIER_DEFAULTS.
-
-    Requirements: 14-REQ-6.1, 14-REQ-6.2, 14-REQ-6.3, 14-REQ-6.4,
-                  14-REQ-6.5, 14-REQ-6.E1
-    """
-    return _cascade(
-        config,
-        archetype,
-        mode,
-        attr="model_variant",
-        default_fn=lambda e: e.default_model_variant,
-    )
-
-
 def resolve_security_config(
     config: AgentFoxConfig,
     archetype: str,

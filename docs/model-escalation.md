@@ -1,9 +1,9 @@
-# Model Tiers, Variants, and Retry Behavior
+# Model Tiers and Retry Behavior
 
 This document describes how Night Shift selects models for each archetype and
 how failed sessions are retried.
 
-## Model Tiers and Variants
+## Model Tiers
 
 Three tiers are defined, ordered lowest to highest:
 
@@ -17,37 +17,27 @@ These defaults are hardcoded in `afcore.core.models` but can be overridden
 without a release via the `[models]` section in `config.toml` — see
 [docs/config-reference.md#models](config-reference.md#models).
 
-The ADVANCED tier supports two variants, ordered by capability:
-
-| Variant | Model ID |
-|---------|----------|
-| standard | claude-opus-4-6 |
-| extended | claude-opus-4-6[1m] |
-
-Variant ordering across all tiers: `fast (0) < standard (1) < extended (2)`.
-Tiers with no variant (variant = `None`) never participate in variant upgrades.
-
 ## Archetype Default Assignments
 
-Each archetype/mode pair has a default tier and variant configured in
+Each archetype/mode pair has a default tier and effort configured in
 `ARCHETYPE_REGISTRY`. These defaults are the starting point for every session.
 
-| Agent / Mode | Default Tier / Variant | Effort |
+| Agent / Mode | Default Tier | Effort |
 |---|---|---|
-| coder | STANDARD / standard | xhigh |
-| coder (fix) | STANDARD / standard | xhigh |
-| reviewer (pre-flight) | ADVANCED / standard | high |
-| reviewer (audit-review) | ADVANCED / standard | high |
-| reviewer (fix-review) | ADVANCED / standard | high |
-| verifier | STANDARD / standard | high |
-| gate | STANDARD / standard | low |
-| maintainer (hunt) | SIMPLE / standard | medium |
-| maintainer (fix-triage) | STANDARD / standard | medium |
-| maintainer (extraction) | SIMPLE / standard | medium |
+| coder | STANDARD | xhigh |
+| coder (fix) | STANDARD | xhigh |
+| reviewer (pre-flight) | ADVANCED | high |
+| reviewer (audit-review) | ADVANCED | high |
+| reviewer (fix-review) | ADVANCED | high |
+| verifier | STANDARD | high |
+| gate | STANDARD | low |
+| maintainer (hunt) | SIMPLE | medium |
+| maintainer (fix-triage) | STANDARD | medium |
+| maintainer (extraction) | SIMPLE | medium |
 
 ## Resolution Priority
 
-Model tier and variant are resolved through three layers, highest priority first:
+Model tier is resolved through three layers, highest priority first:
 
 ```
 1. Mode-level config override        [archetypes.overrides.<name>.modes.<mode>]
@@ -61,10 +51,9 @@ The first non-null value encountered wins.
 ### Configuration Example
 
 ```toml
-# Override the coder to use ADVANCED with extended variant
+# Override the coder to use ADVANCED tier
 [archetypes.overrides.coder]
 model_tier = "ADVANCED"
-model_variant = "extended"
 
 # Override only the fix mode of coder
 [archetypes.overrides.coder.modes.fix]
@@ -78,30 +67,25 @@ Two config surfaces compose to control model selection:
 | Surface | What it controls |
 |---------|-----------------|
 | `[models.registry]` + `[models.tier_defaults]` | Which model ID backs each tier |
-| `[archetypes.overrides]` | Which tier and variant each archetype requests |
+| `[archetypes.overrides]` | Which tier each archetype requests |
 
 ### Step 1 — Register the new model
 
 Models not in the built-in registry must be declared before they can be used
-as tier defaults or in archetype overrides. Each entry needs a `tier` and an
-optional `variant`:
+as tier defaults or in archetype overrides. Each entry needs a `tier`:
 
 ```toml
 [models.registry.claude-sonnet-5]
-tier    = "SIMPLE"
-variant = "standard"
+tier = "SIMPLE"
 
 [models.registry.claude-opus-5]
-tier    = "STANDARD"
-variant = "standard"
+tier = "STANDARD"
 
 [models.registry.claude-fable-5-1]
-tier    = "ADVANCED"
-variant = "standard"
+tier = "ADVANCED"
 ```
 
 Valid `tier` values: `SIMPLE`, `STANDARD`, `ADVANCED`.
-Valid `variant` values: `fast`, `standard`, `extended` (ordered by capability).
 
 ### Step 2 — Remap tier defaults (broadest scope)
 
@@ -120,17 +104,15 @@ single change upgrades every archetype in that tier with no further config.
 
 ### Step 3 — Per-archetype override (medium scope)
 
-Override the tier or variant for one archetype only, leaving others unchanged:
+Override the tier for one archetype only, leaving others unchanged:
 
 ```toml
 [archetypes.overrides.coder]
-model_tier    = "ADVANCED"
-model_variant = "standard"
-effort        = "xhigh"
+model_tier = "ADVANCED"
+effort     = "xhigh"
 
 [archetypes.overrides.reviewer]
-model_tier    = "ADVANCED"
-model_variant = "standard"
+model_tier = "ADVANCED"
 ```
 
 ### Step 4 — Per-mode override (finest grain)
@@ -141,9 +123,8 @@ config or other modes:
 ```toml
 # Coder base stays on STANDARD, but the fix mode uses ADVANCED
 [archetypes.overrides.coder.modes.fix]
-model_tier    = "ADVANCED"
-model_variant = "standard"
-effort        = "max"
+model_tier = "ADVANCED"
+effort     = "max"
 
 # reviewer's audit-review mode is pinned to ADVANCED
 [archetypes.overrides.reviewer.modes.audit-review]
@@ -159,7 +140,6 @@ All fields are optional; omitting one inherits the archetype registry default.
 | Field | Valid values | Notes |
 |-------|-------------|-------|
 | `model_tier` | `SIMPLE`, `STANDARD`, `ADVANCED` | Selects the capability tier |
-| `model_variant` | `fast`, `standard`, `extended` | Selects the variant within the tier |
 | `effort` | `low`, `medium`, `high`, `xhigh`, `max` | Controls thinking depth and token spend — independent of model selection |
 | `max_turns` | integer ≥ 0 (0 = unlimited) | |
 | `thinking_mode` | `adaptive`, `disabled` | |
@@ -167,9 +147,8 @@ All fields are optional; omitting one inherits the archetype registry default.
 | `max_budget_usd` | float ≥ 0.0 (0 = unlimited) | Per-archetype spend cap; inherits `orchestrator.max_budget_usd` if omitted |
 | `allowlist` | list of command strings | Replaces the archetype's default bash allowlist |
 
-`effort` and `model_*` are orthogonal: `effort` controls how hard the model
-thinks within a session; `model_tier`/`model_variant` control which model
-binary is selected.
+`effort` and `model_tier` are orthogonal: `effort` controls how hard the model
+thinks within a session; `model_tier` controls which model binary is selected.
 
 ### Complete worked example
 
@@ -178,16 +157,13 @@ Self-contained config for adopting a new model generation across the whole pipel
 ```toml
 # 1. Register the new models
 [models.registry.claude-sonnet-5]
-tier    = "SIMPLE"
-variant = "standard"
+tier = "SIMPLE"
 
 [models.registry.claude-opus-5]
-tier    = "STANDARD"
-variant = "standard"
+tier = "STANDARD"
 
 [models.registry.claude-fable-5-1]
-tier    = "ADVANCED"
-variant = "standard"
+tier = "ADVANCED"
 
 # 2. Redirect tier defaults — every archetype inherits the new models
 [models.tier_defaults]
@@ -206,9 +182,9 @@ model_tier = "ADVANCED"    # escalate the fix mode to Fable
 effort = "low"             # keep the gating check cheap
 ```
 
-No per-archetype `model_tier`/`model_variant` lines are needed in step 3 if
-the tier-default remapping in step 2 already gives you the right model — only
-add them when one archetype needs to differ from the tier default.
+No per-archetype `model_tier` lines are needed in step 3 if the tier-default
+remapping in step 2 already gives you the right model — only add them when one
+archetype needs to differ from the tier default.
 
 ## Retry Behavior
 

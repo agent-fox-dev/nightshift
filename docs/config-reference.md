@@ -204,7 +204,6 @@ Each override is keyed by archetype name:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `model_tier` | str\|null | `null` | Model tier: SIMPLE, STANDARD, ADVANCED |
-| `model_variant` | str\|null | `null` | Model variant: fast, standard, extended |
 | `max_turns` | int\|null | `null` | Max turns (0 = unlimited) |
 | `thinking_mode` | str\|null | `null` | `adaptive` or `disabled` |
 | `effort` | str\|null | `null` | `low`, `medium`, `high`, `xhigh`, or `max` |
@@ -233,13 +232,12 @@ model or tier leaves the built-in value unchanged.
 
 ### models.registry
 
-Additional model entries keyed by model ID. Each entry declares the tier and
-optional variant for that model.
+Additional model entries keyed by model ID. Each entry declares the tier
+for that model.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `tier` | str | required | Model tier: `SIMPLE`, `STANDARD`, or `ADVANCED` |
-| `variant` | str\|null | `null` | Variant label: `fast`, `standard`, `extended`, or any custom string |
 
 ### models.tier_defaults
 
@@ -258,7 +256,6 @@ misconfigured value raises `ConfigError` at startup.
 
 [models.registry.claude-fable-5-1]
 tier = "ADVANCED"
-variant = "standard"
 
 [models.tier_defaults]
 ADVANCED = "claude-fable-5-1"
@@ -287,7 +284,7 @@ Custom per-model pricing for cost tracking.
 | `cache_creation_price_per_m` | float | `0.0` | USD per million cache-creation tokens |
 
 Built-in defaults cover `claude-haiku-4-5`, `claude-sonnet-4-6`,
-`claude-opus-4-5`, `claude-opus-4-6`, and `claude-opus-4-6[1m]`.
+`claude-opus-4-5`, and `claude-opus-4-6`.
 
 ```toml
 [pricing.models.claude-sonnet-4-6]

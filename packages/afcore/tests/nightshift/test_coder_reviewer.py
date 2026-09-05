@@ -81,7 +81,6 @@ def _patch_model_resolution():
     return (
         patch("afcore.core.models.resolve_model", return_value="claude-sonnet-4-6"),
         patch("afcore.engine.sdk_params.resolve_model_tier", return_value="standard"),
-        patch("afcore.engine.sdk_params.resolve_model_variant", return_value=None),
     )
 
 
@@ -109,11 +108,10 @@ class TestCoderReviewerReturnObjectFields:
         review_result = FixReviewResult(overall_verdict="PASS")
         coder_outcome = _make_coder_outcome()
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -134,11 +132,10 @@ class TestCoderReviewerReturnObjectFields:
         review_result = FixReviewResult(overall_verdict="PASS")
         coder_outcome = _make_coder_outcome()
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -162,11 +159,10 @@ class TestCoderReviewerReturnObjectFields:
         review_result = FixReviewResult(overall_verdict="FAIL")
         coder_outcome = _make_coder_outcome(response="")
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -188,11 +184,10 @@ class TestCoderReviewerReturnObjectFields:
         review_result = FixReviewResult(overall_verdict="FAIL")
         coder_outcome = _make_coder_outcome(response="")
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -230,11 +225,10 @@ class TestCoderReviewerSuccessfulPath:
         coder_outcome = _make_coder_outcome(response="The fix applied cleanly.")
         review_result = FixReviewResult(overall_verdict="PASS")
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -256,11 +250,10 @@ class TestCoderReviewerSuccessfulPath:
         review_result = FixReviewResult(overall_verdict="PASS")
         triage = _make_triage(affected_files=["src/handler.py", "src/utils.py"])
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -282,11 +275,10 @@ class TestCoderReviewerSuccessfulPath:
         review_result = FixReviewResult(overall_verdict="PASS")
         triage = _make_triage(affected_files=["src/main.py"])
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -328,11 +320,10 @@ class TestCoderReviewerEarlyExit:
         coder_outcome = _make_coder_outcome(response="Attempted fix.")
         review_result = FixReviewResult(overall_verdict="FAIL", summary="Tests still fail")
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -354,11 +345,10 @@ class TestCoderReviewerEarlyExit:
         coder_outcome = _make_coder_outcome(response="Attempted fix.")
         review_result = FixReviewResult(overall_verdict="FAIL")
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -380,11 +370,10 @@ class TestCoderReviewerEarlyExit:
         coder_outcome = _make_coder_outcome(response="")
         review_result = FixReviewResult(overall_verdict="FAIL")
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -408,11 +397,10 @@ class TestCoderReviewerEarlyExit:
         coder_outcome = _make_coder_outcome(response="Retry attempt.")
         review_result = FixReviewResult(overall_verdict="FAIL")
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -435,11 +423,10 @@ class TestCoderReviewerEarlyExit:
         review_result = FixReviewResult(overall_verdict="PASS")
         triage = _make_triage(affected_files=[])
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -477,11 +464,10 @@ class TestCoderReviewerBoolCompatibility:
         review_result = FixReviewResult(overall_verdict="PASS")
         coder_outcome = _make_coder_outcome()
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
@@ -503,11 +489,10 @@ class TestCoderReviewerBoolCompatibility:
         review_result = FixReviewResult(overall_verdict="FAIL")
         coder_outcome = _make_coder_outcome()
 
-        p1, p2, p3 = _patch_model_resolution()
+        p1, p2 = _patch_model_resolution()
         with (
             p1,
             p2,
-            p3,
             patch.object(loop, "_run_coder_phase", new_callable=AsyncMock, return_value=coder_outcome),
             patch.object(loop, "_run_reviewer_phase", new_callable=AsyncMock, return_value=review_result),
         ):
