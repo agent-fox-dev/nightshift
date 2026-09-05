@@ -26,14 +26,19 @@ Each archetype/mode pair has a default tier and effort configured in
 |---|---|---|
 | coder | STANDARD | xhigh |
 | coder (fix) | STANDARD | xhigh |
+| coder (carry-patch) | STANDARD | high |
+| reviewer | STANDARD | high |
 | reviewer (pre-flight) | ADVANCED | high |
 | reviewer (audit-review) | ADVANCED | high |
 | reviewer (fix-review) | ADVANCED | high |
-| verifier | STANDARD | high |
-| gate | STANDARD | low |
+| verifier† | STANDARD | high |
+| gate† | STANDARD | low |
+| maintainer | STANDARD | medium |
 | maintainer (hunt) | SIMPLE | medium |
 | maintainer (fix-triage) | STANDARD | medium |
 | maintainer (extraction) | SIMPLE | medium |
+
+†Registered in `ARCHETYPE_REGISTRY` but not dispatched by Night Shift.
 
 ## Resolution Priority
 
@@ -213,63 +218,41 @@ To override the model used by batch triage and staleness, either:
 
 ## Retry Behavior
 
-When a session fails, the orchestrator applies a simple retry counter.
+The fix pipeline uses a coder→reviewer loop (`CoderReviewerLoop`) with a
+fixed retry count. There is no automatic tier escalation.
 
-### How It Works
+### Coder-Reviewer Loop
 
-Each task node tracks its attempt count. On each failure:
+The loop runs up to `max_retries + 1` coder→reviewer rounds per issue
+(default `max_retries = 2`, giving 3 rounds). Each round:
 
-1. If the attempt count is within the `max_retries` limit (default: 2), the
-   task is reset to `pending` for another attempt **at the same model tier**.
-2. If retries are exhausted, the task is marked `blocked` and all transitive
-   dependents are cascade-blocked.
+1. **Coder** (fix mode, STANDARD tier) implements or re-attempts the fix.
+   On retry, the previous reviewer feedback is injected into the prompt.
+2. **Reviewer** (fix-review mode, ADVANCED tier) reviews the patch and
+   produces a PASS/FAIL verdict.
 
-There is no automatic tier escalation — a task retries at its configured model
-tier until it either succeeds or exhausts its retries.
-
-### Timeout Retries
-
-Timeout failures are handled separately with dedicated settings:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `routing.max_timeout_retries` | 2 | Maximum timeout retries before falling through to failure |
-| `routing.timeout_multiplier` | 1.5 | Factor by which max_turns and session_timeout are extended |
-| `routing.timeout_ceiling_factor` | 2.0 | Maximum session_timeout as multiple of original value |
-
-On each timeout retry, the session parameters (max turns and timeout) are
-extended by the multiplier and clamped to the ceiling. The model tier remains
-unchanged. Only after timeout retries are exhausted does the task fall through
-to the normal failure path.
-
-### Budget Exhaustion
-
-When a session's cost approaches the per-session budget cap (≥90% of the limit),
-the session is classified as budget-exhausted and is **not retried** — repeating
-the same work would burn the same budget again.
+If the reviewer gives PASS, the loop exits successfully. If FAIL with
+retries remaining, the feedback feeds into the next coder round. If all
+rounds are exhausted, the pipeline posts a "manual intervention required"
+comment and leaves the issue open.
 
 ### Transport Errors
 
-Transient connection errors are retried internally by the Claude backend with
-exponential backoff (up to 3 retries). If the error surfaces to the
-orchestrator, the task is reset to `pending` without consuming a retry attempt.
+A coder session that fails with `is_transport_error=True` is retried
+without consuming a loop attempt, bounded by `MAX_TRANSPORT_RETRIES` (2).
+When the cap is exceeded, the pipeline aborts with a comment naming the
+transport failure. Non-transport coder failures (including timeouts) skip
+the reviewer phase entirely — reviewing an unchanged worktree would waste
+an ADVANCED-tier session.
 
-In the Night Shift fix pipeline's coder-reviewer loop, the same principle
-applies: a coder session that fails with `is_transport_error=True` is
-retried without consuming an attempt, bounded by a cap of 2 transport
-retries. When the cap is exceeded, the pipeline aborts with a comment
-naming the transport failure (not the fix quality). Non-transport coder
-failures (including timeouts) skip the reviewer phase entirely — reviewing
-an unchanged worktree would waste an ADVANCED-tier session.
+### Session Timeout
 
-### Review-Triggered Retries
+A session timeout (`status="timeout"`) ends the session with no retry
+at a different timeout value. The failed round consumes one attempt.
 
-Two archetype modes have `retry_predecessor = true`:
+### Reviewer Parse Failure
 
-- **audit-review**: When test quality findings indicate MISSING or MISALIGNED
-  tests, the preceding coder session is re-run with the findings injected as
-  context. This is tracked by a separate `audit_max_retries` counter
-  (default: 2).
-- **verifier**: When verification fails, the preceding coder session is re-run
-  with the verification results as context. Uses the standard `max_retries`
-  counter.
+If the reviewer output cannot be parsed, the reviewer is retried once.
+If the retry also fails to parse, the result is treated as FAIL.
+Parse-failure results are not injected as feedback into the next coder
+prompt (to avoid injecting empty guidance).

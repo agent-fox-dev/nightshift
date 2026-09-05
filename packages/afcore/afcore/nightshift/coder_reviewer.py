@@ -94,11 +94,7 @@ class CoderReviewerLoop:
 
         p = self._pipeline
 
-        max_retries_raw = getattr(p._config.orchestrator, "max_retries", 3)
-        try:
-            max_retries: int = int(max_retries_raw)
-        except (TypeError, ValueError):
-            max_retries = 3
+        max_retries: int = p._config.orchestrator.max_retries
 
         tier = resolve_model_tier(p._config, "coder", mode="fix")
         model_id: str | None = resolve_model(tier, models_config=p._config.models)

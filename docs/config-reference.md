@@ -58,7 +58,7 @@ Controls session retries, timeouts, and budgets.
 
 | Field | Type | Default | Bounds | Description |
 |-------|------|---------|--------|-------------|
-| `max_retries` | int | `2` | >= 0 | Maximum retries per task group |
+| `max_retries` | int | `2` | >= 0 | Maximum coder→reviewer retry rounds per issue (total rounds = `max_retries + 1`) |
 | `session_timeout` | int | `45` | >= 1 | Per-session timeout in minutes |
 | `max_cost` | float\|null | `null` | -- | Hard cost ceiling for the entire run (null = no limit) |
 | `max_sessions` | int\|null | `null` | -- | Maximum total sessions in a run (null = no limit) |

@@ -107,7 +107,10 @@ class BackendConfig(BaseModel):
 class OrchestratorConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    max_retries: Annotated[int, Clamped(ge=0)] = Field(default=2, description="Maximum retries per task group")
+    max_retries: Annotated[int, Clamped(ge=0)] = Field(
+        default=2,
+        description="Maximum coder-reviewer retry rounds per issue",
+    )
     session_timeout: Annotated[int, Clamped(ge=1)] = Field(default=45, description="Session timeout in minutes")
     max_cost: float | None = Field(default=None, description="Maximum cost limit")
     max_sessions: int | None = Field(default=None, description="Maximum number of sessions")

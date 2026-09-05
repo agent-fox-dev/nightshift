@@ -64,7 +64,7 @@ object is built and rendered to markdown for the coder and reviewer prompts.
 
 ### 3.3 Coder-Reviewer Loop
 
-Retries up to `max_retries + 1` iterations (default 4):
+Retries up to `max_retries + 1` iterations (default 3, with `max_retries = 2`):
 
 1. **Coder** (fix mode, STANDARD tier) implements the fix on an isolated branch.
    On retry, previous review feedback is injected.
@@ -104,7 +104,9 @@ to the oldest issue.
 
 ## 5. Agent Archetypes
 
-Night Shift uses four archetypes from the registry:
+Night Shift uses three archetypes from the registry (Coder, Reviewer,
+Maintainer). Two additional archetypes (Verifier, Gate) are registered in
+`ARCHETYPE_REGISTRY` but are not dispatched by Night Shift.
 
 | Archetype | Mode | Tier | Role |
 |-----------|------|------|------|
