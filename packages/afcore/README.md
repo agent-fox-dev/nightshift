@@ -64,25 +64,25 @@ Sub-config models (all pydantic `BaseModel` subclasses with documented defaults)
 |-------|------------|
 | `BackendConfig` | `provider` (claude, deepagents, google) |
 | `OrchestratorConfig` | `max_retries`, `session_timeout`, `max_cost`, `max_sessions`, `max_budget_usd` |
-| `SecurityConfig` | `bash_allowlist`, `bash_allowlist_extend` |
+| `SecurityConfig` | `bash_allowlist`, `bash_allowlist_extend`, `permission_mode` |
 | `WorkspaceConfig` | `integration_branch`, `merge_strategy` |
 | `KnowledgeConfig` | `store_path`, `provider` (sub-config) |
 | `PricingConfig` | Model-keyed `ModelPricing` entries (`input_price_per_m`, `output_price_per_m`, `cache_read_price_per_m`, `cache_creation_price_per_m`) |
 | `CachingConfig` | `cache_policy` (NONE / DEFAULT / EXTENDED) |
-| `PerArchetypeConfig` | `model_tier`, `model_variant`, `max_turns`, `thinking_mode`, `effort`, `max_budget_usd`, `compaction`, `modes` |
+| `PerArchetypeConfig` | `model_tier`, `max_turns`, `thinking_mode`, `effort`, `allowlist`, `max_budget_usd`, `compaction`, `modes` |
 | `ArchetypesConfig` | `overrides` dict of per-archetype config |
 | `PlatformConfig` | `type` (none, github, gitlab, gitea), `url` |
 | `NightShiftConfig` | `issue_check_interval`, `pr_check_interval`, `push_fix_branch`, `max_parallel`, `max_pr_retries` |
 | `HubConfig` | `endpoint_url` |
 | `CarryPatchConfig` | `enabled`, `workspace`, `check_interval`, `auto_resolve`, `rebuild_timeout`, `rebuild_poll_interval`, `max_resolve_retries` |
-| `ThemeConfig` | `playful`, `header`, `success`, `error`, `warning`, `info`, `tool`, `muted` |
+| `ThemeConfig` | `header`, `muted` |
 
 ### Archetypes (`afcore.archetypes`)
 
 | Symbol | Description |
 |--------|-------------|
-| `ArchetypeEntry` | Dataclass — full archetype config: `name`, `default_model_tier`, `default_model_variant`, `injection`, `task_assignable`, `retry_predecessor`, `default_allowlist`, `default_max_turns`, `thinking`, `modes: dict[str, ModeConfig]`. |
-| `ModeConfig` | Dataclass — per-mode overrides: `model_tier`, `model_variant`, `injection`, `allowlist`, `retry_predecessor`, `max_turns`, `thinking`. |
+| `ArchetypeEntry` | Dataclass — full archetype config: `name`, `templates`, `default_model_tier`, `injection`, `task_assignable`, `retry_predecessor`, `default_allowlist`, `default_max_turns`, `default_thinking_mode`, `default_effort`, `default_compaction`, `injection_order`, `modes: dict[str, ModeConfig]`. |
+| `ModeConfig` | Dataclass — per-mode overrides: `templates`, `injection`, `allowlist`, `model_tier`, `max_turns`, `thinking_mode`, `effort`, `retry_predecessor`. |
 | `ARCHETYPE_REGISTRY` | `dict[str, ArchetypeEntry]` — built-in archetypes: `coder`, `reviewer`, `verifier`, `gate`, `maintainer`. |
 | `get_archetype` | `(name, project_dir=None, config=None) -> ArchetypeEntry` — look up by name with custom archetype fallback. |
 | `resolve_effective_config` | `(entry, mode) -> ArchetypeEntry` — merge mode overrides onto base entry. |
@@ -122,16 +122,20 @@ Sub-config models (all pydantic `BaseModel` subclasses with documented defaults)
 | Symbol | Description |
 |--------|-------------|
 | `ModelTier` | Enum: `SIMPLE`, `STANDARD`, `ADVANCED`. |
-| `ModelEntry` | Dataclass: `model_id`, `tier`, `variant`. |
+| `ModelEntry` | Dataclass: `model_id`, `tier`. |
 | `MODEL_REGISTRY` | `dict[str, ModelEntry]` — all known model IDs. |
-| `resolve_model` | `(name_or_tier, variant=None) -> str` — resolve a tier name or model alias to a concrete model ID. |
-| `calculate_cost` | `(input_tokens, output_tokens, cache_read, cache_creation, model, pricing) -> float` — USD cost. |
+| `TIER_DEFAULTS` | `dict[ModelTier, str]` — default model ID for each tier. |
+| `ModelEntryConfig` | Pydantic model for user-configurable `[models.registry.<id>]` entries: `tier`. |
+| `resolve_model` | `(name, *, models_config=None) -> str` — resolve a tier name or model ID to a concrete model ID. |
+| `collect_configured_model_ids` | `(models_config=None) -> set[str]` — collect all model IDs that archetypes will use at runtime. |
+| `validate_model_access` | `(models_config=None) -> None` — validate configured model IDs are accessible via the API key. |
+| `calculate_cost` | `(input_tokens, output_tokens, model_id, pricing, *, cache_read_input_tokens=0, cache_creation_input_tokens=0) -> float` — USD cost. |
 
 ### Session (`afcore.session`)
 
 | Symbol | Module | Description |
 |--------|--------|-------------|
-| `build_system_prompt` | `session.prompt` | `(context, task_group, spec_name, archetype, mode, project_dir) -> str` — 3-layer system prompt assembly (agent + role + task context). |
+| `build_system_prompt` | `session.prompt` | `(context, task_group, spec_name, archetype, mode, project_dir) -> str` — 2-layer system prompt assembly (profile + task context). |
 | `build_task_prompt` | `session.prompt` | Task prompt construction from spec artifacts and injected findings. |
 | `assemble_context` | `session.context` | Gather spec documents, review findings, and steering directives into a structured context object. |
 

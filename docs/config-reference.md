@@ -11,7 +11,12 @@ with default values for reference.
 - **Symlinks rejected.** `config.toml` must be a regular file, not a symlink.
 - **Out-of-range values clamped.** Numeric values outside their valid bounds
   are silently clamped to the nearest bound. A warning is logged.
-- **Unknown keys ignored.** All sections silently ignore unknown keys.
+- **Unknown keys ignored** — with exceptions. Most sections silently ignore
+  unknown keys. Two cases raise `ConfigError` instead:
+  - `model_variant` in `[archetypes.overrides.*]` — this field was removed;
+    its presence triggers an explicit error directing you to remove it.
+  - Invalid tier names in `[models.tier_defaults]` — only `SIMPLE`,
+    `STANDARD`, and `ADVANCED` are accepted.
 
 ## Table of Contents
 

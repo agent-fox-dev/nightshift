@@ -45,6 +45,7 @@ class ModelEntry:
 MODEL_REGISTRY: dict[str, ModelEntry] = {
     "claude-haiku-4-5": ModelEntry("claude-haiku-4-5", ModelTier.SIMPLE),
     "claude-sonnet-4-6": ModelEntry("claude-sonnet-4-6", ModelTier.STANDARD),
+    "claude-opus-4-5": ModelEntry("claude-opus-4-5", ModelTier.ADVANCED),
     "claude-opus-4-6": ModelEntry("claude-opus-4-6", ModelTier.ADVANCED),
 }
 
