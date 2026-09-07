@@ -3,7 +3,7 @@
 **Author:** [Platform Engineering]
 **Date:** 2026-09-07
 **Status:** Draft
-**Version:** 1.2.0 — Issue Service API split into its own document
+**Version:** 1.3.0 — the Issue Service is part of hub
 **Supersedes:** the Python implementation in `packages/nightshift` + `packages/afcore`
 **Companion:** [`issue_service_prd.md`](issue_service_prd.md) — the Issue Service API this daemon depends on
 
@@ -602,7 +602,7 @@ ungated — once, at startup, not per issue.
 | Issue attempt ledger, in-flight claims, retry counters | local SQLite (`modernc.org/sqlite`) | must work with hub unreachable |
 | Carry-forward findings and session summaries | hub (§6.7) | shared across hosts and runs; hub owns the lifecycle |
 | Config | `.nightshift/config.toml` + hub workspace vars | vars for operational toggles |
-| Secrets (issue-service token, provider keys) | hub secrets, env fallback | removes credentials from the box |
+| Secrets (provider API keys) | hub secrets, env fallback | only `AF_HUB_TOKEN` stays on the box |
 
 **Not DuckDB.** DuckDB requires CGo, which is what forces hub's own
 `CGO_ENABLED=1` build. Night Shift's local queries are point lookups and small
@@ -658,11 +658,10 @@ decision:
   authenticated by ordinary git credentials. No forge REST API participates in
   any operation on code. This is already how integration works; it now becomes
   exclusive and is stated as a constraint rather than an implementation detail.
-- **Issues are a service.** Everything about issues, labels, comments and pull
-  requests goes through one HTTP contract — the **Issue Service API** — which
-  hub implements, and which any standalone server may implement to bridge a
-  different tracker. Night Shift ships exactly one client and knows nothing
-  about GitHub.
+- **Issues are a service, and that service is hub.** Everything about issues,
+  labels, comments and pull requests goes through one HTTP contract — the
+  **Issue Service API** — served by hub. Night Shift ships exactly one client
+  and knows nothing about GitHub.
 
 Adapting a real tracker moves *behind* the API, into its implementer. That is
 where it belongs: the GitHub/GitLab/Gitea divergences that made `afissues`
@@ -680,6 +679,30 @@ need to hold three of them to fix a bug.
 > This document specifies only Night Shift's side of it: what the client must
 > do (§6.10), how it is wired (§7.7), how it is configured (§8), and what its
 > absence costs (R-8).
+
+#### The issue service is part of hub
+
+It is not a second service, a second endpoint or a second credential. Night
+Shift opens **one** connection to hub and uses it for everything:
+
+| | |
+|---|---|
+| **Endpoint** | `[hub] endpoint_url`. The issue API lives on hub's existing `/api/v1` surface beside sessions, audit, patches, secrets and variables. There is no `[issues] endpoint_url`. |
+| **Authentication** | hub's existing bearer credentials — a PAT, an API key or an admin token. `Authorization: Bearer <token>` exactly as every other hub call. There is no `AF_ISSUES_TOKEN`. |
+| **Scopes** | `issues:read` / `issues:write`, granted on the same token that already carries `sessions:*` and `audit:*`. A PAT needs an explicit grant; API keys and admin tokens have implicit access, matching hub's existing rule. |
+| **Project identity** | the contract's `{project}` **is** the hub workspace slug — `[hub] workspace`. One name, not a workspace slug plus a separate project id. |
+| **Authorization** | hub's workspace ACL, unchanged. A workspace-scoped token addresses only its own workspace; an archived workspace returns `409`, as it does elsewhere in hub. |
+| **Audit** | issue mutations emit hub audit events under the existing `hub.*` taxonomy, so issue activity appears in the same unified query as everything else. |
+
+The contract stays a separate specification because it is testable
+independently and because a non-hub implementation remains *possible* — the
+service PRD's `af-issued` bridge is what the conformance suite is developed
+against. But Night Shift's supported deployment is hub, and the client is
+built assuming hub's endpoint and hub's token.
+
+**This makes hub a hard dependency.** Before this decision the daemon could
+run with hub absent and keep telemetry local; now, no hub means no issues,
+which means no work. REQ-NS-HUB-05 states what degrades and what stops.
 
 Two properties of that contract are load-bearing here and are called out so
 the dependency is visible rather than buried in a reference:
@@ -899,12 +922,27 @@ the dependency is visible rather than buried in a reference:
 - **REQ-NS-HUB-04** — All hub writes go through the offline spool. Spool depth
   is a metric; a spool that cannot drain for `spool_max_age` logs an error and
   begins dropping oldest-first, loudly.
-- **REQ-NS-HUB-05** — Hub is **optional**. `[hub] endpoint_url` unset means
-  local-only operation: the ledger still works, the spool is not created, and
-  the daemon logs that telemetry is local-only. Carry-patch mode requires hub.
-- **REQ-NS-HUB-06** — Credentials resolve in order: hub secret → environment
-  variable → config. Provider API keys and the issue-service token are both
-  resolvable from hub workspace secrets (closes the credential half of F-19).
+- **REQ-NS-HUB-05** — Hub is **required**, because it serves the issue API
+  (§5.8): a daemon without hub has no way to find work. `[hub] endpoint_url`
+  unset is a startup failure, not a local-only mode. What degrades rather than
+  fails is per subsystem, and the difference matters operationally:
+
+  | Hub subsystem unreachable | Effect |
+  |---|---|
+  | Issues | fix-pipeline and pr-feedback stall; the client backs off and retries and never reports an outage as an empty queue (REQ-NS-ISSUES-04, contrast F-8) |
+  | Audit, sessions, usage | spooled locally and drained on recovery (REQ-NS-HUB-04); no effect on fixing |
+  | Memory (findings, summaries) | retrieval returns empty, recording spools; sessions run without carry-forward (REQ-NS-HUB-10) |
+  | Secrets, variables | last resolved values are reused; a cold start that cannot resolve a required secret fails |
+  | Carry-patch | the carry-patch stream stalls and retries |
+
+  An in-flight issue is not abandoned when hub goes away mid-fix: the pipeline
+  completes locally through integration, and the reporting it could not
+  deliver is spooled.
+- **REQ-NS-HUB-06** — One hub credential, resolved from `AF_HUB_TOKEN` then
+  config, authenticates every hub call including the issue API. Everything
+  else — provider API keys above all — resolves hub secret → environment
+  variable → config, so the hub token is the only secret that must exist on
+  the box (closes the credential half of F-19).
 - **REQ-NS-HUB-07** — Operational toggles are read from hub workspace
   variables at each cycle so a running daemon can be steered without a
   restart: `NIGHTSHIFT_PAUSED`, `NIGHTSHIFT_MAX_PARALLEL`,
@@ -977,11 +1015,15 @@ the dependency is visible rather than buried in a reference:
   push, tag — is git against the repository's own remote with ordinary git
   credentials. No forge REST API takes part in any code operation, in any
   merge strategy.
-- **REQ-NS-ISSUES-02** — **Issue operations go through the Issue Service API**
-  and nothing else. The contract is normative in the [Issue Service PRD](issue_service_prd.md); Night Shift
-  ships one client against it. The daemon contains no GitHub, GitLab or Gitea
-  code, no tracker-specific request shaping and no tracker-specific error
-  handling.
+- **REQ-NS-ISSUES-02** — **Issue operations go through the Issue Service API
+  on hub** and nothing else. The contract is normative in the [Issue Service PRD](issue_service_prd.md); the
+  daemon contains no GitHub, GitLab or Gitea code, no tracker-specific request
+  shaping and no tracker-specific error handling.
+- **REQ-NS-ISSUES-02a** — The issue client is constructed from `[hub]`:
+  `endpoint_url` for the base URL, the hub token for `Authorization`, and
+  `workspace` as the contract's `{project}`. There is no separate issue
+  endpoint, token or project setting, and the daemon opens no second
+  connection (§5.8).
 - **REQ-NS-ISSUES-03** — Capabilities are read once at startup from
   `GET /projects/{project}/capabilities` (REQ-IS-4.1). A configuration
   requiring an unadvertised capability fails at startup with a message naming
@@ -999,10 +1041,11 @@ the dependency is visible rather than buried in a reference:
   exists" stops being an error string to pattern-match. The required set is
   `af:fix`, `af:fixed`, `af:no-change`, `af:pr`, `af:failed` (new,
   REQ-NS-PIPE-10) and `af:needs-detail` (new, REQ-NS-PIPE-02).
-- **REQ-NS-ISSUES-07** — Night Shift depends on a conforming service being
-  reachable. It does not ship one: `af-issued` and hub's implementation are
-  specified and delivered by the [Issue Service PRD](issue_service_prd.md). What Night Shift owns is the
-  dependency — see §10 Phase 0 for sequencing and R-8 for the risk.
+- **REQ-NS-ISSUES-07** — Night Shift depends on hub having implemented the
+  contract; it does not ship an implementation. Delivery of hub's
+  implementation — and of the `af-issued` bridge the conformance suite is
+  developed against — belongs to the [Issue Service PRD](issue_service_prd.md). What Night Shift owns is the
+  dependency: see §10 Phase 0 for sequencing and R-8 for the risk.
 - **REQ-NS-ISSUES-08** — Night Shift's own test suite runs against the
   in-process fake the service spec ships (REQ-IS-8.4), so the daemon's tests
   need no network and no live service.
@@ -1333,6 +1376,11 @@ type Client interface {
 }
 ```
 
+The client is constructed from the same `[hub]` endpoint and token as
+`internal/hubclient`, with `[hub] workspace` as the contract's `{project}`
+(REQ-NS-ISSUES-02a). The two packages are separate because they speak
+different parts of hub's API, not because they speak to different servers.
+
 Git has no interface here at all: `internal/repo` shells out to `git`, and
 that is the whole abstraction (REQ-NS-ISSUES-01).
 
@@ -1389,19 +1437,14 @@ allowlist_extend = ["make", "uv"]
 [skills]
 trust_project = false           # NEW default (REQ-NS-SKILL-03)
 
-[issues]                         # NEW: replaces [platform] (§5.8)
-                                 # contract: docs/proposals/issue_service_prd.md
-endpoint_url = "https://hub.example.com"
-project      = "my-repo"
-# token from hub secret, else AF_ISSUES_TOKEN
-
-[hub]
+[hub]                            # required — hub serves the issue API (§5.8)
 endpoint_url  = "https://hub.example.com"
-workspace     = "my-workspace"
+workspace     = "my-workspace"   # also the issue contract's {project}
 audit         = true
-memory        = true             # NEW: carry-forward findings (REQ-NS-HUB-09)
+memory        = true             # carry-forward findings (REQ-NS-HUB-09)
 spool_dir     = ".nightshift/spool"
 spool_max_age = "72h"
+# token: AF_HUB_TOKEN — needs issues:read, issues:write, sessions:*, audit:*
 
 [carry_patch]
 check_interval        = 300
@@ -1427,7 +1470,8 @@ disabled = []
 ```
 
 **Removed keys:** `platform.type` / `platform.url` / `platform.project_id` /
-`platform.owner` / `platform.repo` (replaced by `[issues]`), `backend.provider`
+`platform.owner` / `platform.repo` (issues now come from `[hub]`),
+`backend.provider`
 (one runtime), `knowledge.*` (no knowledge store), `caching.cache_policy` moves
 under `[models]` as `cache_retention`, `security.permission_mode` (no
 subprocess permission model), `archetypes.overrides.*.injection` /
@@ -1435,8 +1479,9 @@ subprocess permission model), `archetypes.overrides.*.injection` /
 
 **Removed environment variables:** `GITHUB_PAT`, `GITLAB_TOKEN`,
 `GITEA_TOKEN` — the daemon no longer authenticates to a tracker. Git
-credentials for push/pull are git's own concern; the issue service is reached
-with `AF_ISSUES_TOKEN`.
+credentials for push and pull are git's own concern. `AF_HUB_TOKEN` is the
+only credential the daemon needs, and it covers issues as well as sessions,
+audit and memory.
 
 ---
 
@@ -1475,11 +1520,13 @@ with `AF_ISSUES_TOKEN`.
   string of external origin (issue text, triage output, review evidence, hub
   patch descriptions, CI logs) passes the prompt sanitizer before entering a
   prompt.
-- **NFR-11 — Graceful degradation.** Hub unreachable → spool and continue.
-  Issue service unreachable → back off and retry, never fail-open as "queue
-  empty" (contrast F-8). Memory unreachable → sessions run without it.
-  Provider unreachable → retry middleware, then fail the session with a
-  transport classification.
+- **NFR-11 — Graceful degradation.** Hub is one endpoint serving several
+  subsystems, and they degrade differently; REQ-NS-HUB-05 is the matrix.
+  Issues unreachable → back off and retry, never fail-open as "queue empty"
+  (contrast F-8). Audit unreachable → spool and continue. Memory unreachable →
+  sessions run without carry-forward. An issue already in flight completes
+  through integration regardless. Provider unreachable → retry middleware,
+  then fail the session with a transport classification.
 
 ---
 
@@ -1489,15 +1536,15 @@ with `AF_ISSUES_TOKEN`.
 Config schema and loader; `internal/issues` client; `hubclient` covering §6.7
 including the new findings endpoints; the SQLite ledger and its migrations.
 
-**A conforming issue service is a prerequisite, not a parallel track.** Night
-Shift cannot reach GitHub after this change, so Phases 1–2 of the [Issue Service PRD](issue_service_prd.md)
-— the spec, the conformance suite and the `af-issued` bridge — must land
-before Phase 1 here can poll anything. That work is tracked in its own
+**Hub's issue API is a prerequisite, not a parallel track.** Night Shift
+cannot reach GitHub after this change, so the [Issue Service PRD](issue_service_prd.md)'s Phases 1–3 — the
+spec, the conformance suite, the `af-issued` bridge to develop against, and
+hub's own implementation — gate Phase 1 here. That work is tracked in its own
 document and is not restated as Night Shift deliverables; what Night Shift
 owns is the client and the dependency.
 
-Deliverable: `nightshift status` against a live hub and a conforming issue
-service.
+Deliverable: `nightshift status` against a live hub, reading issues, sessions
+and memory over one endpoint with one token.
 
 **Phase 1 — One issue, end to end.**
 `nightshift fix <n>`: claim → triage → code → gate → review → integrate
@@ -1565,24 +1612,33 @@ being retried. *Mitigation:* Appendix B is the complete ledger, every entry
 lands in the release notes, and each change has a config key that restores the
 old behaviour where restoring it is defensible.
 
-**R-6 — Hub becomes a hard dependency by accident.** *Mitigation:*
-REQ-NS-HUB-05 makes hub optional and the offline spool mandatory; a test runs
-the whole Phase-2 suite with hub returning 503.
+**R-6 — Hub is a hard dependency, by decision.** Hub serves the issue API
+(§5.8) and owns carry-forward memory (D-5), so a deployment without hub cannot
+run Night Shift at all, and a hub outage stops new work from being picked up.
+This is not the accident the v1.1.0 draft guarded against — it is a chosen
+coupling, and it is the single largest operational commitment in this document.
+*Mitigation:* the degradation matrix in REQ-NS-HUB-05 keeps the blast radius
+per subsystem explicit rather than uniform — telemetry and memory degrade,
+issues stall, in-flight fixes complete; the offline spool is mandatory; a test
+runs the whole Phase-2 suite with hub returning 503 and asserts that an
+in-flight issue still reaches integration. What is deliberately **not**
+mitigated is availability: if hub is down, no new issue is dispatched, because
+the alternative is a daemon guessing at queue state.
 
 **R-7 — Go rewrite scope creep into a spec orchestrator.** NG1 exists because
 `afcore` grew that way once already. *Mitigation:* the archetype set is closed
 at four; adding one requires an amendment to this document.
 
-**R-8 — The issue service is a new hard dependency and a new single point of
-failure.** Today the daemon reaches GitHub directly; after §5.8 it cannot, so
-an unreachable or unimplemented service means no issues are polled at all.
-This is the cost of decision D-1 and it is real. *Mitigation:* the [Issue Service PRD](issue_service_prd.md)
-delivers `af-issued` before Night Shift's Phase 1, so a conforming service
-always exists; its conformance suite (REQ-IS-8.1) keeps implementations
-honest; the client backs off rather than failing open
-(REQ-NS-ISSUES-04, and contrast F-8). What is explicitly **not** mitigated is
-availability — an issue service outage stops the fix pipeline, by design,
-because the alternative is the daemon guessing at queue state.
+**R-8 — Hub must implement the issue contract before Night Shift can poll.**
+Today the daemon reaches GitHub directly; after §5.8 it cannot, and the
+replacement lives in hub. Sequencing therefore crosses a repository boundary:
+Night Shift's Phase 1 is blocked on hub shipping the contract, and neither
+team can unblock itself. *Mitigation:* the contract is specified and testable
+independently (the [Issue Service PRD](issue_service_prd.md) and its conformance suite, REQ-IS-8.1) so hub's
+implementation can be validated before Night Shift consumes it, and the
+`af-issued` bridge gives Night Shift something conforming to develop against
+while hub's implementation lands. See R-6 for the runtime dependency this
+creates once it has shipped.
 
 **R-9 — Carry-forward memory now depends on hub.** With memory moved to hub
 (D-5), a hub outage means coder sessions lose prior findings and summaries.
@@ -1602,8 +1658,8 @@ arriving later does not reopen settled ground.
 **D-1 (was OQ-1) — Git is git; issues are a service.**
 Night Shift performs every code operation with plain git against the
 repository's own remote, and every issue operation through a single HTTP
-contract — the Issue Service API, specified in the [Issue Service PRD](issue_service_prd.md) — which hub or
-a standalone server implements. Multi-forge support leaves the daemon entirely: there is no
+contract — the Issue Service API, specified in the [Issue Service PRD](issue_service_prd.md) and **served by
+hub**, on hub's endpoint, with hub's credentials and hub's workspace ACL. Multi-forge support leaves the daemon entirely: there is no
 GitHub, GitLab or Gitea code in Night Shift after this change.
 
 This is a larger change than "port GitHub and keep the interface", which was
@@ -1614,8 +1670,9 @@ client and one set of semantics, and a new tracker is a new server rather than
 a fourth implementation inside the thing that fixes bugs.
 
 The cost is stated plainly in R-8: the service becomes a hard dependency, and
-`af-issued` must ship before anything can poll. The contract itself is
-specified in the [Issue Service PRD](issue_service_prd.md). *Binds:* §5.8, §6.10, §7.7, §8, §10 Phase 0,
+hub must implement the contract before anything can poll, and hub thereby
+becomes a hard runtime dependency (REQ-NS-HUB-05, R-6). The contract itself is
+specified in the [Issue Service PRD](issue_service_prd.md). *Binds:* §5.8, §6.10, §7.7, §8, §10 Phase 0, R-6,
 R-8.
 
 **D-2 (was OQ-2) — The reviewer stays; the gate is a precondition.**
@@ -1660,9 +1717,17 @@ scheduler.
 
 The `nightshift fix <n>` one-shot mode stays, because a single-issue run is
 useful to operators and essential to testing — not as a step toward running
-under hub. This also keeps R-6 meaningful: hub stays optional for telemetry
-(REQ-NS-HUB-05), and the only hard external dependency is the issue service.
-*Binds:* §5.6, §6.1, §10 Phase 1.
+under hub.
+
+D-6 and D-1 are worth reading together, because they pull in opposite
+directions and both hold. Night Shift *depends* on hub heavily — for issues,
+memory, audit, sessions, secrets and carry-patch, over one endpoint with one
+token — while *running* nothing on it. Depending on a service is not the same
+as being a workload of it: Night Shift decides what work to do, when to do it,
+how much to spend and what to do when something fails, and it keeps deciding
+those things when hub is unreachable (REQ-NS-HUB-05). What it cannot do
+without hub is discover work, which is a dependency on data, not on a runtime.
+*Binds:* §5.6, §6.1, §10 Phase 1, R-6.
 
 **D-7 (was OQ-7) — The gate command comes from local config only.**
 `[gate] command` is read from `.nightshift/config.toml` and from nowhere else.
@@ -1734,6 +1799,7 @@ restores the old behaviour where one exists.
 | B-14 | `permission_mode` config key | Removed; tool policy is the boundary | `[security] allowlist*` |
 | B-15 | Audit `tool.invocation` carries a param summary | Carries an argument hash | — (NFR-10) |
 | B-16 | Daemon talks to GitHub/GitLab/Gitea directly | Talks to one Issue Service API | — (D-1); run `af-issued` to bridge GitHub |
-| B-17 | `[platform]` + `GITHUB_PAT` / `GITLAB_TOKEN` / `GITEA_TOKEN` | `[issues]` + `AF_ISSUES_TOKEN` | — (D-1) |
+| B-17 | `[platform]` + `GITHUB_PAT` / `GITLAB_TOKEN` / `GITEA_TOKEN` | `[hub]` + `AF_HUB_TOKEN`, one endpoint and one token for everything | — (D-1) |
+| B-20 | Hub optional; daemon runs local-only without it | Hub required — it serves the issue API | — (D-1, REQ-NS-HUB-05) |
 | B-18 | Carry-forward findings in local DuckDB | In hub; absent when hub is down | — (D-5) |
 | B-19 | The closed-between-poll-and-dispatch guard never fires | Fires, because `Issue.state` exists | — (F-28 is a bug) |
