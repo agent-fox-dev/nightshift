@@ -51,6 +51,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# af:failed is not yet in the afissues labels module, so define it locally.
+# Must be added to afissues.labels.REQUIRED_LABELS once that package is updated.
+# Requirements: NS-REQ-2 (issue #37)
+LABEL_FAILED: str = "af:failed"
+
 
 # ---------------------------------------------------------------------------
 # PR tracking comment utilities (06-REQ-10.1, 06-REQ-10.2, 06-REQ-10.3)
@@ -1242,6 +1247,73 @@ class FixPipeline:
 
         return prior_context, knowledge_context
 
+    async def _mark_issue_failed(
+        self,
+        issue: IssueResult,
+        spec: InMemorySpec,
+    ) -> None:
+        """Assign ``af:failed`` and post an attempt summary comment.
+
+        Called when the coder-reviewer loop exhausts in-run retries.
+        Labels the issue ``af:failed`` so that subsequent daemon runs
+        exclude it from dispatch.  Posts a summary of all prior attempts
+        (from ``session_outcomes``) so the operator can see what was tried.
+
+        Best-effort: label assignment and comment posting failures are
+        logged but do not propagate.
+
+        Requirements: NS-REQ-2 (issue #37)
+        """
+        # Assign af:failed label
+        try:
+            await self._platform.assign_label(  # type: ignore[attr-defined]
+                issue.number,
+                LABEL_FAILED,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to assign af:failed label to issue #%d: %s",
+                issue.number,
+                exc,
+            )
+
+        # Build attempt summary from prior attempts + current run
+        spec_name = f"fix-issue-{issue.number}"
+        attempts_summary = ""
+        if self._conn is not None:
+            prior = query_prior_attempts(
+                self._conn,
+                spec_name,
+                current_run_id="",
+                max_results=50,
+            )
+            if prior:
+                lines = ["## Fix Attempt Summary\n"]
+                for idx, attempt in enumerate(prior, start=1):
+                    date_str = attempt.created_at[:10]
+                    model_part = f", {attempt.model}" if attempt.model else ""
+                    error_part = ""
+                    if attempt.error_message:
+                        msg = attempt.error_message
+                        if len(msg) > 200:
+                            msg = msg[:200] + "..."
+                        error_part = f": {msg}"
+                    lines.append(
+                        f"{idx}. **{date_str}** run `{attempt.run_id}` ({attempt.status}{model_part}){error_part}"
+                    )
+                attempts_summary = "\n".join(lines)
+
+        comment = (
+            "Fix pipeline has exhausted all attempts across runs. "
+            "The issue has been labelled `af:failed` and will not be "
+            "retried automatically. Manual intervention is required.\n\n"
+            f"(run: `{self._run_id}`)"
+        )
+        if attempts_summary:
+            comment = f"{comment}\n\n{attempts_summary}"
+
+        await self._post_comment(issue.number, comment)
+
     async def _integrate_fix(
         self,
         issue: IssueResult,
@@ -1803,7 +1875,10 @@ class FixPipeline:
             )
 
             if not success:
-                # Retries exhausted — do NOT close issue
+                # Retries exhausted — assign af:failed and post attempt summary
+                # so the issue is not re-dispatched on next daemon start.
+                # Requirements: NS-REQ-2 (issue #37)
+                await self._mark_issue_failed(issue, spec)
                 self._try_complete_run("completed")
                 return metrics
 

@@ -22,7 +22,7 @@ from afissues.labels import LABEL_FIX, LABEL_FIXED, LABEL_PR
 
 from afcore.core.config import AgentFoxConfig
 from afcore.nightshift.dep_graph import build_graph, build_parallel_graph, merge_edges
-from afcore.nightshift.fix_pipeline import FixPipeline
+from afcore.nightshift.fix_pipeline import LABEL_FAILED, FixPipeline
 from afcore.nightshift.pr_feedback import process_pr_issue
 from afcore.nightshift.reference_parser import (
     fetch_github_relationships,
@@ -275,6 +275,11 @@ class NightShiftEngine:
         # staleness-closed issues within the current drain; the instance-level
         # ``_processed_issues`` set covers issues handled in earlier runs.
         issues = [i for i in issues if i.number not in seen and i.number not in self._processed_issues]
+
+        # Filter out issues carrying the af:failed label (issue #37,
+        # NS-REQ-3).  These are issues that have exhausted their cross-run
+        # attempt ceiling and should not be re-dispatched.
+        issues = [i for i in issues if LABEL_FAILED not in (getattr(i, "labels", None) or [])]
         if not issues:
             self.state.issue_checks_completed += 1
             return
@@ -475,6 +480,12 @@ class NightShiftEngine:
                 if self._check_session_limit():
                     logger.info("Session limit reached, stopping issue dispatch")
                     return
+                # Issue #37 (NS-REQ-1): check cross-run attempt ceiling
+                # before dispatching.  Fail-open when DuckDB is unavailable.
+                if self._exceeds_attempt_ceiling(issue_num):
+                    closed.add(issue_num)
+                    graph.complete(issue_num)
+                    continue
                 dispatched.add(issue_num)
                 task = asyncio.create_task(
                     _run_one(issue_num),
@@ -555,6 +566,44 @@ class NightShiftEngine:
 
             # Fill pool with newly-ready issues
             _fill_pool()
+
+    def _exceeds_attempt_ceiling(self, issue_number: int) -> bool:
+        """Check whether the issue has exhausted its cross-run attempt ceiling.
+
+        Returns ``True`` when the number of prior runs for this issue
+        meets or exceeds ``night_shift.max_attempts_per_issue``.  When
+        the DuckDB store is unavailable the check fails open (returns
+        ``False``) and a warning is logged.
+
+        Requirements: NS-REQ-1, NS-REQ-4 (issue #37)
+        """
+        from afcore.nightshift.prior_attempts import count_prior_runs
+
+        max_attempts = getattr(
+            getattr(self._config, "night_shift", None),
+            "max_attempts_per_issue",
+            3,
+        )
+        if self._conn is None:
+            return False
+        try:
+            spec_name = f"fix-issue-{issue_number}"
+            prior_count = count_prior_runs(self._conn, spec_name)
+            if prior_count >= max_attempts:
+                logger.warning(
+                    "Issue #%d has reached the attempt ceiling (%d/%d prior runs) — skipping dispatch",
+                    issue_number,
+                    prior_count,
+                    max_attempts,
+                )
+                return True
+        except Exception:
+            logger.warning(
+                "Failed to check attempt ceiling for issue #%d — dispatching (fail-open)",
+                issue_number,
+                exc_info=True,
+            )
+        return False
 
     def _calculate_fix_cost(self, metrics: object) -> float:
         """Return the accumulated per-session cost from FixMetrics.
@@ -720,7 +769,14 @@ class NightShiftEngine:
             # Filter out issues already handled this session so that a
             # recently-closed issue returned by a stale platform response
             # does not trigger another fix iteration.
-            remaining = [r for r in remaining if r.number not in seen and r.number not in self._processed_issues]
+            # Also exclude af:failed issues (issue #37, NS-REQ-3).
+            remaining = [
+                r
+                for r in remaining
+                if r.number not in seen
+                and r.number not in self._processed_issues
+                and LABEL_FAILED not in (getattr(r, "labels", None) or [])
+            ]
             if not remaining:
                 return True
 

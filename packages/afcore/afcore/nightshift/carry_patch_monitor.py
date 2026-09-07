@@ -23,6 +23,7 @@ from afcore.archetypes import ARCHETYPE_REGISTRY, resolve_effective_config
 from afcore.workspace import git as _workspace_git
 
 if TYPE_CHECKING:
+    import duckdb
     from afaudit.sink import SessionSink, SinkDispatcher
     from afhub import HubClient
 
@@ -131,6 +132,7 @@ class CarryPatchMonitor:
         engine: NightShiftEngine,
         sink: SinkDispatcher | SessionSink | None = None,
         run_id: str = "",
+        conn: duckdb.DuckDBPyConnection | None = None,
     ) -> None:
         # --- Validation (03-REQ-2.E1, 03-REQ-2.E2) ---
         if hub_client is None:
@@ -144,11 +146,88 @@ class CarryPatchMonitor:
         self._engine = engine
         self._sink = sink
         self._run_id = run_id
+        self._conn = conn
 
-        # Per-(slug, patch_id) in-memory session retry counter.
-        # Tracks how many resolution attempts have been made for each
-        # patch within the current daemon session.
+        # Per-(slug, patch_id) session retry counter.
+        # Initialised from persisted DuckDB state so retries survive
+        # daemon restarts (issue #37, NS-REQ-5).
         self._retry_counter: dict[tuple[str, str], int] = {}
+        self._load_persisted_retries()
+
+    # ------------------------------------------------------------------
+    # Retry persistence (issue #37, NS-REQ-5)
+    # ------------------------------------------------------------------
+
+    def _ensure_retry_table(self) -> None:
+        """Create the carry_patch_retries table if it doesn't exist."""
+        if self._conn is None:
+            return
+        try:
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS carry_patch_retries (
+                    slug VARCHAR NOT NULL,
+                    patch_id VARCHAR NOT NULL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (slug, patch_id)
+                )
+            """)
+        except Exception:
+            logger.warning(
+                "Failed to create carry_patch_retries table",
+                exc_info=True,
+            )
+
+    def _load_persisted_retries(self) -> None:
+        """Load persisted retry counters from DuckDB.
+
+        Best-effort: failures are logged and the counter starts empty
+        (equivalent to no prior retries).
+
+        Requirements: NS-REQ-5 (issue #37)
+        """
+        if self._conn is None:
+            return
+        self._ensure_retry_table()
+        try:
+            rows = self._conn.execute(
+                "SELECT slug, patch_id, retry_count FROM carry_patch_retries WHERE slug = ?",
+                [self._workspace_slug],
+            ).fetchall()
+            for slug, patch_id, count in rows:
+                self._retry_counter[(slug, patch_id)] = count
+        except Exception:
+            logger.warning(
+                "Failed to load persisted retry counters for workspace %s — starting fresh",
+                self._workspace_slug,
+                exc_info=True,
+            )
+
+    def _persist_retry_count(self, slug: str, patch_id: str, count: int) -> None:
+        """Persist a retry counter update to DuckDB.
+
+        Best-effort: failures are logged but do not interrupt the
+        monitor cycle.
+
+        Requirements: NS-REQ-5 (issue #37)
+        """
+        if self._conn is None:
+            return
+        try:
+            self._conn.execute(
+                """
+                INSERT INTO carry_patch_retries (slug, patch_id, retry_count)
+                VALUES (?, ?, ?)
+                ON CONFLICT (slug, patch_id) DO UPDATE SET retry_count = ?
+                """,
+                [slug, patch_id, count, count],
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist retry counter for patch %s in workspace %s",
+                patch_id,
+                slug,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -253,6 +332,7 @@ class CarryPatchMonitor:
                     exc_info=True,
                 )
                 self._retry_counter[key] = count + 1
+                self._persist_retry_count(key[0], key[1], count + 1)
                 result.conflicts_failed += 1
                 _safe_emit(
                     self._sink,

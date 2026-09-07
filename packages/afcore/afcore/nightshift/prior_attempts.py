@@ -96,6 +96,54 @@ def query_prior_attempts(
         return []
 
 
+def count_prior_runs(
+    conn: duckdb.DuckDBPyConnection,
+    spec_name: str,
+    current_run_id: str = "",
+) -> int:
+    """Count the number of distinct prior runs for the given spec.
+
+    Returns the number of distinct ``run_id`` values in
+    ``session_outcomes`` for coder sessions matching *spec_name*,
+    excluding *current_run_id* when non-empty.
+
+    On any database error the function logs a warning and returns ``0``
+    (fail-open), so that a telemetry outage does not block dispatch.
+
+    Requirements: NS-REQ-1 (issue #37)
+    """
+    try:
+        if current_run_id:
+            result = conn.execute(
+                """
+                SELECT COUNT(DISTINCT run_id)
+                FROM session_outcomes
+                WHERE spec_name = ?
+                  AND archetype = 'coder'
+                  AND run_id != ?
+                """,
+                [spec_name, current_run_id],
+            ).fetchone()
+        else:
+            result = conn.execute(
+                """
+                SELECT COUNT(DISTINCT run_id)
+                FROM session_outcomes
+                WHERE spec_name = ?
+                  AND archetype = 'coder'
+                """,
+                [spec_name],
+            ).fetchone()
+        return int(result[0]) if result else 0
+    except Exception:
+        logger.warning(
+            "Failed to count prior runs for %s — returning 0 (fail-open)",
+            spec_name,
+            exc_info=True,
+        )
+        return 0
+
+
 def format_prior_attempts(attempts: list[PriorAttempt]) -> str:
     """Format prior attempts as a markdown context block.
 

@@ -553,6 +553,12 @@ class NightShiftConfig(BaseModel):
         description="Maximum number of issues processed concurrently (1-8)",
     )
 
+    # Requirements: NS-REQ-1 (issue #37)
+    max_attempts_per_issue: Annotated[int, Clamped(ge=1, le=50)] = Field(
+        default=3,
+        description="Maximum cross-run fix attempts per issue before labelling af:failed (1-50)",
+    )
+
     # Requirements: 07-REQ-1.2
     max_pr_retries: Annotated[int, Clamped(ge=0, le=10)] = Field(
         default=2,
