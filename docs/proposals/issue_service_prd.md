@@ -3,7 +3,7 @@
 **Author:** [Platform Engineering]
 **Date:** 2026-09-07
 **Status:** Draft
-**Version:** 1.1.0 — hub is the implementation; `af-issued` is a development tool
+**Version:** 1.2.0 — hub is the only implementation
 **Implemented by:** `hub`
 **First consumer:** Night Shift (see `docs/proposals/nightshift_go_prd.md`, D-1)
 
@@ -47,14 +47,10 @@ scopes, workspace ACL and audit taxonomy (§8.1). There is no second service to
 deploy and no second credential to issue: a consumer already talking to hub is
 already talking to the issue service.
 
-**`af-issued` is a development tool, not a deployment option.** It is a
-standalone server bridging GitHub, built by lifting `afissues`' proven GitHub
-implementation out of the Python daemon and putting it behind this contract.
-Its purpose is to keep the contract honest — a specification with exactly one
-implementation drifts into being a description of that implementation, and the
-conformance suite developed only against hub would encode hub's behaviour
-rather than the contract's. It is explicitly **not** supported in production
-and **not** a fallback for deployments without hub (§8.2).
+There is no second server, in production or otherwise. The GitHub, GitLab and
+Gitea logic that `afissues` carries moves into hub, and the conformance suite
+(§10) is what keeps hub's implementation matching this document rather than
+the other way round.
 
 The contract is derived from `afissues.protocol.PlatformProtocol` — the same
 fifteen operations — with five gaps closed (§6.3, Appendix A).
@@ -136,9 +132,8 @@ says so, and a consumer discovers that at startup rather than at first use.
 every endpoint, the idempotency rules, pagination, capabilities and each
 documented error code.
 
-**G5** — One production implementation — hub — plus a second, independent
-implementation (`af-issued`) whose only job is to prove the contract is
-implementable by something that is not hub.
+**G5** — One implementation: hub. The spec is written to be implementable by
+others, but none is planned and none is required.
 
 **G6** — Close the five `PlatformProtocol` gaps (§6.3) rather than porting
 them forward.
@@ -184,10 +179,9 @@ because its dispatch guard depends on it.
 
 **Project.** The unit of addressing: one issue collection, named by a slug.
 Where hub implements the service, a project corresponds one-to-one with a hub
-workspace, and the two names are the same string. In `af-issued` a project
-maps to one GitHub repository. A server may host many projects with different
-backends and therefore different capabilities — which is why capabilities are
-reported per project (§7), not per server.
+workspace, and the two names are the same string. A server may host many
+projects with different backends and therefore different capabilities — which
+is why capabilities are reported per project (§7), not per server.
 
 **Issue number.** Project-scoped and assigned by the backing tracker.
 Consumers treat it as opaque within a project and never as globally unique.
@@ -582,49 +576,23 @@ alongside everything else.
 implementation choice behind the same contract; capabilities report the
 difference.
 
-### 8.2 `af-issued` — a development tool
+**REQ-IS-5.5** — Where hub proxies GitHub, its backend is a port of
+`afissues/github.py`'s request shaping and response mapping, not a fresh
+implementation. That code is proven against the real API and already handles
+the cases Appendix B records; rewriting it from the GitHub docs would
+rediscover them. The port normalises to this document's schemas (§6.3) — most
+visibly `Issue.state`, which the Python DTO does not carry at all.
 
-**REQ-IS-6.1** — `af-issued` exists for exactly two reasons:
+**REQ-IS-5.6** — Hub retains `afissues`' SSRF guard on any configured tracker
+URL.
 
-1. **To keep the contract honest.** A specification with one implementation
-   becomes a description of that implementation. A second implementation,
-   written against the spec rather than against hub's code, is what surfaces
-   the places where the spec says less than it needs to.
-2. **To give the conformance suite something to be developed against** that
-   is not the thing it will later judge, and to give consumers a real server
-   to develop against before hub's implementation lands.
+### 8.2 GitLab and Gitea
 
-**REQ-IS-6.2** — It is **not supported in production** and is **not a fallback
-for deployments without hub**. There is no such deployment: Night Shift and
-every other consumer require hub for sessions, audit and memory regardless, so
-a service that supplied only issues would not make a hub-less deployment
-viable. `af-issued` ships no operational guarantees — no availability target,
-no upgrade path, no data retention, no multi-tenancy, no UI, no storage of its
-own.
-
-**REQ-IS-6.3** — A standalone Go server bridging GitHub, built by porting
-`afissues/github.py`'s proven request shaping and response mapping. The logic
-is not redesigned; only its interface changes.
-
-**REQ-IS-6.4** — Configuration: one or more projects, each mapping a slug to
-`owner/repo` plus a GitHub token. Static bearer tokens for inbound auth. It
-does not implement hub's scope model; a consumer pointed at it uses a static
-token, which is one of the reasons it is not a hub substitute.
-
-**REQ-IS-6.5** — Capabilities: `pull_requests`, `checks` and `reviews` true;
-`relationships` true via the GitHub timeline API. It passes the §10 suite in
-CI, which is the only bar it must clear.
-
-**REQ-IS-6.6** — Retains `afissues`' SSRF guard on any configured tracker URL.
-
-### 8.3 GitLab and Gitea
-
-**REQ-IS-7.1** — Not supported in v1, by either implementation. Because hub is
-the production implementation, supporting GitLab or Gitea means hub growing a
-backend for it, not `af-issued` growing one. `afissues/gitlab.py` and
-`gitea.py` remain available in af-python as the basis for that work, and
-Appendix B records the divergences it must absorb. This is a scope decision,
-not a technical obstacle.
+**REQ-IS-6.1** — Not supported in v1. Supporting GitLab or Gitea means hub
+growing a backend for it. `afissues/gitlab.py` and `gitea.py` remain available
+in af-python as the basis for that work, and Appendix B records the
+divergences it must absorb. This is a scope decision, not a technical
+obstacle.
 
 ---
 
@@ -650,12 +618,10 @@ not a technical obstacle.
 - **NFR-IS-07 — Payload bounds.** Issue and comment bodies are accepted up to
   a documented limit (default 256 KiB); exceeding it is `400 invalid_request`,
   not a truncated write.
-- **NFR-IS-08 — Scope of these NFRs.** NFR-IS-01 through 07 bind the
-  production implementation, hub. `af-issued` must pass the §10 conformance
-  suite and nothing else: it is a development tool (REQ-IS-6.2), and holding it
-  to latency, caching and rate-limit-safety targets would be effort spent on
-  something that never serves a user. It is a single static binary with no
-  runtime dependency beyond its config and outbound HTTPS.
+- **NFR-IS-08 — Scope.** These bind hub, the implementation. The in-process
+  fake of REQ-IS-8.4 must pass the §10 conformance suite and nothing else;
+  holding a test double to latency and rate-limit targets would be effort
+  spent on something that never serves a request.
 
 ---
 
@@ -681,10 +647,16 @@ conformance; "implements the spec" means "passes the suite".
 | Upstream failure | injected tracker failure surfaces as 502, never as 404 or an empty list |
 
 **REQ-IS-8.3** — The suite ships in the same repository as the spec and runs
-in CI against both implementations. Running it against `af-issued` as well as
-hub is the point rather than a redundancy: two independent implementations
-passing one suite is the only evidence that the suite tests the contract and
-not one codebase's habits.
+in CI against hub on every change to either.
+
+It also runs against the REQ-IS-8.4 fake, and that is not redundant. A suite
+developed against exactly one implementation drifts into testing that
+implementation's habits rather than the contract, and there is no way to notice
+from inside. The fake has to exist anyway for consumers to test against, it is
+written from this document rather than from hub's code, and it is the cheapest
+second reader the contract can have. It is not a server and is not deployed;
+if it and hub ever disagree, the disagreement is a defect in one of them or in
+this specification, and finding out which is the point.
 
 **REQ-IS-8.4** — An in-process fake satisfying the suite ships for consumers to
 test against without a network (used by Night Shift's own suite, NFR-07 there).
@@ -693,12 +665,11 @@ test against without a network (used by Night Shift's own suite, NFR-07 there).
 
 ## 11. Delivery Plan
 
-**Phase 1 — Spec, suite and `af-issued`.** This document, an OpenAPI 3.1
-description generated from it, the §10 conformance suite with its in-process
-fake, and the `af-issued` bridge. These ship together on purpose: the suite is
-developed against `af-issued` so that it tests the contract rather than hub's
-implementation of it (REQ-IS-6.1), and consumers get a real server to build
-against while Phase 2 is in flight.
+**Phase 1 — Spec, suite and fake.** This document, an OpenAPI 3.1 description
+generated from it, the §10 conformance suite, and the in-process fake it and
+consumers both run against. The fake is written from this document, not from
+hub's code (REQ-IS-8.3), and it lets consumers build their clients while
+Phase 2 is in flight.
 
 **Phase 2 — hub.** Implement the contract on hub's existing auth, storage and
 audit; suite green against hub. **This is the deliverable that unblocks
@@ -707,11 +678,8 @@ implementation it is configured against.
 
 **Phase 3 — Consumer cutover.** Night Shift switches to the client; the
 `af-issue` skill drops `gh issue create`; `afissues` is removed from the
-Python daemon's dependency set.
-
-`af-issued` is not retired after Phase 2. It stays in CI for as long as the
-contract does, because the moment it stops running is the moment the suite
-starts being able to encode hub-specific behaviour without anyone noticing.
+Python daemon's dependency set. Its GitHub logic has by then been ported into
+hub, which is the one place it now lives.
 
 ---
 
@@ -735,22 +703,21 @@ another project is currently inexpressible. Night Shift only builds graphs
 within one batch, so this is not blocking. *Recommendation: leave it; widen to
 a qualified reference only when a consumer needs it.*
 
-**Q-4 — Should hub support GitLab and Gitea backends?** With hub as the
-production implementation, this is a question about hub, not about
-`af-issued`. The Python implementations exist and Appendix B records what a
-port must absorb; nobody is asking for it today. *Recommendation: no in v1;
-the contract makes it a contained change later, and the capability model
-already lets a GitLab-backed project report `checks` and `reviews` as
-unsupported rather than approximating them.*
+**Q-4 — Should hub support GitLab and Gitea backends?** The Python
+implementations exist and Appendix B records what a port must absorb; nobody
+is asking for it today. *Recommendation: no in v1; the contract makes it a
+contained change later, and the capability model already lets a GitLab-backed
+project report `checks` and `reviews` as unsupported rather than
+approximating them.*
 
-**Q-5 — Is `af-issued` worth building at all?** It serves no user, and the
-in-process fake (REQ-IS-8.4) already covers consumer testing. The case for it
-is REQ-IS-6.1: without a second implementation the conformance suite and the
-spec are both written by the people writing hub, and neither can catch the
-other's assumptions. That is a real but indirect benefit, paid for in real
-build and maintenance time. *Recommendation: build it, because the port from
-`afissues/github.py` is mechanical and mostly done; revisit if it turns out to
-cost more than a week.*
+**Q-5 — With one implementation, what stops the spec becoming a description
+of hub?** Nothing structural. The mitigations are the fake being written from
+this document rather than hub's code (REQ-IS-8.3), and the rule that a
+behaviour change lands here before it lands in hub. Both depend on discipline
+rather than on a mechanism. *Recommendation: accept it. A second server built
+solely to hold the spec honest serves no user and costs real maintenance; if
+the spec does start drifting, that will show up as consumers finding hub's
+behaviour surprising, and a second implementation can be reconsidered then.*
 
 ---
 

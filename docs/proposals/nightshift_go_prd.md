@@ -695,10 +695,9 @@ Shift opens **one** connection to hub and uses it for everything:
 | **Audit** | issue mutations emit hub audit events under the existing `hub.*` taxonomy, so issue activity appears in the same unified query as everything else. |
 
 The contract stays a separate specification because it is testable
-independently of both hub and this daemon. The service PRD also defines
-`af-issued`, a second implementation whose only purpose is to keep the
-conformance suite honest — it is a development tool there, not a deployment
-option here, and Night Shift is not configured against it in production.
+independently of both hub and this daemon, and because hub is not its only
+possible implementer — only its actual one. Night Shift is configured against
+hub and nothing else.
 
 **This makes hub a hard dependency.** Before this decision the daemon could
 run with hub absent and keep telemetry local; now, no hub means no issues,
@@ -1539,8 +1538,8 @@ including the new findings endpoints; the SQLite ledger and its migrations.
 **Hub's issue API is a prerequisite, not a parallel track.** Night Shift
 cannot reach GitHub after this change, so the [Issue Service PRD](issue_service_prd.md)'s
 Phase 2 — hub's implementation — gates Phase 1 here. Its Phase 1 (spec,
-conformance suite, and the `af-issued` server to develop against) unblocks
-client work earlier. That work is tracked in its own
+conformance suite and the in-process fake) unblocks client work earlier: the
+fake is what Night Shift builds and tests the client against. That work is tracked in its own
 document and is not restated as Night Shift deliverables; what Night Shift
 owns is the client and the dependency.
 
@@ -1636,9 +1635,10 @@ replacement lives in hub. Sequencing therefore crosses a repository boundary:
 Night Shift's Phase 1 is blocked on hub shipping the contract, and neither
 team can unblock itself. *Mitigation:* the contract is specified and testable
 independently (the [Issue Service PRD](issue_service_prd.md) and its conformance suite, REQ-IS-8.1) so hub's
-implementation can be validated before Night Shift consumes it, and
-`af-issued` gives Night Shift something conforming to develop the client
-against while hub's implementation lands. See R-6 for the runtime dependency this
+implementation can be validated before Night Shift consumes it, and the
+service spec's in-process fake (REQ-IS-8.4) gives Night Shift something
+conforming to develop and test the client against while hub's implementation
+lands. See R-6 for the runtime dependency this
 creates once it has shipped.
 
 **R-9 — Carry-forward memory now depends on hub.** With memory moved to hub
@@ -1772,9 +1772,8 @@ Python dependencies dropped: `claude-agent-sdk`, `deepagents`, `google-adk`,
 `pydantic`, `tomlkit`, `pathspec`, `rich`, `click`, `afspec`, `afissues`.
 
 Note that `afissues` is **relocated, not deleted**: its GitHub implementation
-becomes the body of `af-issued` (REQ-IS-6.3), and its behaviour is what
-hub's implementation must match. What is deleted is Night Shift's dependency
-on it.
+is ported into hub's GitHub backend (REQ-IS-5.5) rather than rewritten. What
+is deleted is Night Shift's dependency on it.
 
 ---
 
