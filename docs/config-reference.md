@@ -15,6 +15,8 @@ with default values for reference.
   unknown keys. Two cases raise `ConfigError` instead:
   - `model_variant` in `[archetypes.overrides.*]` — this field was removed;
     its presence triggers an explicit error directing you to remove it.
+  - `variant` in `[models.registry.*]` — model registry entries accept only
+    `tier`; its presence triggers an explicit error directing you to remove it.
   - Invalid tier names in `[models.tier_defaults]` — only `SIMPLE`,
     `STANDARD`, and `ADVANCED` are accepted.
 
@@ -244,6 +246,13 @@ for that model.
 |-------|------|---------|-------------|
 | `tier` | str | required | Model tier: `SIMPLE`, `STANDARD`, or `ADVANCED` |
 
+`tier` is the only accepted field. A `variant` key raises `ConfigError` naming
+the field explicitly. Declare each model ID **once** — TOML forbids duplicate
+table headers, so a second `[models.registry.<same-id>]` fails to parse. A
+single entry is enough for a model that serves more than one tier:
+`[models.tier_defaults]` decides which tier a model actually serves, not the
+registry entry's `tier` field.
+
 ### models.tier_defaults
 
 Maps tier names to model IDs. Values must exist in the merged registry
@@ -274,6 +283,23 @@ entry:
 [models.tier_defaults]
 ADVANCED = "claude-sonnet-4-6"
 ```
+
+#### When a default model is not accessible
+
+At startup nightshift checks every model it would use against the models your
+API key can reach. If one is unavailable it names the model, the tier it
+serves, and the override you need:
+
+```
+The following model(s) are not accessible with the current API key:
+  - claude-haiku-4-5 (used by the SIMPLE tier)
+Check your API key permissions, or override the affected tier(s) in config.toml:
+  [models.tier_defaults]
+  SIMPLE = "<an-accessible-model-id>"
+```
+
+Overriding every tier default to an accessible model means the hardcoded
+defaults are never checked.
 
 ---
 

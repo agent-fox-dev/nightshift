@@ -15,7 +15,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -68,6 +68,18 @@ class ModelEntryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tier: str = Field(description="Model tier: SIMPLE, STANDARD, or ADVANCED")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_variant_field(cls, data: Any) -> Any:
+        """Reject the unsupported ``variant`` field with an actionable error."""
+        if isinstance(data, dict) and "variant" in data:
+            raise ValueError(
+                "The 'variant' field is not valid in [models.registry.*]. "
+                "Model registry entries accept only 'tier'. "
+                "Remove 'variant' from your config.toml."
+            )
+        return data
 
     @model_validator(mode="after")
     def _validate_tier(self) -> ModelEntryConfig:
@@ -147,50 +159,91 @@ def resolve_model(name: str, *, models_config: ModelsConfig | None = None) -> st
     )
 
 
-def collect_configured_model_ids(models_config: ModelsConfig | None = None) -> set[str]:
-    """Collect all unique model IDs that nightshift archetypes will use.
+def collect_configured_model_ids(
+    models_config: ModelsConfig | None = None,
+) -> dict[str, set[str]]:
+    """Collect the model IDs nightshift archetypes will use, with provenance.
 
     Iterates over every archetype and its mode overrides, resolving each
-    tier to a concrete model ID. Returns the deduplicated set of model
-    IDs.
+    tier to a concrete model ID. Each collected model ID is mapped to the
+    set of tier names that resolve to it, so callers can tell the user
+    *which tier default* to override when a model is unusable.
+
+    Archetypes that name a model ID directly (rather than a tier) still
+    contribute the model ID, but with an empty tier set — there is no tier
+    default to point at in that case.
 
     Args:
         models_config: Optional config-driven model overrides from
             ``[models]`` in config.toml.
 
     Returns:
-        A set of model ID strings that will be used at runtime.
+        A mapping of model ID to the set of tier names resolving to it,
+        e.g. ``{"claude-haiku-4-5": {"SIMPLE"}}``. Use ``set(result)`` to
+        recover a bare set of model IDs.
 
     Requirements: NS-REQ-4
     """
     from afcore.archetypes import ARCHETYPE_REGISTRY, resolve_effective_config
 
-    model_ids: set[str] = set()
+    model_ids: dict[str, set[str]] = {}
+
+    def record(name: str) -> None:
+        """Resolve *name* and remember which tier (if any) produced it."""
+        try:
+            model_id = resolve_model(name, models_config=models_config)
+        except Exception:
+            return  # resolve_model already logs; skip gracefully
+        tiers = model_ids.setdefault(model_id, set())
+        try:
+            tiers.add(ModelTier(name).value)
+        except ValueError:
+            pass  # a direct model ID, not a tier — no tier default to name
+
     for entry in ARCHETYPE_REGISTRY.values():
         # Base archetype tier
-        try:
-            model_ids.add(
-                resolve_model(
-                    entry.default_model_tier,
-                    models_config=models_config,
-                )
-            )
-        except Exception:
-            pass  # resolve_model already logs; skip gracefully
+        record(entry.default_model_tier)
 
         # Mode-specific overrides
         for mode_name in entry.modes:
             resolved = resolve_effective_config(entry, mode=mode_name)
-            try:
-                model_ids.add(
-                    resolve_model(
-                        resolved.default_model_tier,
-                        models_config=models_config,
-                    )
-                )
-            except Exception:
-                pass
+            record(resolved.default_model_tier)
+
     return model_ids
+
+
+def _format_inaccessible_models(
+    inaccessible: list[str],
+    tiers_by_model: dict[str, set[str]],
+) -> str:
+    """Build the multi-line error message for inaccessible models.
+
+    Names the tier each inaccessible model serves and shows the exact
+    ``[models.tier_defaults]`` snippet needed to override it.
+
+    Requirements: NS-REQ-3
+    """
+    tier_order = {tier.value: index for index, tier in enumerate(ModelTier)}
+
+    lines = ["The following model(s) are not accessible with the current API key:"]
+    affected_tiers: set[str] = set()
+    for model_id in inaccessible:
+        tiers = sorted(tiers_by_model.get(model_id, set()), key=lambda t: tier_order.get(t, len(tier_order)))
+        if tiers:
+            affected_tiers.update(tiers)
+            suffix = "tiers" if len(tiers) > 1 else "tier"
+            lines.append(f"  - {model_id} (used by the {', '.join(tiers)} {suffix})")
+        else:
+            lines.append(f"  - {model_id}")
+
+    lines.append("Check your API key permissions, or override the affected tier(s) in config.toml:")
+    if affected_tiers:
+        lines.append("  [models.tier_defaults]")
+        for tier_name in sorted(affected_tiers, key=lambda t: tier_order.get(t, len(tier_order))):
+            lines.append(f'  {tier_name} = "<an-accessible-model-id>"')
+    else:
+        lines.append("  Update [models] in config.toml, or the archetype override naming the model.")
+    return "\n".join(lines)
 
 
 def validate_model_access(models_config: ModelsConfig | None = None) -> None:
@@ -204,7 +257,9 @@ def validate_model_access(models_config: ModelsConfig | None = None) -> None:
 
     **Exit on inaccessible models**: if one or more configured model IDs
     are not in the API response, logs an error naming each inaccessible
-    model and calls ``sys.exit(1)``.
+    model *and the tier it serves*, together with the
+    ``[models.tier_defaults]`` snippet needed to override it, then calls
+    ``sys.exit(1)``.
 
     Args:
         models_config: Optional config-driven model overrides from
@@ -215,8 +270,8 @@ def validate_model_access(models_config: ModelsConfig | None = None) -> None:
     import os
     import sys
 
-    configured_ids = collect_configured_model_ids(models_config)
-    if not configured_ids:
+    tiers_by_model = collect_configured_model_ids(models_config)
+    if not tiers_by_model:
         return
 
     if os.environ.get("CLAUDE_CODE_USE_VERTEX") == "1":
@@ -246,18 +301,14 @@ def validate_model_access(models_config: ModelsConfig | None = None) -> None:
         )
         return
 
-    inaccessible = sorted(configured_ids - available)
+    inaccessible = sorted(set(tiers_by_model) - available)
     if inaccessible:
-        logger.error(
-            "The following model(s) are not accessible with the current API key: %s. "
-            "Check your API key permissions or update [models] in config.toml.",
-            ", ".join(inaccessible),
-        )
+        logger.error("%s", _format_inaccessible_models(inaccessible, tiers_by_model))
         sys.exit(1)
 
     logger.info(
         "Model access validated: %d model(s) confirmed accessible",
-        len(configured_ids),
+        len(tiers_by_model),
     )
 
 
