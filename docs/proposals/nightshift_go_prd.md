@@ -3,8 +3,9 @@
 **Author:** [Platform Engineering]
 **Date:** 2026-09-07
 **Status:** Draft
-**Version:** 1.1.0 — open questions resolved (§12)
+**Version:** 1.2.0 — Issue Service API split into its own document
 **Supersedes:** the Python implementation in `packages/nightshift` + `packages/afcore`
+**Companion:** [`issue_service_prd.md`](issue_service_prd.md) — the Issue Service API this daemon depends on
 
 ---
 
@@ -334,7 +335,8 @@ taken. The code knows: the comment directly above it says the check is
 The label half of the same guard does work. Consequence: an issue a human
 closes while it waits in the dispatch queue still gets a full triage → coder →
 reviewer run. This is the direct motivation for `state` being a required field
-on the new API's issue schema (§5.8).
+on the new API's issue schema (§5.8, and REQ-IS-3.1 in the
+[Issue Service PRD](issue_service_prd.md)).
 
 ### 3.2 Architectural cost
 
@@ -514,7 +516,7 @@ nightshift/
   internal/pipeline/       the per-issue state machine
   internal/agentrt/        AgentKit wiring: archetypes → AgentConfig, tools, policy
   internal/archetype/      registry, modes, cascade resolution
-  internal/issues/         Issue Service API client (§5.8) — the only issue path
+  internal/issues/         Issue Service API client — the only issue path
   internal/hubclient/      hub REST client + offline spool
   internal/repo/           git: worktrees, locks, harvest, integration, push retry
   internal/carrypatch/     conflict monitor
@@ -645,7 +647,7 @@ enforcement is the reservation above. The 50 % margin (F-1) is deleted: the
 reservation model is what the margin was crudely approximating. All ledger
 mutation is under one mutex (F-2).
 
-### 5.8 The Issue Service API
+### 5.8 Issues are a service, code is plain git
 
 Night Shift does not talk to GitHub, GitLab or Gitea. Two separate paths
 replace today's single `afissues` platform layer, and the split is the whole
@@ -657,7 +659,7 @@ decision:
   any operation on code. This is already how integration works; it now becomes
   exclusive and is stated as a constraint rather than an implementation detail.
 - **Issues are a service.** Everything about issues, labels, comments and pull
-  requests goes through one HTTP protocol — the **Issue Service API** — which
+  requests goes through one HTTP contract — the **Issue Service API** — which
   hub implements, and which any standalone server may implement to bridge a
   different tracker. Night Shift ships exactly one client and knows nothing
   about GitHub.
@@ -667,118 +669,26 @@ where it belongs: the GitHub/GitLab/Gitea divergences that made `afissues`
 three parallel implementations are tracker concerns, and Night Shift does not
 need to hold three of them to fix a bug.
 
-The contract below is derived from `afissues.protocol.PlatformProtocol` — the
-same fifteen operations — with the gaps that protocol has closed. It is a
-normative interface: an implementation that satisfies it can drive Night Shift.
+> **The contract is specified separately.**
+> [`docs/proposals/issue_service_prd.md`](issue_service_prd.md) is the
+> normative definition — endpoints, schemas, capability model, error codes,
+> conformance suite and the two implementations (`hub`, and the `af-issued`
+> reference bridge). It is a standalone document because the service has
+> consumers other than this daemon and must be implementable without reading
+> this PRD.
+>
+> This document specifies only Night Shift's side of it: what the client must
+> do (§6.10), how it is wired (§7.7), how it is configured (§8), and what its
+> absence costs (R-8).
 
-#### Endpoints
+Two properties of that contract are load-bearing here and are called out so
+the dependency is visible rather than buried in a reference:
 
-All paths are relative to `{endpoint_url}/api/v1`. `{project}` identifies the
-issue collection and corresponds to a hub workspace slug.
-
-| Method | Path | `PlatformProtocol` equivalent |
-|---|---|---|
-| `GET` | `/capabilities` | — (new; replaces `getattr` sniffing) |
-| `POST` | `/projects/{project}/issues` | `create_issue` |
-| `GET` | `/projects/{project}/issues` | `list_issues_by_label` |
-| `GET` | `/projects/{project}/issues/{number}` | `get_issue` |
-| `PATCH` | `/projects/{project}/issues/{number}` | `update_issue` |
-| `POST` | `/projects/{project}/issues/{number}/close` | `close_issue` |
-| `GET` | `/projects/{project}/issues/{number}/comments` | `list_issue_comments` |
-| `POST` | `/projects/{project}/issues/{number}/comments` | `add_issue_comment` |
-| `PUT` | `/projects/{project}/issues/{number}/labels/{label}` | `assign_label` |
-| `DELETE` | `/projects/{project}/issues/{number}/labels/{label}` | `remove_label` |
-| `GET` | `/projects/{project}/issues/{number}/relationships` | `get_issue_timeline` (was undeclared) |
-| `GET` | `/projects/{project}/labels` | — |
-| `PUT` | `/projects/{project}/labels/{name}` | `create_label` |
-| `POST` | `/projects/{project}/pulls` | `create_pr` |
-| `GET` | `/projects/{project}/pulls/{number}` | `get_pr_state` |
-| `GET` | `/projects/{project}/pulls/{number}/checks` | `get_pr_checks` |
-| `GET` | `/projects/{project}/pulls/{number}/reviews` | `get_pr_reviews` |
-| `GET` | `/healthz` | — |
-
-`GET /projects/{project}/issues` accepts `label` and `exclude_label` (both
-repeatable), `state`, `sort`, `direction`, `limit` and `cursor`.
-`exclude_label` is what lets the poll drop `af:fixed` / `af:no-change` /
-`af:failed` server-side (REQ-NS-POLL-01) instead of fetching and filtering.
-
-#### Schemas
-
-```jsonc
-// Issue
-{
-  "number": 42,
-  "state": "open",                     // "open" | "closed"  — REQUIRED (F-28)
-  "title": "…",
-  "body": "…",
-  "labels": ["af:fix"],
-  "author": "octocat",
-  "html_url": "https://…",
-  "created_at": "2026-09-07T12:00:00Z",
-  "updated_at": "2026-09-07T12:30:00Z"
-}
-
-// Comment                          // Label
-{ "id": "c_1",                      { "name": "af:fix",
-  "body": "…",                        "color": "12ec39",
-  "author": "nightshift",             "description": "…" }
-  "created_at": "…" }
-
-// PullRequest                      // Check
-{ "number": 7,                      { "name": "test",
-  "state": "open",                    "status": "completed",
-  "merged": false,                    "conclusion": "failure",
-  "head_ref": "fix/42-slug",          "output_title": "…",
-  "head_sha": "abc123",               "output_summary": "…",
-  "base_ref": "develop",              "details_url": "https://…" }
-  "html_url": "https://…" }
-
-// Review                           // Relationship
-{ "author": "reviewer",             { "kind": "blocked_by",
-  "state": "CHANGES_REQUESTED",       "from_issue": 41,
-  "body": "…",                        "to_issue": 42,
-  "submitted_at": "…" }               "source": "tracker" }
-
-// Error envelope
-{ "error": { "code": "issue_not_found", "message": "…" } }
-```
-
-Five schema changes against `PlatformProtocol`, each closing a specific gap:
-
-1. **`Issue.state` is required.** Without it the freshness guard is dead code
-   (F-28).
-2. **`Comment.id` is a string.** GitHub's integer ids, GitLab's per-project
-   ids and Gitea's are not the same space; an opaque string is the only
-   representation that survives all three.
-3. **List endpoints paginate.** `list_issues_by_label` returns everything
-   today, so a repository with a large backlog is one unbounded response.
-4. **Relationships are declared.** `get_issue_timeline` is called through
-   `getattr(platform, "get_issue_timeline", None)` and exists on exactly one
-   implementation; here it is a first-class endpoint whose absence is reported
-   by `/capabilities` rather than discovered by reflection.
-5. **`Issue.updated_at`** lets the daemon detect an edited body without
-   storing the body (REQ-NS-PIPE-02).
-
-#### Semantics
-
-- **Idempotency.** `PUT`/`DELETE` on a label succeed whether or not the label
-  is already in the requested state. `PUT /labels/{name}` succeeds if the
-  label exists. `POST /issues` accepts an `Idempotency-Key` header so a retried
-  create does not duplicate.
-- **Capabilities.** `GET /capabilities` returns
-  `{"pull_requests": bool, "checks": bool, "reviews": bool, "relationships": bool}`.
-  Night Shift reads it at startup and refuses a configuration that needs a
-  capability the service does not advertise — `merge_strategy = "pr"` against a
-  service without `pull_requests` fails at startup, not at the first PR.
-- **Errors.** One envelope, documented codes
-  (`issue_not_found`, `label_not_found`, `project_not_found`, `unauthorized`,
-  `forbidden`, `rate_limited`, `capability_unsupported`, `upstream_error`).
-  `rate_limited` carries `Retry-After`; the client honours it.
-- **Auth.** `Authorization: Bearer <token>`, resolved from a hub secret, then
-  `AF_ISSUES_TOKEN`, then config.
-- **No provider configured.** `[issues] endpoint_url` unset disables the
-  fix-pipeline and pr-feedback streams and logs why — the role today's
-  `NullPlatform` plays.
+- **`exclude_label` is server-side.** REQ-NS-POLL-01 drops `af:fixed`,
+  `af:no-change` and `af:failed` at the query, not after fetching them.
+- **`Issue.state` is a required field.** Without it the dispatch freshness
+  guard is dead code, which is exactly the state of the current implementation
+  (F-28).
 
 ---
 
@@ -1068,13 +978,16 @@ Five schema changes against `PlatformProtocol`, each closing a specific gap:
   credentials. No forge REST API takes part in any code operation, in any
   merge strategy.
 - **REQ-NS-ISSUES-02** — **Issue operations go through the Issue Service API**
-  (§5.8) and nothing else. Night Shift ships one client. It contains no
-  GitHub, GitLab or Gitea code, no tracker-specific request shaping and no
-  tracker-specific error handling.
-- **REQ-NS-ISSUES-03** — Capabilities are read from `GET /capabilities` at
-  startup. A configuration requiring an unadvertised capability fails at
-  startup with a message naming the capability and the setting that needs it —
-  never at the point of use.
+  and nothing else. The contract is normative in the [Issue Service PRD](issue_service_prd.md); Night Shift
+  ships one client against it. The daemon contains no GitHub, GitLab or Gitea
+  code, no tracker-specific request shaping and no tracker-specific error
+  handling.
+- **REQ-NS-ISSUES-03** — Capabilities are read once at startup from
+  `GET /projects/{project}/capabilities` (REQ-IS-4.1). A configuration
+  requiring an unadvertised capability fails at startup with a message naming
+  both the capability and the setting that needs it — never at the point of
+  use. `merge_strategy = "pr"` against a service without `pull_requests` is
+  the motivating case.
 - **REQ-NS-ISSUES-04** — The client honours `Retry-After` on `rate_limited`
   and applies bounded exponential backoff on `upstream_error` and 5xx.
   Consecutive failures are surfaced as a metric (REQ-NS-DAEMON-07), not only
@@ -1082,20 +995,17 @@ Five schema changes against `PlatformProtocol`, each closing a specific gap:
 - **REQ-NS-ISSUES-05** — Every call carries the request context and a per-call
   timeout; cancellation propagates.
 - **REQ-NS-ISSUES-06** — Label provisioning at startup uses
-  `PUT /labels/{name}` for each required label, which is idempotent by
-  contract, so "already exists" stops being an error string to pattern-match.
-  The required set is `af:fix`, `af:fixed`, `af:no-change`, `af:pr`,
-  `af:failed` (new, REQ-NS-PIPE-10) and `af:needs-detail` (new,
-  REQ-NS-PIPE-02).
-- **REQ-NS-ISSUES-07** — A reference implementation of the service ships
-  alongside Night Shift: `af-issued`, a standalone server bridging GitHub,
-  built from the same `afissues` logic being retired from the daemon. It is
-  the fallback for deployments without hub and the conformance target for the
-  contract (§10, Phase 0).
-- **REQ-NS-ISSUES-08** — A contract test suite runs against any candidate
-  implementation and covers every endpoint, the idempotency rules, pagination,
-  the capability matrix and each documented error code. Hub and `af-issued`
-  both pass it in CI.
+  `PUT /labels/{name}`, idempotent by contract (REQ-IS-2.9), so "already
+  exists" stops being an error string to pattern-match. The required set is
+  `af:fix`, `af:fixed`, `af:no-change`, `af:pr`, `af:failed` (new,
+  REQ-NS-PIPE-10) and `af:needs-detail` (new, REQ-NS-PIPE-02).
+- **REQ-NS-ISSUES-07** — Night Shift depends on a conforming service being
+  reachable. It does not ship one: `af-issued` and hub's implementation are
+  specified and delivered by the [Issue Service PRD](issue_service_prd.md). What Night Shift owns is the
+  dependency — see §10 Phase 0 for sequencing and R-8 for the risk.
+- **REQ-NS-ISSUES-08** — Night Shift's own test suite runs against the
+  in-process fake the service spec ships (REQ-IS-8.4), so the daemon's tests
+  need no network and no live service.
 
 ### 6.11 Memory and the ledger
 
@@ -1352,9 +1262,9 @@ func (l *Ledger) Exceeded() bool
 
 ### 7.7 The issue client
 
-One concrete client over the §5.8 wire protocol — an interface for test
-substitution, not for multiple production implementations. There is no
-`github.go` behind it.
+One concrete client over the wire protocol defined in the [Issue Service PRD](issue_service_prd.md) — an
+interface for test substitution, not for multiple production
+implementations. There is no `github.go` behind it.
 
 ```go
 package issues
@@ -1480,6 +1390,7 @@ allowlist_extend = ["make", "uv"]
 trust_project = false           # NEW default (REQ-NS-SKILL-03)
 
 [issues]                         # NEW: replaces [platform] (§5.8)
+                                 # contract: docs/proposals/issue_service_prd.md
 endpoint_url = "https://hub.example.com"
 project      = "my-repo"
 # token from hub secret, else AF_ISSUES_TOKEN
@@ -1549,7 +1460,7 @@ with `AF_ISSUES_TOKEN`.
   use.
 - **NFR-07 — Determinism in tests.** The full suite runs offline with a
   scripted provider (`provider/faux`), a fixture git repository and an
-  in-process issue service satisfying the REQ-NS-ISSUES-08 contract suite. No
+  in-process issue service fake shipped by the service spec (REQ-IS-8.4). No
   network, no API key.
 - **NFR-08 — Testing depth.** Unit tests per package; a golden-request suite
   for prompt assembly; a state-machine table test for the pipeline; a race
@@ -1575,21 +1486,18 @@ with `AF_ISSUES_TOKEN`.
 ## 10. Migration Plan
 
 **Phase 0 — Contracts (no behaviour).**
-Config schema and loader; the Issue Service API specification (§5.8) published
-as an OpenAPI document plus the REQ-NS-ISSUES-08 contract test suite;
-`internal/issues` client; `hubclient` covering §6.7 including the new findings
-endpoints; the SQLite ledger and its migrations.
+Config schema and loader; `internal/issues` client; `hubclient` covering §6.7
+including the new findings endpoints; the SQLite ledger and its migrations.
 
-**`af-issued` is a Phase 0 deliverable, not an optional extra.** Night Shift
-cannot reach GitHub after this change, so a conforming service must exist
-before Phase 1 can poll anything. The standalone bridge is built by lifting
-`afissues`' GitHub implementation out of the Python daemon and putting it
-behind the new contract — the logic is proven, only its interface changes.
-Hub's own implementation lands in parallel and is validated by the same
-contract suite.
+**A conforming issue service is a prerequisite, not a parallel track.** Night
+Shift cannot reach GitHub after this change, so Phases 1–2 of the [Issue Service PRD](issue_service_prd.md)
+— the spec, the conformance suite and the `af-issued` bridge — must land
+before Phase 1 here can poll anything. That work is tracked in its own
+document and is not restated as Night Shift deliverables; what Night Shift
+owns is the client and the dependency.
 
 Deliverable: `nightshift status` against a live hub and a conforming issue
-service; both `af-issued` and hub green on the contract suite.
+service.
 
 **Phase 1 — One issue, end to end.**
 `nightshift fix <n>`: claim → triage → code → gate → review → integrate
@@ -1668,9 +1576,10 @@ at four; adding one requires an amendment to this document.
 **R-8 — The issue service is a new hard dependency and a new single point of
 failure.** Today the daemon reaches GitHub directly; after §5.8 it cannot, so
 an unreachable or unimplemented service means no issues are polled at all.
-This is the cost of decision D-1 and it is real. *Mitigation:* `af-issued`
-ships in Phase 0 so a conforming service always exists; the contract suite
-keeps implementations honest; the client backs off rather than failing open
+This is the cost of decision D-1 and it is real. *Mitigation:* the [Issue Service PRD](issue_service_prd.md)
+delivers `af-issued` before Night Shift's Phase 1, so a conforming service
+always exists; its conformance suite (REQ-IS-8.1) keeps implementations
+honest; the client backs off rather than failing open
 (REQ-NS-ISSUES-04, and contrast F-8). What is explicitly **not** mitigated is
 availability — an issue service outage stops the fix pipeline, by design,
 because the alternative is the daemon guessing at queue state.
@@ -1693,8 +1602,8 @@ arriving later does not reopen settled ground.
 **D-1 (was OQ-1) — Git is git; issues are a service.**
 Night Shift performs every code operation with plain git against the
 repository's own remote, and every issue operation through a single HTTP
-contract — the Issue Service API of §5.8 — which hub or a standalone server
-implements. Multi-forge support leaves the daemon entirely: there is no
+contract — the Issue Service API, specified in the [Issue Service PRD](issue_service_prd.md) — which hub or
+a standalone server implements. Multi-forge support leaves the daemon entirely: there is no
 GitHub, GitLab or Gitea code in Night Shift after this change.
 
 This is a larger change than "port GitHub and keep the interface", which was
@@ -1705,8 +1614,9 @@ client and one set of semantics, and a new tracker is a new server rather than
 a fourth implementation inside the thing that fixes bugs.
 
 The cost is stated plainly in R-8: the service becomes a hard dependency, and
-`af-issued` must ship in Phase 0 before anything can poll. *Binds:* §5.8,
-§6.10, §7.7, §8, §10 Phase 0, R-8.
+`af-issued` must ship before anything can poll. The contract itself is
+specified in the [Issue Service PRD](issue_service_prd.md). *Binds:* §5.8, §6.10, §7.7, §8, §10 Phase 0,
+R-8.
 
 **D-2 (was OQ-2) — The reviewer stays; the gate is a precondition.**
 `[gate] required = true` means a green gate is necessary before the reviewer
@@ -1787,7 +1697,7 @@ Removed outright, with the reason:
 | `nightshift/pid.py` | 94 | advisory lock (REQ-NS-DAEMON-02) |
 | `_startup.check_root_permission_mode` + backend root guards | ~90 | no subprocess (F-16) |
 | `io/{spinner,progress,help,cli}` + `ui/*` (rich) | ~1,200 | two renderers off one event channel |
-| `afissues` (`github.py`, `gitlab.py`, `gitea.py`, `protocol.py`, `_http.py`, `_ssrf.py`) | 1,879 | moves behind the Issue Service API into hub / `af-issued` (D-1) |
+| `afissues` (`github.py`, `gitlab.py`, `gitea.py`, `protocol.py`, `_http.py`, `_ssrf.py`) | 1,879 | moves behind the Issue Service API into hub / `af-issued` (D-1, and §8 of the [Issue Service PRD](issue_service_prd.md)) |
 | `nightshift/platform_factory.py` | 279 | one client, one endpoint — no per-forge construction (D-1) |
 
 Python dependencies dropped: `claude-agent-sdk`, `deepagents`, `google-adk`,
@@ -1796,7 +1706,7 @@ Python dependencies dropped: `claude-agent-sdk`, `deepagents`, `google-adk`,
 `pydantic`, `tomlkit`, `pathspec`, `rich`, `click`, `afspec`, `afissues`.
 
 Note that `afissues` is **relocated, not deleted**: its GitHub implementation
-becomes the body of `af-issued` (REQ-NS-ISSUES-07). What is deleted is Night
+becomes the body of `af-issued` (REQ-IS-6.1). What is deleted is Night
 Shift's dependency on it.
 
 ---
