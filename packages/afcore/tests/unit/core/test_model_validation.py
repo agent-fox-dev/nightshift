@@ -17,6 +17,15 @@ from afcore.core.models import (
     validate_model_access,
 )
 
+_BACKEND_ENV_VARS = {"CLAUDE_CODE_USE_VERTEX": "", "CLAUDE_CODE_USE_BEDROCK": ""}
+
+
+@pytest.fixture(autouse=True)
+def _clear_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure Vertex/Bedrock env vars are unset for all tests in this module."""
+    for var in _BACKEND_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 class TestCollectConfiguredModelIds:
     """Collect all model IDs from archetype tier combos.
@@ -227,3 +236,54 @@ class TestValidateModelAccess:
             validate_model_access()
 
         mock_client.close.assert_called_once()
+
+
+class TestValidateModelAccessVertexBedrock:
+    """Validation is skipped on Vertex/Bedrock backends that lack models.list.
+
+    Requirements: AC-1, AC-2, AC-3, AC-4 (issue #29)
+    """
+
+    def test_skips_validation_on_vertex(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC-1: With CLAUDE_CODE_USE_VERTEX=1, validation is skipped with info log."""
+        monkeypatch.setenv("CLAUDE_CODE_USE_VERTEX", "1")
+        with (
+            patch("afcore.core.client.create_anthropic_client") as mock_create,
+            caplog.at_level(logging.INFO),
+        ):
+            validate_model_access()
+
+        mock_create.assert_not_called()
+        assert any("skipped" in r.message.lower() and "vertex" in r.message.lower() for r in caplog.records)
+        assert not any("API unreachable" in r.message for r in caplog.records)
+
+    def test_skips_validation_on_bedrock(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC-2: With CLAUDE_CODE_USE_BEDROCK=1, validation is skipped with info log."""
+        monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        with (
+            patch("afcore.core.client.create_anthropic_client") as mock_create,
+            caplog.at_level(logging.INFO),
+        ):
+            validate_model_access()
+
+        mock_create.assert_not_called()
+        assert any("skipped" in r.message.lower() and "bedrock" in r.message.lower() for r in caplog.records)
+        assert not any("API unreachable" in r.message for r in caplog.records)
+
+    def test_direct_api_still_validates(self) -> None:
+        """AC-3: Without Vertex/Bedrock env vars, validation proceeds normally."""
+        all_ids = collect_configured_model_ids()
+
+        mock_client = MagicMock()
+        page = MagicMock()
+        page.data = [SimpleNamespace(id=mid) for mid in all_ids]
+        mock_client.models.list.return_value = page
+
+        with patch("afcore.core.client.create_anthropic_client", return_value=mock_client):
+            validate_model_access()
+
+        mock_client.models.list.assert_called_once()
