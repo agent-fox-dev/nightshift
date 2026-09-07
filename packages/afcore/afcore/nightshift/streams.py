@@ -72,8 +72,14 @@ class EngineWorkStream:
     Cost tracking is handled at the engine level (via ``SharedBudget``
     passed to ``NightShiftEngine``), not by sampling state deltas here.
 
+    Consecutive failures are tracked so the daemon can back off the
+    polling interval when the forge is unreachable (issue #39).
+
     Requirements: 85-REQ-1.1, 85-REQ-6.3, 03-REQ-7.1
     """
+
+    # Maximum backoff multiplier — caps the interval at 8× the base.
+    _MAX_BACKOFF_MULTIPLIER: int = 8
 
     def __init__(
         self,
@@ -93,7 +99,9 @@ class EngineWorkStream:
         # no longer used — cost is pushed by the engine directly.
         self._budget = budget
         self._enabled = enabled
+        self._base_interval = interval
         self._interval = interval
+        self._consecutive_failures: int = 0
 
     @property
     def name(self) -> str:
@@ -111,10 +119,46 @@ class EngineWorkStream:
     def enabled(self, value: bool) -> None:
         self._enabled = value
 
+    @property
+    def consecutive_failures(self) -> int:
+        """Number of consecutive run_once failures (for observability)."""
+        return self._consecutive_failures
+
     async def run_once(self) -> None:
-        """Run one cycle via the configured engine/monitor method."""
+        """Run one cycle via the configured engine/monitor method.
+
+        On success the consecutive failure counter resets and the
+        interval returns to its base value.  On failure the counter
+        increments and the interval is doubled (capped at
+        ``_MAX_BACKOFF_MULTIPLIER × base``), then the exception is
+        re-raised so ``_run_stream_loop`` can log it at ERROR level.
+        """
         method = getattr(self._engine, self._method_name)
-        await method()
+        try:
+            await method()
+        except Exception:
+            self._consecutive_failures += 1
+            multiplier = min(
+                2**self._consecutive_failures,
+                self._MAX_BACKOFF_MULTIPLIER,
+            )
+            self._interval = self._base_interval * multiplier
+            logger.warning(
+                "Stream %r: %d consecutive failure(s), backing off to %ds",
+                self._name,
+                self._consecutive_failures,
+                self._interval,
+            )
+            raise
+        else:
+            if self._consecutive_failures > 0:
+                logger.info(
+                    "Stream %r: recovered after %d consecutive failure(s)",
+                    self._name,
+                    self._consecutive_failures,
+                )
+            self._consecutive_failures = 0
+            self._interval = self._base_interval
 
     async def shutdown(self) -> None:
         """No resources to clean up."""

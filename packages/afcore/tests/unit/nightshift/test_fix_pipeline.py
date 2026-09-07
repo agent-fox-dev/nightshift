@@ -1246,9 +1246,10 @@ class TestScanCounterIncrement:
         engine = NightShiftEngine(config=config, platform=mock_platform)
         assert engine.state.issue_checks_completed == 0
 
-        await engine._run_issue_check()
+        with pytest.raises(RuntimeError, match="API down"):
+            await engine._run_issue_check()
 
-        # Platform error path returns early without counting the scan
+        # Platform error path raises without counting the scan
         assert engine.state.issue_checks_completed == 0
 
     @pytest.mark.asyncio

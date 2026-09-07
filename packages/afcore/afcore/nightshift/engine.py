@@ -262,7 +262,7 @@ class NightShiftEngine:
                 "Issue check failed due to platform API error",
                 exc_info=True,
             )
-            return
+            raise
 
         if not issues:
             self.state.issue_checks_completed += 1
@@ -761,19 +761,15 @@ class NightShiftEngine:
             # recently-closed issues returned by the platform due to eventual
             # consistency do not cause spurious additional drain iterations
             # (issue #465).
-            try:
-                remaining = await self._platform.list_issues_by_label(  # type: ignore[attr-defined]
-                    LABEL_FIX,
-                    sort="created",
-                    direction="asc",
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to re-poll issues during drain",
-                    exc_info=True,
-                )
-                # Fail-open: if we can't check, assume clear (81-REQ-1.E1)
-                return True
+            # NOTE: platform errors are NOT caught here — they propagate to
+            # _run_stream_loop which logs at ERROR level and retries on the
+            # next interval.  This avoids the fail-open bug where an outage
+            # was silently reported as a clean drain (issue #39).
+            remaining = await self._platform.list_issues_by_label(  # type: ignore[attr-defined]
+                LABEL_FIX,
+                sort="created",
+                direction="asc",
+            )
 
             # Filter out issues already handled this session so that a
             # recently-closed issue returned by a stale platform response
