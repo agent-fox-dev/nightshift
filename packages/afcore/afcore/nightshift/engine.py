@@ -171,6 +171,15 @@ class NightShiftEngine:
         # Requirements: 03-REQ-7.4
         self._carry_patch_monitor: object | None = None
 
+        # AC-4 (issue #35): log once at startup when no gate command is
+        # configured so the operator knows the daemon is running ungated.
+        gate_cfg = getattr(config, "gate", None)
+        gate_command = getattr(gate_cfg, "command", "") if gate_cfg is not None else ""
+        if not isinstance(gate_command, str) or not gate_command:
+            from afcore.nightshift.gate import log_ungated_warning
+
+            log_ungated_warning()
+
     def _check_cost_limit(self) -> bool:
         """Check whether the cost limit has been reached.
 

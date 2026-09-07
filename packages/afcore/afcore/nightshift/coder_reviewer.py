@@ -3,8 +3,13 @@
 Extracted from fix_pipeline.py to isolate the retry state machine.
 Manages reviewer parse-fail retry and verdict checking.
 
+The gate check (issue #35) runs between the coder and reviewer phases.
+When a gate command is configured, a non-zero exit code blocks the
+reviewer entirely and feeds the captured output into the next coder
+attempt.
+
 Requirements: 82-REQ-7.1, 82-REQ-8.1, 82-REQ-8.2, 82-REQ-8.3,
-              82-REQ-8.4, 82-REQ-8.E1
+              82-REQ-8.4, 82-REQ-8.E1, NS-REQ-1 (issue #35)
 """
 
 from __future__ import annotations
@@ -157,7 +162,45 @@ class CoderReviewerLoop:
                     return CoderReviewerResult(success=False)
                 continue
 
-            # --- Coder succeeded — run reviewer ---
+            # --- Gate check: run verification command before reviewer ---
+            gate_result = await self._run_gate(workspace)
+            if gate_result is not None and not gate_result.passed:
+                # AC-1/AC-2 (issue #35): gate failed — skip reviewer,
+                # record as gate_failed, feed output into next coder attempt.
+                from afcore.nightshift.gate import format_gate_feedback
+
+                gate_feedback = format_gate_feedback(gate_result)
+                await p._post_comment(
+                    spec.issue_number,
+                    f"## Gate Failed\n\n"
+                    f"Verification command `{gate_result.command}` exited "
+                    f"with code {gate_result.exit_code}. "
+                    f"Skipping reviewer session.\n(run: `{p._run_id}`)",
+                )
+                logger.warning(
+                    "Gate failed for issue #%d (exit code %d), skipping reviewer",
+                    spec.issue_number,
+                    gate_result.exit_code,
+                )
+                # Inject gate output into next coder prompt via prior_context
+                # so the coder can see what failed (AC-3, issue #35).
+                if not prior_context:
+                    prior_context = gate_feedback
+                else:
+                    prior_context = f"{prior_context}\n\n{gate_feedback}"
+
+                attempt += 1
+                if attempt > max_retries:
+                    await p._post_comment(
+                        spec.issue_number,
+                        "Fix pipeline exhausted all retries. "
+                        "The issue could not be resolved automatically. "
+                        f"Manual intervention is required. (run: `{p._run_id}`)",
+                    )
+                    return CoderReviewerResult(success=False)
+                continue
+
+            # --- Coder succeeded, gate passed — run reviewer ---
             review_result = await self._run_reviewer_phase(
                 spec,
                 triage,
@@ -193,6 +236,39 @@ class CoderReviewerLoop:
                 return CoderReviewerResult(success=False)
 
         return CoderReviewerResult(success=False)  # pragma: no cover
+
+    async def _run_gate(
+        self,
+        workspace: WorkspaceInfo,
+    ) -> object | None:
+        """Run the gate verification command if configured.
+
+        Returns ``None`` when no gate command is configured (the pipeline
+        should proceed to the reviewer as before).  Returns a
+        :class:`~afcore.nightshift.gate.GateResult` otherwise.
+
+        Requirements: NS-REQ-1, NS-REQ-4 (issue #35)
+        """
+        from afcore.nightshift.gate import run_gate
+
+        p = self._pipeline
+        gate_cfg = getattr(p._config, "gate", None)
+        if gate_cfg is None:
+            return None
+
+        command = getattr(gate_cfg, "command", None)
+        if not isinstance(command, str) or not command:
+            return None
+
+        timeout = getattr(gate_cfg, "timeout", 600)
+        if not isinstance(timeout, int):
+            timeout = 600
+
+        return await run_gate(
+            command,
+            workspace.path,
+            timeout=timeout,
+        )
 
     async def _run_coder_phase(
         self,

@@ -56,6 +56,7 @@ def _make_mock_pipeline() -> MagicMock:
     """Build a MagicMock pipeline with the attributes CoderReviewerLoop.run() needs."""
     pipeline = MagicMock()
     pipeline._config.orchestrator.max_retries = 3
+    pipeline._config.gate.command = ""  # No gate by default (issue #35)
     pipeline._run_id = "run-test-1"
     pipeline._format_review_comment.return_value = "## Review\nPASS"
     pipeline._post_comment = AsyncMock()

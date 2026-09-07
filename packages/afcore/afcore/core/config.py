@@ -495,6 +495,33 @@ class CachingConfig(BaseModel):
         return v
 
 
+class GateConfig(BaseModel):
+    """Mechanical verification gate configuration.
+
+    When ``command`` is non-empty the fix pipeline runs it after each
+    coder session and requires exit code 0 before proceeding to the
+    reviewer.  A failing gate short-circuits the reviewer entirely and
+    feeds its captured output into the next coder attempt.
+
+    Requirements: NS-REQ-1 (issue #35)
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    command: str = Field(
+        default="",
+        description=(
+            "Shell command to run as the verification gate (e.g. 'make check'). Empty string disables the gate."
+        ),
+    )
+    timeout: Annotated[int, Clamped(ge=30, le=3600)] = Field(
+        default=600,
+        description="Maximum seconds to wait for the gate command (30-3600)",
+    )
+
+    _auto_clamp = _auto_clamp_validator()
+
+
 class NightShiftConfig(BaseModel):
     """Night-shift daemon configuration.
 
@@ -609,6 +636,7 @@ class AgentFoxConfig(BaseModel):
     night_shift: NightShiftConfig = Field(default_factory=NightShiftConfig)
     hub: HubConfig = Field(default_factory=HubConfig)
     carry_patch: CarryPatchConfig = Field(default_factory=CarryPatchConfig)
+    gate: GateConfig = Field(default_factory=GateConfig)
 
     _caching_explicit: bool = PrivateAttr(default=False)
 
