@@ -3,8 +3,8 @@
 **Author:** [Platform Engineering]
 **Date:** 2026-09-07
 **Status:** Draft
-**Version:** 1.0.0
-**Implemented by:** `hub`, and `af-issued` (reference bridge)
+**Version:** 1.1.0 — hub is the implementation; `af-issued` is a development tool
+**Implemented by:** `hub`
 **First consumer:** Night Shift (see `docs/proposals/nightshift_go_prd.md`, D-1)
 
 ---
@@ -41,14 +41,20 @@ inside the process that is supposed to be fixing bugs. Moving that behind a
 service means one client, one set of semantics, and a new tracker becomes a
 new server rather than a fourth implementation in the daemon.
 
-Two implementations are in scope:
+**`hub` is the implementation.** The issue API is part of hub, served on
+hub's existing `/api/v1` surface with hub's existing bearer credentials,
+scopes, workspace ACL and audit taxonomy (§8.1). There is no second service to
+deploy and no second credential to issue: a consumer already talking to hub is
+already talking to the issue service.
 
-- **`hub`** — the primary. Issues live in hub's own store or are proxied to a
-  tracker it already has credentials for.
-- **`af-issued`** — a standalone reference server bridging GitHub, built by
-  lifting `afissues`' proven GitHub implementation out of the Python daemon
-  and putting it behind this contract. It is the fallback for deployments
-  without hub, and the conformance target for the spec.
+**`af-issued` is a development tool, not a deployment option.** It is a
+standalone server bridging GitHub, built by lifting `afissues`' proven GitHub
+implementation out of the Python daemon and putting it behind this contract.
+Its purpose is to keep the contract honest — a specification with exactly one
+implementation drifts into being a description of that implementation, and the
+conformance suite developed only against hub would encode hub's behaviour
+rather than the contract's. It is explicitly **not** supported in production
+and **not** a fallback for deployments without hub (§8.2).
 
 The contract is derived from `afissues.protocol.PlatformProtocol` — the same
 fifteen operations — with five gaps closed (§6.3, Appendix A).
@@ -130,7 +136,9 @@ says so, and a consumer discovers that at startup rather than at first use.
 every endpoint, the idempotency rules, pagination, capabilities and each
 documented error code.
 
-**G5** — Two implementations at parity: hub, and the `af-issued` bridge.
+**G5** — One production implementation — hub — plus a second, independent
+implementation (`af-issued`) whose only job is to prove the contract is
+implementable by something that is not hub.
 
 **G6** — Close the five `PlatformProtocol` gaps (§6.3) rather than porting
 them forward.
@@ -151,7 +159,8 @@ store; it does not reconcile two trackers or maintain a mirror.
 recorded as an open question (§12, Q-2).
 
 **NG5** — Not an identity provider. Tokens are issued by the implementing
-server's existing auth (hub PATs, or `af-issued`'s static tokens).
+server's existing auth: hub PATs, API keys and admin tokens, with an
+`issues:read` / `issues:write` scope pair.
 
 ---
 
@@ -175,10 +184,10 @@ because its dispatch guard depends on it.
 
 **Project.** The unit of addressing: one issue collection, named by a slug.
 Where hub implements the service, a project corresponds one-to-one with a hub
-workspace. Where `af-issued` implements it, a project maps to one GitHub
-repository. A server may host many projects with different backends and
-therefore different capabilities — which is why capabilities are reported per
-project (§7), not per server.
+workspace, and the two names are the same string. In `af-issued` a project
+maps to one GitHub repository. A server may host many projects with different
+backends and therefore different capabilities — which is why capabilities are
+reported per project (§7), not per server.
 
 **Issue number.** Project-scoped and assigned by the backing tracker.
 Consumers treat it as opaque within a project and never as globally unique.
@@ -212,7 +221,7 @@ Base path: `{endpoint_url}/api/v1`. All request and response bodies are
   (`project_not_found`), never `403` — a distinguishable `403` reveals that a
   project exists.
 - **REQ-IS-1.3** — `GET /version` returns
-  `{"protocol": "1.0", "implementation": "af-issued", "version": "…"}` and
+  `{"protocol": "1.0", "implementation": "hub", "version": "…"}` and
   requires no auth. Consumers use `protocol` to refuse an incompatible server.
 - **REQ-IS-1.4** — `GET /healthz` (liveness) and `GET /readyz` (readiness,
   including reachability of the backing tracker) require no auth and return
@@ -555,7 +564,7 @@ not conforming and cannot claim partial compliance.
 
 ## 8. Implementations
 
-### 8.1 `hub`
+### 8.1 `hub` — the implementation
 
 **REQ-IS-5.1** — Hub exposes the API under its existing `/api/v1` surface,
 authenticated by its existing PATs and API keys with an `issues:read` /
@@ -573,30 +582,49 @@ alongside everything else.
 implementation choice behind the same contract; capabilities report the
 difference.
 
-### 8.2 `af-issued` (reference bridge)
+### 8.2 `af-issued` — a development tool
 
-**REQ-IS-6.1** — A standalone Go server bridging GitHub, built by porting
+**REQ-IS-6.1** — `af-issued` exists for exactly two reasons:
+
+1. **To keep the contract honest.** A specification with one implementation
+   becomes a description of that implementation. A second implementation,
+   written against the spec rather than against hub's code, is what surfaces
+   the places where the spec says less than it needs to.
+2. **To give the conformance suite something to be developed against** that
+   is not the thing it will later judge, and to give consumers a real server
+   to develop against before hub's implementation lands.
+
+**REQ-IS-6.2** — It is **not supported in production** and is **not a fallback
+for deployments without hub**. There is no such deployment: Night Shift and
+every other consumer require hub for sessions, audit and memory regardless, so
+a service that supplied only issues would not make a hub-less deployment
+viable. `af-issued` ships no operational guarantees — no availability target,
+no upgrade path, no data retention, no multi-tenancy, no UI, no storage of its
+own.
+
+**REQ-IS-6.3** — A standalone Go server bridging GitHub, built by porting
 `afissues/github.py`'s proven request shaping and response mapping. The logic
 is not redesigned; only its interface changes.
 
-**REQ-IS-6.2** — Configuration: one or more projects, each mapping a slug to
-`owner/repo` plus a GitHub token. Static bearer tokens for inbound auth.
+**REQ-IS-6.4** — Configuration: one or more projects, each mapping a slug to
+`owner/repo` plus a GitHub token. Static bearer tokens for inbound auth. It
+does not implement hub's scope model; a consumer pointed at it uses a static
+token, which is one of the reasons it is not a hub substitute.
 
-**REQ-IS-6.3** — Capabilities: `pull_requests`, `checks` and `reviews` true;
-`relationships` true via the GitHub timeline API.
+**REQ-IS-6.5** — Capabilities: `pull_requests`, `checks` and `reviews` true;
+`relationships` true via the GitHub timeline API. It passes the §10 suite in
+CI, which is the only bar it must clear.
 
-**REQ-IS-6.4** — It exists to make the contract real without requiring hub,
-and to be the thing the conformance suite is developed against. It is a
-reference implementation, not a product: no UI, no multi-tenancy, no storage.
-
-**REQ-IS-6.5** — Retains `afissues`' SSRF guard on any configured tracker URL.
+**REQ-IS-6.6** — Retains `afissues`' SSRF guard on any configured tracker URL.
 
 ### 8.3 GitLab and Gitea
 
-**REQ-IS-7.1** — Not implemented in v1. `afissues/gitlab.py` and
-`gitea.py` remain available in af-python as the basis for a future bridge, and
-Appendix B records the divergences a bridge must absorb. This is a scope
-decision, not a technical obstacle.
+**REQ-IS-7.1** — Not supported in v1, by either implementation. Because hub is
+the production implementation, supporting GitLab or Gitea means hub growing a
+backend for it, not `af-issued` growing one. `afissues/gitlab.py` and
+`gitea.py` remain available in af-python as the basis for that work, and
+Appendix B records the divergences it must absorb. This is a scope decision,
+not a technical obstacle.
 
 ---
 
@@ -622,7 +650,11 @@ decision, not a technical obstacle.
 - **NFR-IS-07 — Payload bounds.** Issue and comment bodies are accepted up to
   a documented limit (default 256 KiB); exceeding it is `400 invalid_request`,
   not a truncated write.
-- **NFR-IS-08 — Deployment.** `af-issued` is a single static binary with no
+- **NFR-IS-08 — Scope of these NFRs.** NFR-IS-01 through 07 bind the
+  production implementation, hub. `af-issued` must pass the §10 conformance
+  suite and nothing else: it is a development tool (REQ-IS-6.2), and holding it
+  to latency, caching and rate-limit-safety targets would be effort spent on
+  something that never serves a user. It is a single static binary with no
   runtime dependency beyond its config and outbound HTTPS.
 
 ---
@@ -648,9 +680,11 @@ conformance; "implements the spec" means "passes the suite".
 | Errors | every code in §6.5 is reachable and carries the right HTTP status |
 | Upstream failure | injected tracker failure surfaces as 502, never as 404 or an empty list |
 
-**REQ-IS-8.3** — The suite ships in the same repository as the spec, runs in
-CI against both `hub` and `af-issued`, and a new implementation is expected to
-run it before claiming support.
+**REQ-IS-8.3** — The suite ships in the same repository as the spec and runs
+in CI against both implementations. Running it against `af-issued` as well as
+hub is the point rather than a redundancy: two independent implementations
+passing one suite is the only evidence that the suite tests the contract and
+not one codebase's habits.
 
 **REQ-IS-8.4** — An in-process fake satisfying the suite ships for consumers to
 test against without a network (used by Night Shift's own suite, NFR-07 there).
@@ -659,24 +693,25 @@ test against without a network (used by Night Shift's own suite, NFR-07 there).
 
 ## 11. Delivery Plan
 
-**Phase 1 — Spec and suite.** This document, an OpenAPI 3.1 description
-generated from it, and the §10 conformance suite with the in-process fake.
-Deliverable: the suite runs and fails against nothing, because nothing exists
-yet.
+**Phase 1 — Spec, suite and `af-issued`.** This document, an OpenAPI 3.1
+description generated from it, the §10 conformance suite with its in-process
+fake, and the `af-issued` bridge. These ship together on purpose: the suite is
+developed against `af-issued` so that it tests the contract rather than hub's
+implementation of it (REQ-IS-6.1), and consumers get a real server to build
+against while Phase 2 is in flight.
 
-**Phase 2 — `af-issued`.** Port `afissues/github.py` behind the contract until
-the suite is green. This is the unblocking deliverable: Night Shift's Phase 1
-cannot poll until a conforming server exists.
+**Phase 2 — hub.** Implement the contract on hub's existing auth, storage and
+audit; suite green against hub. **This is the deliverable that unblocks
+consumers.** Night Shift cannot poll until it lands, because hub is the
+implementation it is configured against.
 
-**Phase 3 — hub.** Implement the same contract on hub's existing auth,
-storage and audit. Suite green against hub.
-
-**Phase 4 — Consumer cutover.** Night Shift switches to the client; the
+**Phase 3 — Consumer cutover.** Night Shift switches to the client; the
 `af-issue` skill drops `gh issue create`; `afissues` is removed from the
 Python daemon's dependency set.
 
-Phases 2 and 3 are independent and may run in parallel. Phase 2 gates Night
-Shift; Phase 3 gates retiring `af-issued` in hub deployments.
+`af-issued` is not retired after Phase 2. It stays in CI for as long as the
+contract does, because the moment it stops running is the moment the suite
+starts being able to encode hub-specific behaviour without anyone noticing.
 
 ---
 
@@ -700,10 +735,22 @@ another project is currently inexpressible. Night Shift only builds graphs
 within one batch, so this is not blocking. *Recommendation: leave it; widen to
 a qualified reference only when a consumer needs it.*
 
-**Q-4 — Should `af-issued` support GitLab and Gitea?** The Python
-implementations exist and Appendix B records what a port must absorb. Nobody
-is asking for it today. *Recommendation: no in v1; the contract makes it a
-contained change later.*
+**Q-4 — Should hub support GitLab and Gitea backends?** With hub as the
+production implementation, this is a question about hub, not about
+`af-issued`. The Python implementations exist and Appendix B records what a
+port must absorb; nobody is asking for it today. *Recommendation: no in v1;
+the contract makes it a contained change later, and the capability model
+already lets a GitLab-backed project report `checks` and `reviews` as
+unsupported rather than approximating them.*
+
+**Q-5 — Is `af-issued` worth building at all?** It serves no user, and the
+in-process fake (REQ-IS-8.4) already covers consumer testing. The case for it
+is REQ-IS-6.1: without a second implementation the conformance suite and the
+spec are both written by the people writing hub, and neither can catch the
+other's assumptions. That is a real but indirect benefit, paid for in real
+build and maintenance time. *Recommendation: build it, because the port from
+`afissues/github.py` is mechanical and mostly done; revisit if it turns out to
+cost more than a week.*
 
 ---
 

@@ -671,8 +671,8 @@ need to hold three of them to fix a bug.
 > **The contract is specified separately.**
 > [`docs/proposals/issue_service_prd.md`](issue_service_prd.md) is the
 > normative definition — endpoints, schemas, capability model, error codes,
-> conformance suite and the two implementations (`hub`, and the `af-issued`
-> reference bridge). It is a standalone document because the service has
+> conformance suite and hub's implementation of it. It is a standalone
+> document because the service has
 > consumers other than this daemon and must be implementable without reading
 > this PRD.
 >
@@ -695,10 +695,10 @@ Shift opens **one** connection to hub and uses it for everything:
 | **Audit** | issue mutations emit hub audit events under the existing `hub.*` taxonomy, so issue activity appears in the same unified query as everything else. |
 
 The contract stays a separate specification because it is testable
-independently and because a non-hub implementation remains *possible* — the
-service PRD's `af-issued` bridge is what the conformance suite is developed
-against. But Night Shift's supported deployment is hub, and the client is
-built assuming hub's endpoint and hub's token.
+independently of both hub and this daemon. The service PRD also defines
+`af-issued`, a second implementation whose only purpose is to keep the
+conformance suite honest — it is a development tool there, not a deployment
+option here, and Night Shift is not configured against it in production.
 
 **This makes hub a hard dependency.** Before this decision the daemon could
 run with hub absent and keep telemetry local; now, no hub means no issues,
@@ -1042,10 +1042,10 @@ the dependency is visible rather than buried in a reference:
   `af:fix`, `af:fixed`, `af:no-change`, `af:pr`, `af:failed` (new,
   REQ-NS-PIPE-10) and `af:needs-detail` (new, REQ-NS-PIPE-02).
 - **REQ-NS-ISSUES-07** — Night Shift depends on hub having implemented the
-  contract; it does not ship an implementation. Delivery of hub's
-  implementation — and of the `af-issued` bridge the conformance suite is
-  developed against — belongs to the [Issue Service PRD](issue_service_prd.md). What Night Shift owns is the
-  dependency: see §10 Phase 0 for sequencing and R-8 for the risk.
+  contract; it does not ship an implementation and is not configured against
+  one other than hub. Delivery belongs to the [Issue Service PRD](issue_service_prd.md).
+  What Night Shift owns is the dependency: see §10 Phase 0 for sequencing and
+  R-8 for the risk.
 - **REQ-NS-ISSUES-08** — Night Shift's own test suite runs against the
   in-process fake the service spec ships (REQ-IS-8.4), so the daemon's tests
   need no network and no live service.
@@ -1537,9 +1537,10 @@ Config schema and loader; `internal/issues` client; `hubclient` covering §6.7
 including the new findings endpoints; the SQLite ledger and its migrations.
 
 **Hub's issue API is a prerequisite, not a parallel track.** Night Shift
-cannot reach GitHub after this change, so the [Issue Service PRD](issue_service_prd.md)'s Phases 1–3 — the
-spec, the conformance suite, the `af-issued` bridge to develop against, and
-hub's own implementation — gate Phase 1 here. That work is tracked in its own
+cannot reach GitHub after this change, so the [Issue Service PRD](issue_service_prd.md)'s
+Phase 2 — hub's implementation — gates Phase 1 here. Its Phase 1 (spec,
+conformance suite, and the `af-issued` server to develop against) unblocks
+client work earlier. That work is tracked in its own
 document and is not restated as Night Shift deliverables; what Night Shift
 owns is the client and the dependency.
 
@@ -1635,9 +1636,9 @@ replacement lives in hub. Sequencing therefore crosses a repository boundary:
 Night Shift's Phase 1 is blocked on hub shipping the contract, and neither
 team can unblock itself. *Mitigation:* the contract is specified and testable
 independently (the [Issue Service PRD](issue_service_prd.md) and its conformance suite, REQ-IS-8.1) so hub's
-implementation can be validated before Night Shift consumes it, and the
-`af-issued` bridge gives Night Shift something conforming to develop against
-while hub's implementation lands. See R-6 for the runtime dependency this
+implementation can be validated before Night Shift consumes it, and
+`af-issued` gives Night Shift something conforming to develop the client
+against while hub's implementation lands. See R-6 for the runtime dependency this
 creates once it has shipped.
 
 **R-9 — Carry-forward memory now depends on hub.** With memory moved to hub
@@ -1762,7 +1763,7 @@ Removed outright, with the reason:
 | `nightshift/pid.py` | 94 | advisory lock (REQ-NS-DAEMON-02) |
 | `_startup.check_root_permission_mode` + backend root guards | ~90 | no subprocess (F-16) |
 | `io/{spinner,progress,help,cli}` + `ui/*` (rich) | ~1,200 | two renderers off one event channel |
-| `afissues` (`github.py`, `gitlab.py`, `gitea.py`, `protocol.py`, `_http.py`, `_ssrf.py`) | 1,879 | moves behind the Issue Service API into hub / `af-issued` (D-1, and §8 of the [Issue Service PRD](issue_service_prd.md)) |
+| `afissues` (`github.py`, `gitlab.py`, `gitea.py`, `protocol.py`, `_http.py`, `_ssrf.py`) | 1,879 | moves behind the Issue Service API into hub (D-1, and §8 of the [Issue Service PRD](issue_service_prd.md)) |
 | `nightshift/platform_factory.py` | 279 | one client, one endpoint — no per-forge construction (D-1) |
 
 Python dependencies dropped: `claude-agent-sdk`, `deepagents`, `google-adk`,
@@ -1771,8 +1772,9 @@ Python dependencies dropped: `claude-agent-sdk`, `deepagents`, `google-adk`,
 `pydantic`, `tomlkit`, `pathspec`, `rich`, `click`, `afspec`, `afissues`.
 
 Note that `afissues` is **relocated, not deleted**: its GitHub implementation
-becomes the body of `af-issued` (REQ-IS-6.1). What is deleted is Night
-Shift's dependency on it.
+becomes the body of `af-issued` (REQ-IS-6.3), and its behaviour is what
+hub's implementation must match. What is deleted is Night Shift's dependency
+on it.
 
 ---
 
@@ -1798,7 +1800,7 @@ restores the old behaviour where one exists.
 | B-13 | Cost computed from a local price table | Cost from the model catalog | — |
 | B-14 | `permission_mode` config key | Removed; tool policy is the boundary | `[security] allowlist*` |
 | B-15 | Audit `tool.invocation` carries a param summary | Carries an argument hash | — (NFR-10) |
-| B-16 | Daemon talks to GitHub/GitLab/Gitea directly | Talks to one Issue Service API | — (D-1); run `af-issued` to bridge GitHub |
+| B-16 | Daemon talks to GitHub/GitLab/Gitea directly | Talks to hub's Issue Service API; hub bridges the tracker | — (D-1) |
 | B-17 | `[platform]` + `GITHUB_PAT` / `GITLAB_TOKEN` / `GITEA_TOKEN` | `[hub]` + `AF_HUB_TOKEN`, one endpoint and one token for everything | — (D-1) |
 | B-20 | Hub optional; daemon runs local-only without it | Hub required — it serves the issue API | — (D-1, REQ-NS-HUB-05) |
 | B-18 | Carry-forward findings in local DuckDB | In hub; absent when hub is down | — (D-5) |
