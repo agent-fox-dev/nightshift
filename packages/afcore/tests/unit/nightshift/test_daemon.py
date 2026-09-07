@@ -59,34 +59,37 @@ def _make_config(
 class TestSharedBudget:
     """Verify SharedBudget cost accumulation."""
 
-    def test_cost_accumulation(self) -> None:
-        """Budget accumulates cost from multiple add_cost calls."""
+    @pytest.mark.asyncio
+    async def test_cost_accumulation(self) -> None:
+        """Budget accumulates cost from multiple add_cost_async calls."""
         from afcore.nightshift.daemon import SharedBudget
 
         budget = SharedBudget(max_cost=10.0)
-        budget.add_cost(3.0)
-        budget.add_cost(4.5)
+        await budget.add_cost_async(3.0)
+        await budget.add_cost_async(4.5)
         assert budget.total_cost == 7.5
         assert budget.exceeded is False
 
     # TS-85-16: Cost limit triggers shutdown
     # Requirement: 85-REQ-5.2
-    def test_cost_exceeded(self) -> None:
+    @pytest.mark.asyncio
+    async def test_cost_exceeded(self) -> None:
         """Budget.exceeded is True when total_cost >= max_cost."""
         from afcore.nightshift.daemon import SharedBudget
 
         budget = SharedBudget(max_cost=5.0)
-        budget.add_cost(6.0)
+        await budget.add_cost_async(6.0)
         assert budget.exceeded is True
 
     # TS-85-E9: No cost limit configured
     # Requirement: 85-REQ-5.E1
-    def test_no_cost_limit(self) -> None:
+    @pytest.mark.asyncio
+    async def test_no_cost_limit(self) -> None:
         """Budget never exceeds when max_cost is None."""
         from afcore.nightshift.daemon import SharedBudget
 
         budget = SharedBudget(max_cost=None)
-        budget.add_cost(1000.0)
+        await budget.add_cost_async(1000.0)
         assert budget.exceeded is False
 
 

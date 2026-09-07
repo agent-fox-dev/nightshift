@@ -69,10 +69,8 @@ logger = logging.getLogger(__name__)
 class EngineWorkStream:
     """Wraps an engine or monitor method as a work stream.
 
-    When ``track_cost=True`` (the default), measures the engine state's cost
-    delta after each cycle and charges it to the shared budget.  Set
-    ``track_cost=False`` for streams whose target object has no cost state
-    (e.g. CarryPatchMonitor).
+    Cost tracking is handled at the engine level (via ``SharedBudget``
+    passed to ``NightShiftEngine``), not by sampling state deltas here.
 
     Requirements: 85-REQ-1.1, 85-REQ-6.3, 03-REQ-7.1
     """
@@ -91,10 +89,11 @@ class EngineWorkStream:
         self._name = stream_name
         self._engine = engine
         self._method_name = method_name
+        # budget and track_cost kept for constructor backward-compat but
+        # no longer used — cost is pushed by the engine directly.
         self._budget = budget
         self._enabled = enabled
         self._interval = interval
-        self._track_cost = track_cost
 
     @property
     def name(self) -> str:
@@ -113,16 +112,9 @@ class EngineWorkStream:
         self._enabled = value
 
     async def run_once(self) -> None:
-        """Run one cycle via the configured method, optionally tracking cost delta."""
-        if self._track_cost:
-            cost_before = getattr(getattr(self._engine, "state", None), "total_cost", 0.0)
+        """Run one cycle via the configured engine/monitor method."""
         method = getattr(self._engine, self._method_name)
         await method()
-        if self._track_cost and self._budget is not None:
-            cost_after = getattr(getattr(self._engine, "state", None), "total_cost", 0.0)
-            delta = cost_after - cost_before  # type: ignore[possibly-undefined]
-            if delta > 0:
-                self._budget.add_cost(delta)
 
     async def shutdown(self) -> None:
         """No resources to clean up."""

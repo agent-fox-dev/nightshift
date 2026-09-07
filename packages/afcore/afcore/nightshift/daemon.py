@@ -110,12 +110,12 @@ class SharedBudget:
     _total_cost: float = field(default=0.0, init=False, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
-    def add_cost(self, cost: float) -> None:
-        """Add cost from a work stream cycle (sync, backward-compatible)."""
-        self._total_cost += cost
-
     async def add_cost_async(self, cost: float) -> None:
-        """Add cost from a work stream cycle (async, lock-protected)."""
+        """Add cost from a work stream cycle (async, lock-protected).
+
+        This is the only way to mutate ``_total_cost``.  All callers must
+        use this method to ensure concurrent tasks do not lose updates.
+        """
         async with self._lock:
             self._total_cost += cost
 

@@ -137,19 +137,22 @@ class TestCostMonotonicity:
     )
     @settings(max_examples=100)
     def test_cost_monotonicity_and_exceeded(self, costs: list[float], max_cost: float | None) -> None:
-        """total_cost equals sum of add_cost calls; exceeded triggers correctly."""
+        """total_cost equals sum of add_cost_async calls; exceeded triggers correctly."""
         from afcore.nightshift.daemon import SharedBudget
 
-        budget = SharedBudget(max_cost=max_cost)
-        running_total = 0.0
-        for cost in costs:
-            budget.add_cost(cost)
-            running_total += cost
-            assert abs(budget.total_cost - running_total) < 1e-9
-            if max_cost is not None:
-                assert budget.exceeded == (running_total >= max_cost)
-            else:
-                assert budget.exceeded is False
+        async def _run() -> None:
+            budget = SharedBudget(max_cost=max_cost)
+            running_total = 0.0
+            for cost in costs:
+                await budget.add_cost_async(cost)
+                running_total += cost
+                assert abs(budget.total_cost - running_total) < 1e-9
+                if max_cost is not None:
+                    assert budget.exceeded == (running_total >= max_cost)
+                else:
+                    assert budget.exceeded is False
+
+        asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------

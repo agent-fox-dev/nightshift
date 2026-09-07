@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from afaudit.sink import SinkDispatcher
 
     from afcore.knowledge.fox_provider import KnowledgeProvider
+    from afcore.nightshift.daemon import SharedBudget
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,7 @@ class NightShiftEngine:
         conn: duckdb.DuckDBPyConnection | None = None,
         knowledge_provider: KnowledgeProvider | None = None,
         hub_client: object | None = None,
+        budget: SharedBudget | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -155,6 +157,7 @@ class NightShiftEngine:
         self._conn = conn
         self._knowledge_provider = knowledge_provider
         self._hub_client = hub_client
+        self._budget = budget
         self.state = NightShiftState()
         # Track issue numbers processed in this run to guard against
         # re-processing issues that were closed/fixed but still returned
@@ -708,6 +711,12 @@ class NightShiftEngine:
             output_tokens=output_tokens,
         )
         await self.state.add_fix_result(cost, sessions_run, outcome, succeeded=succeeded)
+
+        # Push per-issue cost to the daemon-level budget under its lock.
+        # This replaces the racy before/after delta sampling that was
+        # previously done in EngineWorkStream.run_once().
+        if self._budget is not None and cost > 0:
+            await self._budget.add_cost_async(cost)
 
         _emit_audit_event(
             self._sink,

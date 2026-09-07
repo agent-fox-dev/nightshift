@@ -154,7 +154,7 @@ class TestCostCheckBetweenCycles:
 
         async def costly_run() -> None:
             await asyncio.sleep(0.05)
-            budget.add_cost(2.0)
+            await budget.add_cost_async(2.0)
             completed.append(True)
 
         budget = SharedBudget(max_cost=1.0)
@@ -240,10 +240,14 @@ class TestSmokeDaemonFullLifecycle:
 
 
 class TestSmokeFixPipeline:
-    """Verify fix pipeline stream wraps engine and reports cost."""
+    """Verify fix pipeline stream wraps engine.
+
+    Cost is now pushed at the engine level (via SharedBudget.add_cost_async),
+    not sampled by the stream via before/after state delta.
+    """
 
     async def test_fix_pipeline_e2e(self) -> None:
-        """engine._drain_issues called, cost reported."""
+        """engine._drain_issues called; stream does not push cost to budget."""
         from afcore.nightshift.daemon import SharedBudget
         from afcore.nightshift.streams import EngineWorkStream
 
@@ -265,7 +269,9 @@ class TestSmokeFixPipeline:
         )
         await fix_stream.run_once()
         assert engine._drain_issues.call_count == 1
-        assert budget.total_cost == 3.0
+        # Cost is no longer pushed by the stream — it's done at the engine
+        # level via add_cost_async. Budget remains at 0 here.
+        assert budget.total_cost == 0.0
 
 
 # ---------------------------------------------------------------------------

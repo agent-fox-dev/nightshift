@@ -146,6 +146,9 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     progress.start()
     task_cb = wrap_task_callback(progress, om)
 
+    budget = SharedBudget(
+        max_cost=getattr(getattr(config, "orchestrator", None), "max_cost", None),
+    )
     engine = NightShiftEngine(
         config=config,
         platform=platform,
@@ -157,9 +160,7 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
         conn=(kdb.connection if kdb else None),
         knowledge_provider=kprov,
         hub_client=hub_client,
-    )
-    budget = SharedBudget(
-        max_cost=getattr(getattr(config, "orchestrator", None), "max_cost", None),
+        budget=budget,
     )
     runner = DaemonRunner(
         config=config,

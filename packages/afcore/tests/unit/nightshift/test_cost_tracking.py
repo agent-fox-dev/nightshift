@@ -791,3 +791,219 @@ class TestEmptyRunIdSkipsEmission:
         emit_audit_event(mock_sink, "", AuditEventType.SESSION_COMPLETE, payload={"cost": 1.0})
 
         assert mock_sink.emit_audit_event.call_count == 0, "emit_audit_event must not call sink when run_id is empty"
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-1: Concurrent cost commits to SharedBudget are lossless
+# Requirement: NS-REQ-1
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentCostCommits:
+    """TS-NS-1: N concurrent add_cost_async calls produce exact total."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_add_cost_async_lossless(self) -> None:
+        """N concurrent tasks each adding a known amount sum to exactly N * amount."""
+        import asyncio
+
+        from afcore.nightshift.daemon import SharedBudget
+
+        budget = SharedBudget(max_cost=1000.0)
+        n = 50
+        per_task = 1.5
+
+        async def commit() -> None:
+            await budget.add_cost_async(per_task)
+
+        tasks = [asyncio.create_task(commit()) for _ in range(n)]
+        await asyncio.gather(*tasks)
+
+        assert budget.total_cost == pytest.approx(n * per_task), (
+            f"Expected {n * per_task}, got {budget.total_cost} — lost updates detected"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-2: Engine pushes per-issue cost to budget
+# Requirement: NS-REQ-2
+# ---------------------------------------------------------------------------
+
+
+class TestEnginePushesCostToBudget:
+    """TS-NS-2: _process_fix pushes per-issue cost directly to SharedBudget."""
+
+    @pytest.mark.asyncio
+    async def test_process_fix_pushes_cost_to_budget(self) -> None:
+        """After _process_fix, budget.total_cost equals the per-issue cost."""
+        from afcore.nightshift.daemon import SharedBudget
+        from afcore.nightshift.engine import NightShiftEngine
+        from afissues.protocol import IssueResult
+
+        config = _make_config()
+        platform = AsyncMock()
+        budget = SharedBudget(max_cost=100.0)
+        engine = NightShiftEngine(config=config, platform=platform, budget=budget)
+
+        issue = IssueResult(number=7, title="A bug", html_url="http://example.com/7")
+
+        mock_metrics = MagicMock()
+        mock_metrics.cost_usd = 2.50
+        mock_metrics.sessions_run = 1
+        mock_metrics.input_tokens = 100
+        mock_metrics.output_tokens = 50
+
+        with patch("afcore.nightshift.engine.FixPipeline") as mock_cls:
+            mock_pipeline = MagicMock()
+            mock_pipeline.process_issue = AsyncMock(return_value=mock_metrics)
+            mock_cls.return_value = mock_pipeline
+
+            await engine._process_fix(issue, issue_body="fix the thing")
+
+        assert budget.total_cost == pytest.approx(2.50), f"Expected budget.total_cost=2.50, got {budget.total_cost}"
+
+    @pytest.mark.asyncio
+    async def test_engine_work_stream_does_not_sample_state(self) -> None:
+        """EngineWorkStream.run_once no longer reads engine.state.total_cost."""
+        from afcore.nightshift.daemon import SharedBudget
+        from afcore.nightshift.streams import EngineWorkStream
+
+        mock_engine = MagicMock()
+        mock_engine._drain_issues = AsyncMock(return_value=False)
+        # Set total_cost to a value — it should NOT be read
+        mock_engine.state.total_cost = 99.0
+
+        budget = SharedBudget(max_cost=None)
+        stream = EngineWorkStream(
+            stream_name="fix-pipeline",
+            engine=mock_engine,
+            method_name="_drain_issues",
+            budget=budget,
+            enabled=True,
+            interval=900,
+        )
+        await stream.run_once()
+
+        # Budget must remain at 0 — EngineWorkStream no longer samples deltas
+        assert budget.total_cost == 0.0, (
+            "EngineWorkStream should not push cost to budget; cost is pushed at the engine level"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-3: No cross-stream double-counting
+# Requirement: NS-REQ-3
+# ---------------------------------------------------------------------------
+
+
+class TestNoCrossStreamDoubleCounting:
+    """TS-NS-3: Two concurrent fix cycles produce exact sum, no double-counting."""
+
+    @pytest.mark.asyncio
+    async def test_two_concurrent_fixes_no_double_count(self) -> None:
+        """Two concurrent _process_fix calls produce budget == cost_a + cost_b."""
+        import asyncio
+
+        from afcore.nightshift.daemon import SharedBudget
+        from afcore.nightshift.engine import NightShiftEngine
+        from afissues.protocol import IssueResult
+
+        config = _make_config()
+        platform = AsyncMock()
+        budget = SharedBudget(max_cost=100.0)
+        engine = NightShiftEngine(config=config, platform=platform, budget=budget)
+
+        issue_a = IssueResult(number=1, title="Bug A", html_url="http://example.com/1")
+        issue_b = IssueResult(number=2, title="Bug B", html_url="http://example.com/2")
+
+        cost_a, cost_b = 3.0, 5.0
+
+        def _make_mock_metrics(cost: float) -> MagicMock:
+            m = MagicMock()
+            m.cost_usd = cost
+            m.sessions_run = 1
+            m.input_tokens = 100
+            m.output_tokens = 50
+            return m
+
+        async def _fake_process(issue, issue_body="", run_id=None):
+            cost = cost_a if issue.number == 1 else cost_b
+            # Simulate some async work to interleave tasks
+            await asyncio.sleep(0.01)
+            return _make_mock_metrics(cost)
+
+        with patch("afcore.nightshift.engine.FixPipeline") as mock_cls:
+            mock_pipeline = MagicMock()
+            mock_pipeline.process_issue = AsyncMock(side_effect=_fake_process)
+            mock_cls.return_value = mock_pipeline
+
+            await asyncio.gather(
+                engine._process_fix(issue_a, issue_body="fix A"),
+                engine._process_fix(issue_b, issue_body="fix B"),
+            )
+
+        assert budget.total_cost == pytest.approx(cost_a + cost_b), (
+            f"Expected budget={cost_a + cost_b}, got {budget.total_cost} — double-counting detected"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-4: Unlocked add_cost removed
+# Requirement: NS-REQ-4
+# ---------------------------------------------------------------------------
+
+
+class TestUnlockedAddCostRemoved:
+    """TS-NS-4: SharedBudget has no sync add_cost method."""
+
+    def test_no_sync_add_cost_method(self) -> None:
+        """SharedBudget must not expose a sync add_cost method."""
+        from afcore.nightshift.daemon import SharedBudget
+
+        budget = SharedBudget(max_cost=None)
+        # add_cost_async must exist
+        assert hasattr(budget, "add_cost_async"), "add_cost_async must exist"
+        # sync add_cost must be removed
+        assert not hasattr(budget, "add_cost"), "Sync add_cost must be removed — only add_cost_async is allowed"
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-5: Budget-exceeded shutdown via engine-level path
+# Requirement: NS-REQ-5
+# ---------------------------------------------------------------------------
+
+
+class TestBudgetExceededShutdown:
+    """TS-NS-5: Engine cost push triggers budget.exceeded correctly."""
+
+    @pytest.mark.asyncio
+    async def test_budget_exceeded_after_engine_push(self) -> None:
+        """After _process_fix pushes cost >= max_cost, budget.exceeded is True."""
+        from afcore.nightshift.daemon import SharedBudget
+        from afcore.nightshift.engine import NightShiftEngine
+        from afissues.protocol import IssueResult
+
+        config = _make_config()
+        platform = AsyncMock()
+        budget = SharedBudget(max_cost=1.0)
+        engine = NightShiftEngine(config=config, platform=platform, budget=budget)
+
+        issue = IssueResult(number=99, title="Costly fix", html_url="http://example.com/99")
+
+        mock_metrics = MagicMock()
+        mock_metrics.cost_usd = 2.0
+        mock_metrics.sessions_run = 1
+        mock_metrics.input_tokens = 100
+        mock_metrics.output_tokens = 50
+
+        with patch("afcore.nightshift.engine.FixPipeline") as mock_cls:
+            mock_pipeline = MagicMock()
+            mock_pipeline.process_issue = AsyncMock(return_value=mock_metrics)
+            mock_cls.return_value = mock_pipeline
+
+            await engine._process_fix(issue, issue_body="costly fix")
+
+        assert budget.exceeded is True, (
+            f"Expected budget.exceeded=True after cost 2.0 >= max_cost 1.0, but total_cost={budget.total_cost}"
+        )
+        assert budget.total_cost == pytest.approx(2.0)
