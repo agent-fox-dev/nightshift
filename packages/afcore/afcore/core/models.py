@@ -212,10 +212,19 @@ def validate_model_access(models_config: ModelsConfig | None = None) -> None:
 
     Requirements: NS-REQ-3, NS-REQ-4, NS-REQ-5
     """
+    import os
     import sys
 
     configured_ids = collect_configured_model_ids(models_config)
     if not configured_ids:
+        return
+
+    if os.environ.get("CLAUDE_CODE_USE_VERTEX") == "1":
+        logger.info("Model access validation skipped — not supported on Vertex backend")
+        return
+
+    if os.environ.get("CLAUDE_CODE_USE_BEDROCK") == "1":
+        logger.info("Model access validation skipped — not supported on Bedrock backend")
         return
 
     try:
