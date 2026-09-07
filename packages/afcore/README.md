@@ -127,7 +127,7 @@ Sub-config models (all pydantic `BaseModel` subclasses with documented defaults)
 | `TIER_DEFAULTS` | `dict[ModelTier, str]` — default model ID for each tier. |
 | `ModelEntryConfig` | Pydantic model for user-configurable `[models.registry.<id>]` entries: `tier`. |
 | `resolve_model` | `(name, *, models_config=None) -> str` — resolve a tier name or model ID to a concrete model ID. |
-| `collect_configured_model_ids` | `(models_config=None) -> set[str]` — collect all model IDs that archetypes will use at runtime. |
+| `collect_configured_model_ids` | `(models_config=None) -> dict[str, set[str]]` — collect all model IDs that archetypes will use at runtime, mapped to the tier name(s) resolving to each. |
 | `validate_model_access` | `(models_config=None) -> None` — validate configured model IDs are accessible via the API key. |
 | `calculate_cost` | `(input_tokens, output_tokens, model_id, pricing, *, cache_read_input_tokens=0, cache_creation_input_tokens=0) -> float` — USD cost. |
 

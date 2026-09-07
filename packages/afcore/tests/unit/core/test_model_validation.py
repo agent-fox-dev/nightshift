@@ -16,6 +16,7 @@ from afcore.core.models import (
     collect_configured_model_ids,
     validate_model_access,
 )
+from pydantic import ValidationError
 
 _BACKEND_ENV_VARS = {"CLAUDE_CODE_USE_VERTEX": "", "CLAUDE_CODE_USE_BEDROCK": ""}
 
@@ -28,14 +29,15 @@ def _clear_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestCollectConfiguredModelIds:
-    """Collect all model IDs from archetype tier combos.
+    """Collect all model IDs from archetype tier combos, with tier provenance.
 
     Requirements: NS-REQ-4
     """
 
-    def test_returns_non_empty_set(self) -> None:
+    def test_returns_non_empty_mapping(self) -> None:
         """At least one model ID is collected from the archetype registry."""
         ids = collect_configured_model_ids()
+        assert isinstance(ids, dict)
         assert len(ids) > 0
 
     def test_contains_standard_default(self) -> None:
@@ -65,6 +67,29 @@ class TestCollectConfiguredModelIds:
         """SIMPLE tier models from maintainer:hunt are collected."""
         ids = collect_configured_model_ids()
         assert "claude-haiku-4-5" in ids
+
+    def test_maps_model_id_to_tier_names(self) -> None:
+        """Each collected model ID carries the tier name(s) that resolve to it.
+
+        AC-1 (issue #47): tier provenance survives collection so the
+        inaccessible-model error can name the tier to override.
+        """
+        ids = collect_configured_model_ids()
+        assert ids["claude-haiku-4-5"] == {"SIMPLE"}
+        assert ids["claude-sonnet-4-6"] == {"STANDARD"}
+        assert ids["claude-opus-4-6"] == {"ADVANCED"}
+
+    def test_override_maps_tier_to_overridden_model(self) -> None:
+        """A tier_defaults override attributes the new model ID to that tier."""
+        models_cfg = ModelsConfig(tier_defaults={"STANDARD": "claude-haiku-4-5"})
+        ids = collect_configured_model_ids(models_config=models_cfg)
+        # Haiku now serves both SIMPLE and STANDARD.
+        assert ids["claude-haiku-4-5"] == {"SIMPLE", "STANDARD"}
+
+    def test_bare_id_set_recoverable(self) -> None:
+        """The pre-#47 ``set[str]`` behavior is recoverable via ``set()``."""
+        ids = collect_configured_model_ids()
+        assert set(ids) >= {"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"}
 
 
 class TestValidateModelAccess:
@@ -180,7 +205,7 @@ class TestValidateModelAccess:
         with (
             patch(
                 "afcore.core.models.collect_configured_model_ids",
-                return_value={"custom-model-1"},
+                return_value={"custom-model-1": set()},
             ) as mock_collect,
             patch("afcore.core.client.create_anthropic_client") as mock_create,
             pytest.raises(SystemExit) as exc_info,
@@ -236,6 +261,149 @@ class TestValidateModelAccess:
             validate_model_access()
 
         mock_client.close.assert_called_once()
+
+
+class TestInaccessibleModelErrorMessage:
+    """The inaccessible-model error names the tier and the override snippet.
+
+    Acceptance criteria AC-1, AC-3 (issue #47).
+    """
+
+    def _mock_models_page(self, model_ids: list[str]) -> MagicMock:
+        page = MagicMock()
+        page.data = [SimpleNamespace(id=mid) for mid in model_ids]
+        return page
+
+    def _error_message(
+        self,
+        available: list[str],
+        models_config: ModelsConfig | None,
+        caplog: pytest.LogCaptureFixture,
+    ) -> str:
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = self._mock_models_page(available)
+
+        with (
+            patch("afcore.core.client.create_anthropic_client", return_value=mock_client),
+            caplog.at_level(logging.ERROR),
+            pytest.raises(SystemExit),
+        ):
+            validate_model_access(models_config=models_config)
+
+        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert error_records
+        return error_records[0].getMessage()
+
+    def test_names_the_tier_of_the_inaccessible_model(self, caplog: pytest.LogCaptureFixture) -> None:
+        """AC-1: an API key without claude-haiku-4-5 gets told it is the SIMPLE tier."""
+        # Everything except the SIMPLE default is available.
+        available = ["claude-sonnet-4-6", "claude-opus-4-6"]
+
+        message = self._error_message(available, None, caplog)
+
+        assert "claude-haiku-4-5" in message
+        assert "SIMPLE" in message
+        # The other tiers are accessible, so they must not be blamed.
+        assert "STANDARD" not in message
+        assert "ADVANCED" not in message
+
+    def test_shows_tier_defaults_override_snippet(self, caplog: pytest.LogCaptureFixture) -> None:
+        """AC-1: the error shows the config.toml snippet needed to override."""
+        available = ["claude-sonnet-4-6", "claude-opus-4-6"]
+
+        message = self._error_message(available, None, caplog)
+
+        assert "[models.tier_defaults]" in message
+        assert "SIMPLE =" in message
+
+    def test_lists_every_affected_tier(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Multiple inaccessible models each name their own tier."""
+        # Only the STANDARD default is available.
+        available = ["claude-sonnet-4-6"]
+
+        message = self._error_message(available, None, caplog)
+
+        assert "claude-haiku-4-5" in message
+        assert "claude-opus-4-6" in message
+        assert "SIMPLE" in message
+        assert "ADVANCED" in message
+
+    def test_names_all_tiers_sharing_one_model(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A single model serving two tiers names both."""
+        models_cfg = ModelsConfig(tier_defaults={"ADVANCED": "claude-sonnet-4-6"})
+        # Neither the STANDARD nor the (remapped) ADVANCED model is available.
+        available = ["claude-haiku-4-5"]
+
+        message = self._error_message(available, models_cfg, caplog)
+
+        assert "claude-sonnet-4-6" in message
+        assert "STANDARD" in message
+        assert "ADVANCED" in message
+
+    def test_passes_when_all_tiers_overridden_to_accessible_models(self) -> None:
+        """AC-3: overriding every tier default skips the hardcoded defaults."""
+        models_cfg = ModelsConfig(
+            registry={
+                "custom-simple": {"tier": "SIMPLE"},
+                "custom-standard": {"tier": "STANDARD"},
+                "custom-advanced": {"tier": "ADVANCED"},
+            },
+            tier_defaults={
+                "SIMPLE": "custom-simple",
+                "STANDARD": "custom-standard",
+                "ADVANCED": "custom-advanced",
+            },
+        )
+        # The hardcoded defaults are deliberately absent from the API response.
+        available = ["custom-simple", "custom-standard", "custom-advanced"]
+
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = self._mock_models_page(available)
+
+        with patch("afcore.core.client.create_anthropic_client", return_value=mock_client):
+            # Should not raise.
+            validate_model_access(models_config=models_cfg)
+
+
+class TestModelEntryConfigVariantRejection:
+    """AC-2 (issue #47): `variant` in [models.registry.*] gets an actionable error."""
+
+    def test_variant_field_rejected_with_hint(self) -> None:
+        """A `variant` key names itself and the accepted field in the error."""
+        from afcore.core.models import ModelEntryConfig
+
+        with pytest.raises(ValidationError) as exc_info:
+            ModelEntryConfig(tier="STANDARD", variant="standard")
+
+        message = str(exc_info.value)
+        assert "variant" in message
+        assert "[models.registry.*]" in message
+        assert "tier" in message
+
+    def test_variant_rejected_through_models_config(self) -> None:
+        """The hint survives ModelsConfig's registry parsing as a ConfigError."""
+        from afcore.core.errors import ConfigError
+
+        with pytest.raises(ConfigError) as exc_info:
+            ModelsConfig(registry={"my-model": {"tier": "STANDARD", "variant": "standard"}})
+
+        message = str(exc_info.value)
+        assert "variant" in message
+        assert "[models.registry.*]" in message
+
+    def test_other_unknown_fields_still_rejected(self) -> None:
+        """Unrelated extra fields keep the generic extra=forbid error."""
+        from afcore.core.models import ModelEntryConfig
+
+        with pytest.raises(ValidationError):
+            ModelEntryConfig(tier="STANDARD", nonsense="x")
+
+    def test_valid_entry_still_accepted(self) -> None:
+        """A well-formed entry is unaffected by the new validator."""
+        from afcore.core.models import ModelEntryConfig, ModelTier
+
+        entry = ModelEntryConfig(tier="ADVANCED")
+        assert entry.to_model_entry("my-model").tier is ModelTier.ADVANCED
 
 
 class TestValidateModelAccessVertexBedrock:
