@@ -268,6 +268,14 @@ open issues have become stale. A fix to one issue may resolve problems
 reported in another — for example, fixing a deprecated API usage might also
 resolve the linter warning that flagged it.
 
+The sweep runs only for an issue whose fix was genuinely integrated — its
+branch was actually merged into the integration branch (`FixMetrics.outcome
+== "fixed"`, issue #50). A pipeline run that exhausted its retries, produced
+no changes, only opened a pull request, or raised is reported as not fixed;
+none of these have a landed diff that could justify closing another issue,
+so the sweep is skipped for them, and `NightShiftEngine.state.issues_fixed`
+is not incremented either.
+
 Staleness detection uses an AI evaluation to determine which remaining
 issues may have been resolved by the fix, followed by platform API
 verification to confirm the issue is still open. Issues identified as stale

@@ -97,6 +97,7 @@ class TestSmokeFixPipelineDrainLoop:
             input_tokens=100,
             output_tokens=50,
             sessions_run=1,
+            outcome="fixed",
         )
         mock_pipeline_instance = MagicMock()
         mock_pipeline_instance.process_issue = AsyncMock(return_value=mock_metrics)
