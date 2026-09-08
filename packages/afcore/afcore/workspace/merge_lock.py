@@ -30,6 +30,21 @@ logger = logging.getLogger(__name__)
 # comfortably larger than that so a live holder is never broken mid-session.
 _DEFAULT_STALE_TIMEOUT: float = 3600.0
 
+_async_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_async_lock(repo_root: Path) -> asyncio.Lock:
+    """Return a shared asyncio.Lock for *repo_root*.
+
+    All MergeLock instances that operate on the same repo share one
+    asyncio lock so that in-process callers are serialized even when
+    each call site constructs a fresh MergeLock.
+    """
+    key = os.path.realpath(str(repo_root))
+    if key not in _async_locks:
+        _async_locks[key] = asyncio.Lock()
+    return _async_locks[key]
+
 
 def _is_pid_alive(pid: int) -> bool:
     """Check whether a process with the given PID is alive."""
@@ -75,7 +90,7 @@ class MergeLock:
         self._timeout = timeout
         self._stale_timeout = stale_timeout
         self._poll_interval = poll_interval
-        self._async_lock = asyncio.Lock()
+        self._async_lock = _get_async_lock(repo_root)
         self._lock_dir = repo_root / ".nightshift"
         self._lock_file = self._lock_dir / "merge.lock"
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -99,8 +114,15 @@ class MergeLock:
         Raises:
             IntegrationError: If the lock cannot be acquired within timeout.
         """
-        # Serialize within-process callers first
-        await self._async_lock.acquire()
+        try:
+            await asyncio.wait_for(
+                self._async_lock.acquire(),
+                timeout=self._timeout,
+            )
+        except TimeoutError:
+            raise IntegrationError(
+                f"Could not acquire merge lock within {self._timeout}s (lock timeout). Lock file: {self._lock_file}",
+            )
         try:
             await self._acquire_file_lock()
         except BaseException:
@@ -170,58 +192,65 @@ class MergeLock:
     def _try_break_stale_lock(self) -> bool:
         """Check if lock is stale and remove it atomically.
 
-        Uses rename-to-temp to avoid TOCTOU: the rename is atomic, so
-        only one process can claim the stale file. After claiming, we
-        check the age and delete the temp file if stale, or rename it
-        back if it turns out to be fresh.
+        Checks staleness *in place* first (no rename) so the canonical
+        path is never absent for a fresh lock.  Only renames to a temp
+        path after the lock is judged stale/dead, then re-verifies to
+        guard against a heartbeat refresh between the initial check and
+        the rename.  Restore (if needed) uses ``os.link`` which never
+        overwrites an existing file, preventing a fresh lock from being
+        clobbered.
 
         Returns True if the stale lock was broken (or already gone).
         """
-        # Atomically claim the lock file by renaming it
+        # 1. Check lock in place — no rename, no window.
+        try:
+            stat = self._lock_file.stat()
+        except FileNotFoundError:
+            return True
+
+        pid, hostname = _read_lock_owner(self._lock_file)
+
+        is_dead = pid is not None and hostname == socket.gethostname() and not _is_pid_alive(pid)
+
+        age = time.time() - stat.st_mtime
+        if not is_dead and age < self._stale_timeout:
+            return False
+
+        # 2. Lock appears stale/dead — atomically claim by rename.
         tmp_path = self._lock_dir / f"merge.lock.breaking.{os.getpid()}"
         try:
             os.rename(str(self._lock_file), str(tmp_path))
         except FileNotFoundError:
-            # Lock was already removed by someone else
             return True
         except OSError:
-            # Rename failed (another process won the race)
             return False
 
-        # We now own the renamed file — check PID liveness first, then age.
+        # 3. Re-verify after claiming.  A heartbeat may have refreshed
+        #    the mtime, or the lock may have been released and
+        #    re-acquired by a new holder between our stat and rename.
         try:
-            stat = tmp_path.stat()
+            post_stat = tmp_path.stat()
         except FileNotFoundError:
             return True
 
-        # Fast path: if the lock holder is dead, break immediately.
-        # Only check when hostname matches (PID is meaningless on another host).
-        pid, hostname = _read_lock_owner(tmp_path)
-        if pid is not None and hostname == socket.gethostname():
-            if not _is_pid_alive(pid):
-                logger.info(
-                    "Breaking merge lock held by dead process (pid=%d, hostname=%s): %s",
-                    pid,
-                    hostname,
-                    self._lock_file,
-                )
-                tmp_path.unlink(missing_ok=True)
-                return True
+        post_pid, post_hostname = _read_lock_owner(tmp_path)
+        post_is_dead = post_pid is not None and post_hostname == socket.gethostname() and not _is_pid_alive(post_pid)
+        post_age = time.time() - post_stat.st_mtime
 
-        age = time.time() - stat.st_mtime
-        if age < self._stale_timeout:
-            # Not actually stale — put it back
+        if not post_is_dead and post_age < self._stale_timeout:
+            # Not actually stale — restore using link (never overwrites).
             try:
-                os.rename(str(tmp_path), str(self._lock_file))
-            except OSError:
-                # Another process created a new lock; discard the old one
-                tmp_path.unlink(missing_ok=True)
+                os.link(str(tmp_path), str(self._lock_file))
+            except (FileExistsError, OSError):
+                pass
+            tmp_path.unlink(missing_ok=True)
             return False
 
-        # Lock is stale — remove the claimed temp file (45-REQ-1.E1)
+        # 4. Confirmed stale — delete.
+        reason = f"dead process (pid={post_pid})" if post_is_dead else f"age={post_age:.1f}s"
         logger.info(
-            "Breaking stale merge lock (age=%.1fs, stale_timeout=%.1fs): %s",
-            age,
+            "Breaking stale merge lock (%s, stale_timeout=%.1fs): %s",
+            reason,
             self._stale_timeout,
             self._lock_file,
         )
@@ -231,16 +260,27 @@ class MergeLock:
     async def release(self) -> None:
         """Release the merge lock by removing the lock file.
 
+        Only unlinks the lock file if it is still owned by this process
+        (matching PID).  After a stale-break, the original holder's
+        ``release()`` must not delete the new holder's lock file.
+
         If the lock file has already been removed (e.g., broken by another
         process as stale), logs a warning and continues without error.
         """
-        # Stop heartbeat before removing the file so the task doesn't race
-        # with the unlink below.
         await self._stop_heartbeat()
 
         try:
-            self._lock_file.unlink()
-            logger.info("Released merge lock: %s", self._lock_file)
+            pid, _ = _read_lock_owner(self._lock_file)
+            if pid is not None and pid != os.getpid():
+                logger.warning(
+                    "Not releasing merge lock: owned by pid %d, we are pid %d: %s",
+                    pid,
+                    os.getpid(),
+                    self._lock_file,
+                )
+            else:
+                self._lock_file.unlink()
+                logger.info("Released merge lock: %s", self._lock_file)
         except FileNotFoundError:
             # 45-REQ-2.E1: already removed
             logger.warning(

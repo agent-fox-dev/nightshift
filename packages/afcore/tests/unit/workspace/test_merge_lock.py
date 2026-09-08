@@ -234,12 +234,24 @@ class TestReleaseMissingLockFile:
 
 
 class TestStaleLockAtomicBreak:
-    """H2: Stale lock breaking does not remove a freshly-acquired lock."""
+    """H2: Stale lock breaking does not remove a freshly-acquired lock.
+
+    Verifies that a fresh lock created by another caller during the
+    stale-break window is not clobbered.
+    """
 
     @pytest.mark.asyncio
-    async def test_break_does_not_remove_fresh_lock(self, lock_repo: Path) -> None:
-        """If the lock file is replaced between stat and unlink, the fresh lock
-        survives."""
+    async def test_fresh_lock_survives_stale_break(self, lock_repo: Path) -> None:
+        """A fresh lock created by another caller between the in-place
+        staleness check and the rename-to-claim is not clobbered.
+
+        Hooks into os.rename: after the rename moves the stale lock to
+        the temp path (leaving the canonical path absent), a fresh lock
+        is created at the canonical path.  The stale-break must not
+        overwrite or delete the fresh lock.
+        """
+        from unittest.mock import patch
+
         lock_repo.mkdir(parents=True)
         agent_fox_dir = lock_repo / ".nightshift"
         agent_fox_dir.mkdir(parents=True, exist_ok=True)
@@ -258,9 +270,53 @@ class TestStaleLockAtomicBreak:
         stale_time = time.time() - 600
         os.utime(lock_file, (stale_time, stale_time))
 
+        fresh_pid = 123456
+        real_rename = os.rename
+
+        def rename_then_create_fresh(src: str, dst: str) -> None:
+            """After the stale lock is renamed away, create a fresh lock."""
+            real_rename(src, dst)
+            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            try:
+                os.write(
+                    fd,
+                    json.dumps({"pid": fresh_pid, "hostname": "new-holder"}).encode(),
+                )
+            finally:
+                os.close(fd)
+
         lock = MergeLock(lock_repo, stale_timeout=300.0, poll_interval=0.05)
 
-        # The lock should be acquirable (stale lock is broken atomically)
+        with patch("afcore.workspace.merge_lock.os.rename", side_effect=rename_then_create_fresh):
+            result = lock._try_break_stale_lock()
+
+        assert result is True
+        # The fresh lock must survive
+        assert lock_file.exists(), "Fresh lock was deleted during stale break"
+        content = json.loads(lock_file.read_text())
+        assert content["pid"] == fresh_pid, "Fresh lock was overwritten"
+
+    @pytest.mark.asyncio
+    async def test_stale_break_still_works_for_genuinely_stale(self, lock_repo: Path) -> None:
+        """Basic stale lock is broken and a fresh lock can be acquired."""
+        lock_repo.mkdir(parents=True)
+        agent_fox_dir = lock_repo / ".nightshift"
+        agent_fox_dir.mkdir(parents=True, exist_ok=True)
+        lock_file = agent_fox_dir / "merge.lock"
+
+        lock_file.write_text(
+            json.dumps(
+                {
+                    "pid": 999999,
+                    "hostname": "old",
+                    "acquired_at": "2026-01-01T00:00:00Z",
+                }
+            )
+        )
+        stale_time = time.time() - 600
+        os.utime(lock_file, (stale_time, stale_time))
+
+        lock = MergeLock(lock_repo, stale_timeout=300.0, poll_interval=0.05)
         await lock.acquire()
         assert lock_file.exists()
         content = json.loads(lock_file.read_text())
@@ -712,3 +768,149 @@ class TestCleanupStaleMergeLock:
 
         assert cleanup_stale_merge_lock(lock_repo) is False
         assert lock_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# Issue #70: release() ownership check
+# ---------------------------------------------------------------------------
+
+
+class TestReleaseOwnershipCheck:
+    """AC-1: release() with wrong PID leaves lock in place."""
+
+    @pytest.mark.asyncio
+    async def test_release_skips_unlink_for_foreign_pid(
+        self,
+        lock_repo: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When the lock file is owned by a different PID, release() does
+        not delete it and logs a warning."""
+        lock_repo.mkdir(parents=True)
+        lock = MergeLock(lock_repo)
+        await lock.acquire()
+        lock_file = lock_repo / ".nightshift" / "merge.lock"
+        assert lock_file.exists()
+
+        # Overwrite the lock file to claim a different PID as owner
+        foreign_pid = os.getpid() + 1000
+        lock_file.write_text(
+            json.dumps(
+                {
+                    "pid": foreign_pid,
+                    "hostname": "other-host",
+                    "acquired_at": "2026-01-01T00:00:00Z",
+                }
+            )
+        )
+
+        with caplog.at_level(logging.WARNING, logger="afcore.workspace.merge_lock"):
+            await lock.release()
+
+        assert lock_file.exists(), "release() deleted a lock owned by another PID"
+        content = json.loads(lock_file.read_text())
+        assert content["pid"] == foreign_pid
+
+        has_warning = any("not releasing" in r.message.lower() for r in caplog.records if r.levelno >= logging.WARNING)
+        assert has_warning, "Expected 'not releasing' warning"
+
+
+# ---------------------------------------------------------------------------
+# Issue #70: fresh lock not broken during in-place staleness check
+# ---------------------------------------------------------------------------
+
+
+class TestInPlaceStalenessCheck:
+    """AC-3: merge.lock is never absent during a stale-break of a fresh lock."""
+
+    @pytest.mark.asyncio
+    async def test_fresh_lock_not_renamed_away(self, lock_repo: Path) -> None:
+        """A fresh lock (age < stale_timeout, holder alive) is never renamed
+        away by _try_break_stale_lock — the method returns False immediately."""
+        import socket
+
+        lock_repo.mkdir(parents=True)
+        agent_fox_dir = lock_repo / ".nightshift"
+        agent_fox_dir.mkdir(parents=True, exist_ok=True)
+        lock_file = agent_fox_dir / "merge.lock"
+
+        lock_file.write_text(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "hostname": socket.gethostname(),
+                    "acquired_at": "2026-01-01T00:00:00Z",
+                }
+            )
+        )
+        os.utime(lock_file, None)
+
+        lock = MergeLock(lock_repo, stale_timeout=9999.0)
+
+        from unittest.mock import patch
+
+        rename_called = False
+        real_rename = os.rename
+
+        def spy_rename(src: str, dst: str) -> None:
+            nonlocal rename_called
+            rename_called = True
+            real_rename(src, dst)
+
+        with patch("afcore.workspace.merge_lock.os.rename", side_effect=spy_rename):
+            result = lock._try_break_stale_lock()
+
+        assert result is False
+        assert not rename_called, "os.rename was called for a fresh lock"
+        assert lock_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# Issue #70: shared asyncio lock across MergeLock instances
+# ---------------------------------------------------------------------------
+
+
+class TestSharedAsyncioLock:
+    """AC-5: Two MergeLock instances for the same repo share one asyncio lock."""
+
+    def test_same_repo_shares_lock(self, lock_repo: Path) -> None:
+        """Two MergeLock instances with the same repo_root share the
+        same asyncio.Lock object."""
+        lock_repo.mkdir(parents=True)
+        a = MergeLock(lock_repo)
+        b = MergeLock(lock_repo)
+        assert a._async_lock is b._async_lock
+
+    def test_different_repo_different_lock(self, tmp_path: Path) -> None:
+        """MergeLock instances for different repos get different locks."""
+        r1 = tmp_path / "repo1"
+        r2 = tmp_path / "repo2"
+        r1.mkdir()
+        r2.mkdir()
+        a = MergeLock(r1)
+        b = MergeLock(r2)
+        assert a._async_lock is not b._async_lock
+
+    @pytest.mark.asyncio
+    async def test_fresh_instances_serialize(self, lock_repo: Path) -> None:
+        """Two fresh MergeLock instances for the same repo serialize
+        correctly via the shared asyncio lock."""
+        lock_repo.mkdir(parents=True)
+        acquired_order: list[int] = []
+
+        async def worker(idx: int, hold: float) -> None:
+            lock = MergeLock(
+                lock_repo,
+                timeout=5.0,
+                poll_interval=0.05,
+            )
+            async with lock:
+                acquired_order.append(idx)
+                await asyncio.sleep(hold)
+
+        t1 = asyncio.create_task(worker(1, 0.2))
+        await asyncio.sleep(0.01)
+        t2 = asyncio.create_task(worker(2, 0.0))
+
+        await asyncio.gather(t1, t2)
+        assert acquired_order == [1, 2]
