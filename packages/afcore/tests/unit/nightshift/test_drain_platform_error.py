@@ -88,12 +88,25 @@ class TestDrainRepollPlatformError:
     @pytest.mark.asyncio
     async def test_drain_raises_on_repoll_error(self) -> None:
         """When list_issues_by_label raises on the re-poll,
-        _drain_issues must propagate the exception (not return True)."""
-        issue = _make_issue(1)
-        engine = _make_engine(raise_on_repoll=True, issues=[issue])
+        _drain_issues must propagate the exception (not return True).
 
-        # Patch _run_issue_check to be a no-op so we isolate re-poll behavior
-        with patch.object(engine, "_run_issue_check", new_callable=AsyncMock):
+        NOTE (issue #90): when ``_run_issue_check`` is a no-op (nothing
+        dispatched, ``seen`` unchanged), the no-progress guard returns
+        ``False`` after the first iteration — the drain no longer reaches
+        the second re-poll.  To test re-poll error propagation we use two
+        issues: the fake check marks #1 as seen, so #2 remains after
+        filtering, causing the loop to continue.  On the second iteration
+        the re-poll raises.
+        """
+        issue1 = _make_issue(1)
+        issue2 = _make_issue(2)
+        engine = _make_engine(raise_on_repoll=True, issues=[issue1, issue2])
+
+        async def fake_issue_check(seen=None):
+            if seen is not None:
+                seen.add(1)
+
+        with patch.object(engine, "_run_issue_check", side_effect=fake_issue_check):
             with pytest.raises(RuntimeError, match="forge unavailable on re-poll"):
                 await engine._drain_issues()
 

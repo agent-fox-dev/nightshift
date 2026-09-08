@@ -755,3 +755,191 @@ class TestLabelFailedConstant:
 
     def test_label_value(self) -> None:
         assert LABEL_FAILED == "af:failed"
+
+
+# ---------------------------------------------------------------------------
+# Issue #90: ceiling-exceeded issues must be removed from the drain queue
+# ---------------------------------------------------------------------------
+
+
+class TestCeilingExceededDrainRemoval:
+    """Verify ceiling-exceeded issues don't spin the drain loop (issue #90)."""
+
+    @pytest.mark.asyncio
+    async def test_ceiling_issue_added_to_seen(self) -> None:
+        """AC-1: Ceiling-hit issue is present in ``seen`` after dispatch."""
+        from afcore.nightshift.engine import NightShiftEngine
+
+        config = MagicMock()
+        config.orchestrator.max_cost = None
+        config.orchestrator.max_sessions = None
+        config.night_shift.similarity_threshold = 0.85
+        config.night_shift.max_attempts_per_issue = 3
+        config.night_shift.max_parallel = 1
+
+        platform = AsyncMock()
+        platform.list_issues_by_label = AsyncMock(return_value=[_make_issue(42)])
+        platform.get_issue = AsyncMock(return_value=_make_issue(42))
+        platform.assign_label = AsyncMock()
+        platform.add_issue_comment = AsyncMock()
+
+        conn = MagicMock()
+        engine = NightShiftEngine(config=config, platform=platform, conn=conn)
+
+        seen: set[int] = set()
+
+        with (
+            patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
+            patch(
+                "afcore.nightshift.engine.fetch_github_relationships",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch("afcore.nightshift.engine.build_graph", return_value=[42]),
+            patch.object(engine, "_exceeds_attempt_ceiling", return_value=True),
+        ):
+            await engine._run_issue_check(seen)
+
+        assert 42 in seen
+
+    @pytest.mark.asyncio
+    async def test_ceiling_issue_added_to_processed_issues(self) -> None:
+        """AC-1: Ceiling-hit issue is present in ``_processed_issues``."""
+        from afcore.nightshift.engine import NightShiftEngine
+
+        config = MagicMock()
+        config.orchestrator.max_cost = None
+        config.orchestrator.max_sessions = None
+        config.night_shift.similarity_threshold = 0.85
+        config.night_shift.max_attempts_per_issue = 3
+        config.night_shift.max_parallel = 1
+
+        platform = AsyncMock()
+        platform.list_issues_by_label = AsyncMock(return_value=[_make_issue(42)])
+        platform.get_issue = AsyncMock(return_value=_make_issue(42))
+        platform.assign_label = AsyncMock()
+        platform.add_issue_comment = AsyncMock()
+
+        conn = MagicMock()
+        engine = NightShiftEngine(config=config, platform=platform, conn=conn)
+
+        with (
+            patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
+            patch(
+                "afcore.nightshift.engine.fetch_github_relationships",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch("afcore.nightshift.engine.build_graph", return_value=[42]),
+            patch.object(engine, "_exceeds_attempt_ceiling", return_value=True),
+        ):
+            await engine._run_issue_check()
+
+        assert 42 in engine._processed_issues
+
+    @pytest.mark.asyncio
+    async def test_ceiling_issue_gets_af_failed_label(self) -> None:
+        """AC-4: Ceiling-hit issue is labelled af:failed so it survives restarts."""
+        from afcore.nightshift.engine import NightShiftEngine
+
+        config = MagicMock()
+        config.orchestrator.max_cost = None
+        config.orchestrator.max_sessions = None
+        config.night_shift.similarity_threshold = 0.85
+        config.night_shift.max_attempts_per_issue = 3
+        config.night_shift.max_parallel = 1
+
+        platform = AsyncMock()
+        platform.list_issues_by_label = AsyncMock(return_value=[_make_issue(42)])
+        platform.get_issue = AsyncMock(return_value=_make_issue(42))
+        platform.assign_label = AsyncMock()
+        platform.add_issue_comment = AsyncMock()
+
+        conn = MagicMock()
+        engine = NightShiftEngine(config=config, platform=platform, conn=conn)
+
+        with (
+            patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
+            patch(
+                "afcore.nightshift.engine.fetch_github_relationships",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch("afcore.nightshift.engine.build_graph", return_value=[42]),
+            patch.object(engine, "_exceeds_attempt_ceiling", return_value=True),
+        ):
+            await engine._run_issue_check()
+
+        platform.assign_label.assert_called_once_with(42, LABEL_FAILED)
+
+    @pytest.mark.asyncio
+    async def test_drain_returns_true_with_only_ceiling_issues(self) -> None:
+        """AC-2: Drain returns True on first iteration when only ceiling issues exist."""
+        from afcore.nightshift.engine import NightShiftEngine
+
+        config = MagicMock()
+        config.orchestrator.max_cost = None
+        config.orchestrator.max_sessions = None
+        config.night_shift.similarity_threshold = 0.85
+        config.night_shift.max_attempts_per_issue = 3
+        config.night_shift.max_parallel = 1
+
+        issue = _make_issue(200)
+        platform = AsyncMock()
+        platform.list_issues_by_label = AsyncMock(return_value=[issue])
+        platform.get_issue = AsyncMock(return_value=issue)
+        platform.assign_label = AsyncMock()
+        platform.add_issue_comment = AsyncMock()
+
+        conn = MagicMock()
+        engine = NightShiftEngine(config=config, platform=platform, conn=conn)
+
+        triage_calls: list[int] = []
+
+        async def fake_run_issue_check(seen=None):
+            triage_calls.append(1)
+            seen_set = seen if seen is not None else set()
+            with (
+                patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
+                patch(
+                    "afcore.nightshift.engine.fetch_github_relationships",
+                    new=AsyncMock(return_value=[]),
+                ),
+                patch("afcore.nightshift.engine.build_graph", return_value=[200]),
+                patch.object(engine, "_exceeds_attempt_ceiling", return_value=True),
+            ):
+                await engine.__class__._run_issue_check(engine, seen_set)
+
+        with patch.object(engine, "_run_issue_check", side_effect=fake_run_issue_check):
+            result = await engine._drain_issues()
+
+        assert result is True
+        assert len(triage_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_drain_no_progress_guard(self) -> None:
+        """AC-5: Drain terminates when an iteration dispatches nothing."""
+        from afcore.nightshift.engine import NightShiftEngine
+
+        config = MagicMock()
+        config.orchestrator.max_cost = None
+        config.orchestrator.max_sessions = None
+        config.night_shift.similarity_threshold = 0.85
+        config.night_shift.max_attempts_per_issue = 3
+
+        issue = _make_issue(300)
+        platform = AsyncMock()
+        platform.list_issues_by_label = AsyncMock(return_value=[issue])
+        platform.assign_label = AsyncMock()
+        platform.add_issue_comment = AsyncMock()
+
+        engine = NightShiftEngine(config=config, platform=platform)
+
+        iteration_count = 0
+
+        async def noop_issue_check(seen=None):
+            nonlocal iteration_count
+            iteration_count += 1
+
+        with patch.object(engine, "_run_issue_check", side_effect=noop_issue_check):
+            result = await engine._drain_issues()
+
+        assert result is False
+        assert iteration_count == 1
