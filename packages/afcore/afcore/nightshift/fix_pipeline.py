@@ -37,6 +37,7 @@ from afcore.nightshift.spec_builder import (
     build_in_memory_spec,
 )
 from afcore.session.context import render_inmemory_spec_sections
+from afcore.session.steering import load_steering
 from afcore.ui.progress import ActivityCallback, SpinnerCallback, TaskCallback, TaskEvent
 from afcore.workspace import WorkspaceInfo
 from afcore.workspace import git as _workspace_git
@@ -56,6 +57,13 @@ logger = logging.getLogger(__name__)
 # Must be added to afissues.labels.REQUIRED_LABELS once that package is updated.
 # Requirements: NS-REQ-2 (issue #37)
 LABEL_FAILED: str = "af:failed"
+
+# Maximum character count for steering content injected into prompts.
+# Prevents an oversized steering file from growing prompts without bound.
+# ~2 000 tokens at ~4 chars/token — generous enough for real house rules,
+# small enough to leave headroom for the issue context and knowledge facts.
+# Requirements: NS-REQ-4 (issue #78)
+_MAX_STEERING_CHARS: int = 8000
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +476,37 @@ class FixPipeline:
 
         facts_text = "\n".join(f"- {sanitize_prompt_content(fact, label='memory-fact')}" for fact in knowledge_items)
         return f"## Memory Facts\n\n{facts_text}"
+
+    # ------------------------------------------------------------------
+    # Steering directive injection (issue #78)
+    # ------------------------------------------------------------------
+
+    def _load_steering_section(self) -> str:
+        """Load and budget steering directives for prompt injection.
+
+        Returns a formatted ``## Steering Directives`` section string, or
+        an empty string when the steering file is absent, placeholder-only,
+        or empty.
+
+        Oversized content is truncated to ``_MAX_STEERING_CHARS`` characters
+        to prevent an unbounded steering file from growing prompts without
+        limit (NS-REQ-4).
+
+        Requirements: NS-REQ-1 (issue #78), NS-REQ-4 (issue #78)
+        """
+        content = load_steering(self._repo_root)
+        if not content:
+            return ""
+
+        # Truncate to budget (NS-REQ-4)
+        if len(content) > _MAX_STEERING_CHARS:
+            content = content[:_MAX_STEERING_CHARS] + "\n\n<!-- steering truncated -->"
+            logger.warning(
+                "Steering content exceeded %d chars, truncated for prompt budget",
+                _MAX_STEERING_CHARS,
+            )
+
+        return f"## Steering Directives\n\n{content}"
 
     # ------------------------------------------------------------------
 
@@ -987,6 +1026,12 @@ class FixPipeline:
         else:
             context = self._assemble_afspec_context(spec, triage, knowledge_context)
 
+        # NS-REQ-1 (issue #78): inject steering directives after spec/issue
+        # context and before the profile layer.
+        steering_section = self._load_steering_section()
+        if steering_section:
+            context = f"{context}\n\n{steering_section}"
+
         system_prompt = build_system_prompt(
             context=context,
             archetype="coder",
@@ -1033,11 +1078,16 @@ class FixPipeline:
         """
         from afcore.session.prompt import build_system_prompt
 
+        # NS-REQ-1 (issue #78): load steering once for both branches.
+        steering_section = self._load_steering_section()
+
         # Empty triage: skip afspec rendering and use fallback message
         if not triage.criteria:
             reviewer_context = spec.system_context
             if knowledge_context:
                 reviewer_context = f"{reviewer_context}\n\n{knowledge_context}"
+            if steering_section:
+                reviewer_context = f"{reviewer_context}\n\n{steering_section}"
             system_prompt = build_system_prompt(
                 context=reviewer_context,
                 archetype="reviewer",
@@ -1052,6 +1102,10 @@ class FixPipeline:
             return system_prompt, task_prompt
 
         context = self._assemble_afspec_context(spec, triage, knowledge_context)
+
+        # NS-REQ-1 (issue #78): inject steering directives.
+        if steering_section:
+            context = f"{context}\n\n{steering_section}"
 
         system_prompt = build_system_prompt(
             context=context,
@@ -1167,12 +1221,29 @@ class FixPipeline:
             "}\n"
             "Use EXACT case as shown for tier values."
         )
+
+        # NS-REQ-1 (issue #78): build an explicit system prompt with
+        # steering directives so the triage session sees house rules.
+        from afcore.session.prompt import build_system_prompt
+
+        triage_context = spec.system_context
+        steering_section = self._load_steering_section()
+        if steering_section:
+            triage_context = f"{triage_context}\n\n{steering_section}"
+        triage_system_prompt = build_system_prompt(
+            context=triage_context,
+            archetype="maintainer",
+            mode="fix-triage",
+            project_dir=self._repo_root,
+        )
+
         try:
             outcome = await self._run_session(
                 "maintainer",
                 workspace,
                 spec=spec,
                 mode="fix-triage",
+                system_prompt=triage_system_prompt,
                 task_prompt=triage_task,
             )
             triage_cost = self._emit_session_event(
