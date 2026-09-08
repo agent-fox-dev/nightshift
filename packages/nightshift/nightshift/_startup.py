@@ -159,24 +159,45 @@ def cleanup_runs_on_shutdown(kdb) -> None:
 
 
 def wrap_task_callback(progress, om):
-    """Bridge UI task events to JSONL when ``om.json_mode`` is active."""
+    """Bridge UI task events to JSONL when ``om.json_mode`` is active.
+
+    Emits ``task_started`` once per *node_id* when it is first seen, and
+    pairs every terminal event (``completed`` / ``failed``) with a
+    preceding ``task_started``.  The ``duration_s`` carried by the
+    incoming :class:`~afcore.ui.progress.TaskEvent` is forwarded
+    verbatim so the JSONL stream reports real wall-clock durations
+    rather than the near-zero artefact of back-to-back start/complete
+    calls.
+    """
     if not om.json_mode:
         return progress.task_callback
     from afcore.io.progress import ProgressDisplay as JsonlProgress
 
     jl = JsonlProgress(output_manager=om, json_mode=True)
     ui_cb = progress.task_callback
+    seen: set[str | None] = set()
+
+    def _ensure_started(nid: str | None) -> None:
+        if nid not in seen:
+            seen.add(nid)
+            jl.task_started(node_id=nid)
 
     def _cb(event):
         ui_cb(event)
         nid = getattr(event, "node_id", None)
         status = getattr(event, "status", "")
+        dur = getattr(event, "duration_s", None)
         if status == "completed":
-            jl.task_started(node_id=nid)
-            jl.task_completed(node_id=nid)
+            _ensure_started(nid)
+            jl.task_completed(node_id=nid, duration_s=dur)
         elif status == "failed":
-            jl.task_failed(node_id=nid, error=getattr(event, "error_message", "") or "")
+            _ensure_started(nid)
+            jl.task_failed(
+                node_id=nid,
+                error=getattr(event, "error_message", "") or "",
+                duration_s=dur,
+            )
         else:
-            jl.task_started(node_id=nid)
+            _ensure_started(nid)
 
     return _cb

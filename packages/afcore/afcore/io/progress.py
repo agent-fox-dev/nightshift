@@ -55,9 +55,13 @@ class ProgressDisplay:
         }
         self._om.emit_progress(event)
 
-    def task_completed(self, node_id: str | None) -> None:
-        """Emit ``task_completed`` JSONL event with duration."""
-        duration_s = self._compute_duration(node_id)
+    def task_completed(self, node_id: str | None, *, duration_s: float | None = None) -> None:
+        """Emit ``task_completed`` JSONL event with duration.
+
+        When *duration_s* is supplied it is used verbatim; otherwise the
+        elapsed time since the matching ``task_started`` call is computed.
+        """
+        resolved = duration_s if duration_s is not None else self._compute_duration(node_id)
         if not self._json_mode:
             return
         if node_id is None or node_id == "":
@@ -65,23 +69,35 @@ class ProgressDisplay:
         event = {
             "event": "task_completed",
             "node_id": node_id if node_id else None,
-            "duration_s": duration_s,
+            "duration_s": resolved,
             "timestamp": _iso_timestamp(),
         }
         self._om.emit_progress(event)
 
-    def task_failed(self, node_id: str | None, *, error: str = "") -> None:
-        """Emit ``task_failed`` JSONL event with error message."""
+    def task_failed(
+        self,
+        node_id: str | None,
+        *,
+        error: str = "",
+        duration_s: float | None = None,
+    ) -> None:
+        """Emit ``task_failed`` JSONL event with error message.
+
+        When *duration_s* is supplied it is included in the event;
+        otherwise duration is omitted from the failure record.
+        """
         if not self._json_mode:
             return
         if node_id is None or node_id == "":
             self._warn_null_node_id()
-        event = {
+        event: dict = {
             "event": "task_failed",
             "node_id": node_id if node_id else None,
             "error": error,
             "timestamp": _iso_timestamp(),
         }
+        if duration_s is not None:
+            event["duration_s"] = duration_s
         self._om.emit_progress(event)
 
     def _compute_duration(self, node_id: str | None) -> float:
