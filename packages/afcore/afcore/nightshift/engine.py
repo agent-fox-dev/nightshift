@@ -544,9 +544,9 @@ class NightShiftEngine:
                 # may have closed the issue or removed its af:fix label.
                 try:
                     fresh = await self._platform.get_issue(issue_num)  # type: ignore[attr-defined]
-                    # Check closed state (forward-compatible with IssueResult
-                    # gaining a ``state`` field in the future).
-                    if getattr(fresh, "state", "open") == "closed":
+                    # Check closed state — IssueResult.state is populated by
+                    # all platform implementations (issue #46).
+                    if fresh.state == "closed":
                         logger.info(
                             "Issue #%d was closed between poll and dispatch, skipping",
                             issue_num,
