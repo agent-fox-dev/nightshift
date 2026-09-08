@@ -2004,7 +2004,12 @@ class FixPipeline:
             )
             return False
 
-    async def _auto_commit_pending_changes(self, workspace: WorkspaceInfo) -> None:
+    async def _auto_commit_pending_changes(
+        self,
+        workspace: WorkspaceInfo,
+        *,
+        message: str | None = None,
+    ) -> None:
         """Stage and commit any uncommitted changes left in the worktree.
 
         Called between the coder-reviewer loop and harvest to prevent silent
@@ -2016,8 +2021,12 @@ class FixPipeline:
         """
         from afcore.workspace import git as workspace_git
 
+        kwargs: dict[str, str] = {}
+        if message is not None:
+            kwargs["message"] = message
+
         try:
-            committed = await workspace_git.auto_commit_worktree(workspace.path)
+            committed = await workspace_git.auto_commit_worktree(workspace.path, **kwargs)
             if committed:
                 logger.info(
                     "Auto-committed uncommitted changes from coder session in worktree %s",

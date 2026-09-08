@@ -5836,7 +5836,7 @@ class TestSmokeCiFailureReEntry:
 
         # _auto_commit_pending_changes called
         mock_pipeline._auto_commit_pending_changes.assert_called_once()
-        commit_msg = mock_pipeline._auto_commit_pending_changes.call_args[0][0]
+        commit_msg = mock_pipeline._auto_commit_pending_changes.call_args.kwargs["message"]
         assert "feedback" in commit_msg.lower() or "#2" in commit_msg
 
         # Force-push executed after comment
