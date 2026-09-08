@@ -1969,3 +1969,218 @@ class TestCachePolicyWarningLevel:
         mock_logger.debug.assert_called_once()
         debug_msg = mock_logger.debug.call_args[0][0]
         assert "cache_policy" in debug_msg
+
+
+# ---------------------------------------------------------------------------
+# Issue #42: Incremental message streaming (unbuffered execute)
+# Requirements: NS-REQ-1 through NS-REQ-4
+# ---------------------------------------------------------------------------
+
+
+class TestIncrementalMessageStreaming:
+    """TS-NS-1: Messages are yielded incrementally as they arrive.
+
+    Requirement: NS-REQ-1
+    """
+
+    @pytest.mark.asyncio
+    async def test_messages_yielded_before_stream_completes(self) -> None:
+        """AC-1: The first message is received by the caller before the second
+        message is produced by the mock stream.
+
+        Instruments a two-message mock stream with an asyncio.Event that is
+        set when the caller receives the first message.  The second message
+        is only produced after the event is checked.
+        """
+        first_received = asyncio.Event()
+        second_produced = asyncio.Event()
+
+        async def _instrumented_stream(*, prompt, options):
+            yield AssistantMessage(content="first")
+            # Wait briefly for the caller to process the first message.
+            # If buffering, first_received won't be set until after this
+            # entire generator is exhausted.
+            await asyncio.sleep(0)  # Yield control to the event loop
+            if not first_received.is_set():
+                pytest.fail("First message was not yielded before second was produced")
+            second_produced.set()
+            yield ResultMessage(
+                status="completed",
+                input_tokens=10,
+                output_tokens=5,
+                duration_ms=100,
+                error_message=None,
+                is_error=False,
+            )
+
+        backend = ClaudeBackend()
+        messages = []
+        with patch.object(backend, "_stream_messages", _instrumented_stream):
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+            ):
+                messages.append(msg)
+                if len(messages) == 1:
+                    first_received.set()
+
+        assert len(messages) == 2
+        assert isinstance(messages[0], AssistantMessage)
+        assert messages[0].content == "first"
+        assert isinstance(messages[1], ResultMessage)
+        assert second_produced.is_set()
+
+
+class TestRetryBeforeFirstYield:
+    """TS-NS-2: Transport failure before any message is yielded is retried.
+
+    Requirement: NS-REQ-2
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_on_error_before_first_yield(self) -> None:
+        """AC-2: When _stream_messages raises before yielding any messages,
+        the retry loop retries and the second attempt's messages are delivered.
+        No error ResultMessage is emitted.
+        """
+        call_count = 0
+
+        async def _fail_then_succeed(*, prompt, options):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise OSError("connection refused")
+            yield AssistantMessage(content="hello")
+            yield ResultMessage(
+                status="completed",
+                input_tokens=10,
+                output_tokens=5,
+                duration_ms=100,
+                error_message=None,
+                is_error=False,
+            )
+
+        backend = ClaudeBackend()
+        with (
+            patch.object(backend, "_stream_messages", _fail_then_succeed),
+            patch("afcore.session.backends.claude.asyncio.sleep"),
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+            ):
+                messages.append(msg)
+
+        assert call_count == 2
+        assert len(messages) == 2
+        assert isinstance(messages[0], AssistantMessage)
+        assert isinstance(messages[1], ResultMessage)
+        assert messages[1].is_error is False
+        # No error result was emitted
+        error_results = [m for m in messages if isinstance(m, ResultMessage) and m.is_error]
+        assert len(error_results) == 0
+
+
+class TestNoReplayAfterYield:
+    """TS-NS-3: Failure after yielding does not replay and produces error result.
+
+    Requirement: NS-REQ-3
+    """
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_failure_no_replay(self) -> None:
+        """AC-3: When the stream yields one message then raises, the caller
+        receives exactly the one message followed by a ResultMessage(is_error=True).
+        The first message is not emitted twice and the retry loop is not entered.
+        """
+        call_count = 0
+
+        async def _yield_then_fail(*, prompt, options):
+            nonlocal call_count
+            call_count += 1
+            yield AssistantMessage(content="partial")
+            raise ConnectionError("stream interrupted")
+
+        backend = ClaudeBackend()
+        with (
+            patch.object(backend, "_stream_messages", _yield_then_fail),
+            patch("afcore.session.backends.claude.asyncio.sleep") as mock_sleep,
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+            ):
+                messages.append(msg)
+
+        # Exactly two messages: the partial message + error result
+        assert len(messages) == 2
+        assert isinstance(messages[0], AssistantMessage)
+        assert messages[0].content == "partial"
+        assert isinstance(messages[1], ResultMessage)
+        assert messages[1].is_error is True
+        assert messages[1].is_transport_error is True
+        assert "stream interrupted" in messages[1].error_message
+
+        # No retry — _stream_messages called only once, no sleep
+        assert call_count == 1
+        mock_sleep.assert_not_called()
+
+
+class TestTruncatedStreamNoReplay:
+    """TS-NS-4: Stream closes without ResultMessage — synthetic error, no replay.
+
+    Requirement: NS-REQ-4
+    """
+
+    @pytest.mark.asyncio
+    async def test_truncated_stream_emits_synthetic_error(self) -> None:
+        """AC-4: When the stream yields non-result messages and closes without
+        a ResultMessage, the caller receives those messages followed by a
+        synthetic ResultMessage(is_error=True, is_transport_error=True).
+        The attempt is not replayed.
+        """
+        call_count = 0
+
+        async def _truncated_stream(*, prompt, options):
+            nonlocal call_count
+            call_count += 1
+            yield AssistantMessage(content="msg1")
+            yield ToolUseMessage(tool_name="Bash", tool_input={"command": "ls"})
+            # No ResultMessage — stream ends here
+
+        backend = ClaudeBackend()
+        with (
+            patch.object(backend, "_stream_messages", _truncated_stream),
+            patch("afcore.session.backends.claude.asyncio.sleep") as mock_sleep,
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test",
+                system_prompt="sys",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+            ):
+                messages.append(msg)
+
+        # Three messages: msg1, tool use, synthetic error result
+        assert len(messages) == 3
+        assert isinstance(messages[0], AssistantMessage)
+        assert messages[0].content == "msg1"
+        assert isinstance(messages[1], ToolUseMessage)
+        assert messages[1].tool_name == "Bash"
+        assert isinstance(messages[2], ResultMessage)
+        assert messages[2].is_error is True
+        assert messages[2].is_transport_error is True
+        assert "without a result" in messages[2].error_message
+
+        # _stream_messages called exactly once — no replay
+        assert call_count == 1
+        mock_sleep.assert_not_called()

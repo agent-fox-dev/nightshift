@@ -233,11 +233,17 @@ class ClaudeBackend:
         if hooks:
             options.hooks = hooks
 
-        # Transport-layer retry loop (AC-1 through AC-4).
-        # Transient errors (connection failure or missing ResultMessage) are
-        # retried up to _MAX_TRANSPORT_RETRIES times with exponential backoff
-        # before a terminal failure ResultMessage is emitted.  These retries
-        # are invisible to the orchestrator's retry loop.
+        # Transport-layer retry loop (AC-1 through AC-4, issue #42).
+        #
+        # Messages are yielded incrementally as they arrive from the SDK
+        # stream, so consumers (audit events, DuckDB rows, trace events)
+        # receive them in real time rather than in a burst at session end.
+        #
+        # Retry gate: once we have yielded at least one message to the
+        # caller we cannot retry the attempt (that would duplicate the
+        # already-delivered prefix).  Transient errors that occur *before*
+        # the first yield are still retried up to _MAX_TRANSPORT_RETRIES
+        # times with exponential backoff.
         last_error: str | None = None
         for _attempt in range(_MAX_TRANSPORT_RETRIES):
             if _attempt > 0:
@@ -250,7 +256,7 @@ class ClaudeBackend:
                 )
                 await asyncio.sleep(delay)
 
-            buffered: list[AgentMessage] = []
+            yielded_any = False
             saw_result = False
             is_transport_failure = False
 
@@ -258,7 +264,8 @@ class ClaudeBackend:
                 async for message in self._stream_messages(prompt=prompt, options=options):
                     if isinstance(message, ResultMessage):
                         saw_result = True
-                    buffered.append(message)
+                    yield message
+                    yielded_any = True
             except asyncio.CancelledError:
                 # AC-5 (#536): Task was cancelled (e.g. SIGINT). Do not retry —
                 # propagate immediately so the asyncio task is properly cancelled.
@@ -283,6 +290,26 @@ class ClaudeBackend:
                     )
                     return
 
+                if yielded_any:
+                    # Messages were already delivered — retrying would
+                    # duplicate them.  Emit a terminal error result.
+                    logger.error(
+                        "ClaudeBackend: transport error after yielding messages (attempt %d/%d, not retryable): %s",
+                        _attempt + 1,
+                        _MAX_TRANSPORT_RETRIES,
+                        exc,
+                    )
+                    yield ResultMessage(
+                        status="failed",
+                        input_tokens=0,
+                        output_tokens=0,
+                        duration_ms=0,
+                        error_message=f"Transport error mid-stream: {exc_str}",
+                        is_error=True,
+                        is_transport_error=True,
+                    )
+                    return
+
                 # 26-REQ-2.E1: Connection/OS errors are transient transport failures
                 last_error = exc_str
                 logger.warning(
@@ -294,6 +321,26 @@ class ClaudeBackend:
                 is_transport_failure = True
 
             if not is_transport_failure and not saw_result:
+                if yielded_any:
+                    # Messages were yielded but no ResultMessage arrived.
+                    # Cannot retry — emit a synthetic failure result.
+                    logger.error(
+                        "ClaudeBackend: stream ended without ResultMessage after "
+                        "yielding messages (attempt %d/%d, not retryable)",
+                        _attempt + 1,
+                        _MAX_TRANSPORT_RETRIES,
+                    )
+                    yield ResultMessage(
+                        status="failed",
+                        input_tokens=0,
+                        output_tokens=0,
+                        duration_ms=0,
+                        error_message="Backend stream ended without a result message.",
+                        is_error=True,
+                        is_transport_error=True,
+                    )
+                    return
+
                 last_error = "Backend stream ended without a result message."
                 logger.warning(
                     "ClaudeBackend stream ended without ResultMessage (attempt %d/%d)",
@@ -303,9 +350,7 @@ class ClaudeBackend:
                 is_transport_failure = True
 
             if not is_transport_failure:
-                # Successful stream — yield buffered messages and return.
-                for msg in buffered:
-                    yield msg
+                # Successful stream — all messages already yielded inline.
                 return
 
         # All transport retries exhausted — emit a terminal transport-error result.
