@@ -77,3 +77,57 @@ class TestTraceConstantRemoved:
 
         name = logging.getLevelName(5)
         assert name != "TRACE", f"Expected level 5 not to be 'TRACE', got {name!r}"
+
+
+class TestLiveConsoleMarkupDisabled:
+    """Bracketed TOML table names must survive the Rich Live console.
+
+    ``console.print()`` parses markup by default, so a message naming
+    ``[gate]`` or ``[models.tier_defaults]`` had the bracketed text deleted
+    from the output — exactly the part telling the user what to configure.
+    ``highlight=False`` does not disable markup; ``markup=False`` does.
+    """
+
+    @staticmethod
+    def _render(message: str) -> str:
+        import io
+
+        from afcore.core.logging import LiveAwareHandler
+        from rich.console import Console
+
+        buffer = io.StringIO()
+        console = Console(file=buffer, force_terminal=False, width=200, soft_wrap=True)
+
+        handler = LiveAwareHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler.set_live_console(console)
+        handler.emit(
+            logging.LogRecord(
+                name="afcore.test",
+                level=logging.WARNING,
+                pathname=__file__,
+                lineno=1,
+                msg=message,
+                args=(),
+                exc_info=None,
+            )
+        )
+        return buffer.getvalue()
+
+    def test_gate_table_name_survives(self) -> None:
+        """The [gate] hint is what the warning exists to deliver."""
+        output = self._render("Configure [gate] command in config.toml")
+
+        assert "[gate]" in output
+
+    def test_models_table_name_survives(self) -> None:
+        """The inaccessible-model error prints a [models.tier_defaults] block."""
+        output = self._render('  [models.tier_defaults]\n  SIMPLE = "claude-sonnet-5"')
+
+        assert "[models.tier_defaults]" in output
+
+    def test_bracketed_text_is_not_treated_as_style(self) -> None:
+        """A bracket sequence that is not a valid style must not raise."""
+        output = self._render("ignored entirely, including any [models] overrides")
+
+        assert "[models]" in output

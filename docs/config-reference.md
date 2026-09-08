@@ -341,7 +341,13 @@ Custom per-model pricing for cost tracking.
 | `cache_creation_price_per_m` | float | `0.0` | USD per million cache-creation tokens |
 
 Built-in defaults cover `claude-haiku-4-5`, `claude-sonnet-4-6`,
-`claude-opus-4-5`, and `claude-opus-4-6`.
+`claude-opus-4-5`, `claude-opus-4-6`, `claude-sonnet-5`, and `claude-opus-5`.
+
+A model with no pricing entry is costed at **zero**, which means
+`orchestrator.max_budget_usd` never trips for it. If you point a tier at a
+model that is not listed above, add a `[pricing.models.<id>]` entry for it in
+the same config — nightshift logs `Model '<id>' not found in pricing config;
+using zero cost` when this happens.
 
 ```toml
 [pricing.models.claude-sonnet-4-6]

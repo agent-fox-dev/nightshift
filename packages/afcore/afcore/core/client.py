@@ -380,7 +380,14 @@ def create_async_anthropic_client() -> anthropic.AsyncAnthropic:
 
 
 def extract_response_text(response: Any) -> str | None:
-    """Extract text from the first content block of an Anthropic API response.
+    """Extract text from the content blocks of an Anthropic API response.
+
+    Scans for the first ``text`` block rather than assuming ``content[0]``.
+    Models that think by default (Claude Opus 5, Sonnet 5, and the 4.6+
+    family under adaptive thinking) put a ``thinking`` block first; that
+    block carries ``.thinking``, not ``.text``, so reading ``content[0]``
+    returned None and callers reported "no text content" for a perfectly
+    good response.
 
     Returns the text string, or None if the response has no text content.
     Works with both real SDK response objects and test mocks.
@@ -388,7 +395,21 @@ def extract_response_text(response: Any) -> str | None:
     content = getattr(response, "content", None)
     if not content:
         return None
-    return getattr(content[0], "text", None)
+
+    # Real SDK blocks declare their type — take the first genuine text block.
+    for block in content:
+        if getattr(block, "type", None) == "text":
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                return text
+
+    # Test doubles often omit `type`; fall back to the first block with text.
+    for block in content:
+        text = getattr(block, "text", None)
+        if text is not None:
+            return text
+
+    return None
 
 
 # ---------------------------------------------------------------------------
