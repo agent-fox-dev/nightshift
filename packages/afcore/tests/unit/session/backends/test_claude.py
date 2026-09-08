@@ -1844,3 +1844,128 @@ class TestIsRootRestrictionError:
         from afcore.session.backends.claude import _is_root_restriction_error
 
         assert _is_root_restriction_error("running as root user") is False
+
+
+# ---------------------------------------------------------------------------
+# Issue #40: cache_policy WARNING when non-default
+# Requirement: NS-REQ-5
+# ---------------------------------------------------------------------------
+
+
+class TestCachePolicyWarningLevel:
+    """Verify ClaudeBackend emits WARNING (not DEBUG) when cache_policy is non-default.
+
+    TS-NS-5: ClaudeBackend.execute() upgrades the log from DEBUG to WARNING
+    when cache_policy != DEFAULT.
+    """
+
+    @pytest.mark.asyncio
+    async def test_extended_emits_warning(self) -> None:
+        """cache_policy='EXTENDED' produces a WARNING-level log."""
+        backend = ClaudeBackend()
+
+        # Patch _stream_messages to yield a simple result without launching a subprocess
+        result_msg = ResultMessage(
+            status="completed",
+            input_tokens=100,
+            output_tokens=50,
+            duration_ms=1000,
+            error_message=None,
+            is_error=False,
+        )
+
+        async def _fake_stream(*, prompt, options):
+            yield result_msg
+
+        with (
+            patch.object(backend, "_stream_messages", side_effect=_fake_stream),
+            patch("afcore.session.backends.claude.logger") as mock_logger,
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test prompt",
+                system_prompt="test system",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                cache_policy="EXTENDED",
+            ):
+                messages.append(msg)
+
+        # Should have called logger.warning, not logger.debug
+        mock_logger.warning.assert_called_once()
+        warning_msg = mock_logger.warning.call_args[0][0]
+        assert "cache_policy" in warning_msg
+        assert "not honoured" in warning_msg
+
+    @pytest.mark.asyncio
+    async def test_none_no_log(self) -> None:
+        """cache_policy='NONE' (parameter default) produces no log."""
+        backend = ClaudeBackend()
+
+        result_msg = ResultMessage(
+            status="completed",
+            input_tokens=100,
+            output_tokens=50,
+            duration_ms=1000,
+            error_message=None,
+            is_error=False,
+        )
+
+        async def _fake_stream(*, prompt, options):
+            yield result_msg
+
+        with (
+            patch.object(backend, "_stream_messages", side_effect=_fake_stream),
+            patch("afcore.session.backends.claude.logger") as mock_logger,
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test prompt",
+                system_prompt="test system",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                cache_policy="NONE",
+            ):
+                messages.append(msg)
+
+        # NONE is the parameter default — no warning or debug log about cache_policy
+        mock_logger.warning.assert_not_called()
+        mock_logger.debug.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_no_warning(self) -> None:
+        """cache_policy='DEFAULT' produces no WARNING — only DEBUG."""
+        backend = ClaudeBackend()
+
+        result_msg = ResultMessage(
+            status="completed",
+            input_tokens=100,
+            output_tokens=50,
+            duration_ms=1000,
+            error_message=None,
+            is_error=False,
+        )
+
+        async def _fake_stream(*, prompt, options):
+            yield result_msg
+
+        with (
+            patch.object(backend, "_stream_messages", side_effect=_fake_stream),
+            patch("afcore.session.backends.claude.logger") as mock_logger,
+        ):
+            messages = []
+            async for msg in backend.execute(
+                "test prompt",
+                system_prompt="test system",
+                model="claude-sonnet-4-6",
+                cwd="/tmp",
+                cache_policy="DEFAULT",
+            ):
+                messages.append(msg)
+
+        # DEFAULT should NOT produce a warning
+        mock_logger.warning.assert_not_called()
+        # Should produce a debug log instead
+        mock_logger.debug.assert_called_once()
+        debug_msg = mock_logger.debug.call_args[0][0]
+        assert "cache_policy" in debug_msg

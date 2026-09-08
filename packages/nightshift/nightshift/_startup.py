@@ -63,6 +63,36 @@ def check_root_permission_mode(config) -> None:
         sys.exit(1)
 
 
+def check_cache_policy_advisory(config) -> None:
+    """Warn once at startup when cache_policy is non-default on a backend that ignores it.
+
+    The ``claude`` backend delegates request construction to the Claude Code
+    CLI subprocess, which manages its own prompt caching.  A non-default
+    ``cache_policy`` is recorded for metric correlation but does not change
+    caching behaviour.  This warning prevents operators from believing their
+    setting controls spend.
+
+    Issue #40.
+    """
+    from afcore.core.config import CachePolicy
+
+    policy = getattr(getattr(config, "caching", None), "cache_policy", CachePolicy.DEFAULT)
+    if policy == CachePolicy.DEFAULT:
+        return
+
+    backend_name = getattr(getattr(config, "backend", None), "provider", "claude")
+    if backend_name != "claude":
+        return
+
+    logger.warning(
+        "cache_policy is set to '%s' but the '%s' backend cannot honour it — "
+        "the Claude Code CLI subprocess manages its own prompt caching. "
+        "This setting is advisory only and records intent for metric correlation.",
+        policy.value,
+        backend_name,
+    )
+
+
 def init_knowledge(config, project_root):
     """Open knowledge store, run migrations. Returns (db, sink, provider)."""
     kdb = sink = kprov = None

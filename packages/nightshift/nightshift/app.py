@@ -90,13 +90,20 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     from afcore.workspace.repo_root import resolve_repo_root
     from afissues.errors import IntegrationError
 
-    from nightshift._startup import check_root_permission_mode, init_knowledge, report_failure, wrap_task_callback
+    from nightshift._startup import (
+        check_cache_policy_advisory,
+        check_root_permission_mode,
+        init_knowledge,
+        report_failure,
+        wrap_task_callback,
+    )
 
     # Resolve the repository root once, here, and thread it through the
     # engine.  Launching from a subdirectory resolves to the work-tree
     # root rather than the invocation directory (issue #43).
     root = resolve_repo_root()
     check_root_permission_mode(config)  # Pre-flight: root + bypassPermissions (#11)
+    check_cache_policy_advisory(config)  # Pre-flight: advisory cache_policy (#40)
     validate_night_shift_prerequisites(config)
 
     # NS-REQ-3 / NS-REQ-4: Refuse to start when another daemon instance

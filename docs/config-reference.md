@@ -442,11 +442,30 @@ merge_strategy = "direct"
 
 ## caching
 
-Prompt caching configuration.
+Prompt caching configuration. Controls `cache_control` TTL selection on
+**direct Anthropic API calls** made by nightshift — knowledge extraction,
+auxiliary triage, staleness checks, and other calls that go through
+`cached_messages_create()`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `cache_policy` | str | `"DEFAULT"` | `NONE`, `DEFAULT` (5-min TTL), or `EXTENDED` (1-hour TTL) |
+
+**Scope and limitations:**
+
+- **Direct API calls** (knowledge extraction, auxiliary triage, staleness
+  checks): `cache_policy` controls the `cache_control` TTL injected into
+  system prompt blocks. `EXTENDED` sets a 1-hour retention (`{"type":
+  "ephemeral", "ttl": "1h"}`), `DEFAULT` uses the standard 5-minute
+  retention, and `NONE` disables `cache_control` injection entirely.
+
+- **`claude` backend** (main coder/reviewer sessions): `cache_policy` is
+  **advisory only**. The Claude Code CLI subprocess manages its own prompt
+  caching via the Anthropic API; nightshift cannot inject `cache_control`
+  markers into requests it does not build. The setting is recorded for
+  metric correlation so cache hit rates can be analysed against the
+  operator's stated intent. A startup warning is emitted when a non-default
+  value is set under the `claude` backend.
 
 ```toml
 [caching]

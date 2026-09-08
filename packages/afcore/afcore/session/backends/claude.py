@@ -105,7 +105,14 @@ class ClaudeBackend:
         Requirements: 26-REQ-2.3, 26-REQ-2.E1, 56-REQ-1.2, 56-REQ-2.2,
                       56-REQ-4.2, 56-REQ-5.E1
         """
-        if cache_policy != "NONE":
+        if cache_policy not in ("NONE", "DEFAULT"):
+            logger.warning(
+                "ClaudeBackend: cache_policy=%s is not honoured by the claude "
+                "subprocess backend; the CLI manages its own prompt caching. "
+                "This setting is advisory only for metric correlation.",
+                cache_policy,
+            )
+        elif cache_policy == "DEFAULT":
             logger.debug(
                 "ClaudeBackend: cache_policy=%s (CLI manages caching internally)",
                 cache_policy,

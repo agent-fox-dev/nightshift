@@ -181,15 +181,23 @@ async def nightshift_ai_call(
     :func:`~afcore.core.client.ai_call` so that ``[models.tier_defaults]``
     and ``[models.registry]`` overrides take effect for auxiliary calls.
 
+    Reads ``config.caching.cache_policy`` (if present) and forwards it
+    to :func:`~afcore.core.client.ai_call` so that the operator's
+    caching preference controls ``cache_control`` TTL selection on
+    direct Anthropic API calls (issue #40).
+
     Returns:
         A tuple of (response_text_or_none, raw_response).
     """
     from afcore.core.client import ai_call
-    from afcore.core.config import PricingConfig
+    from afcore.core.config import CachePolicy, PricingConfig
     from afcore.core.models import resolve_model
 
     models_config = getattr(config, "models", None)
     model_id = resolve_model(model_tier, models_config=models_config)
+
+    # Resolve cache_policy from config.caching.cache_policy (#40)
+    cache_policy: CachePolicy = getattr(getattr(config, "caching", None), "cache_policy", CachePolicy.DEFAULT)
 
     try:
         text, response = await ai_call(
@@ -198,6 +206,7 @@ async def nightshift_ai_call(
             messages=messages,
             system=system,
             context=context,
+            cache_policy=cache_policy,
             models_config=models_config,
         )
     except Exception as exc:
