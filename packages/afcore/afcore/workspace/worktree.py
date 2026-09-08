@@ -175,8 +175,6 @@ async def create_worktree(
     branch_name: str | None = None,
     role: str | None = None,
     mode: str | None = None,
-    *,
-    delete_remote: bool = False,
 ) -> WorkspaceInfo:
     """Create an isolated git worktree for a coding session.
 
@@ -198,10 +196,10 @@ async def create_worktree(
     WARNING-level log is emitted and ``"unknown"`` is substituted as the
     role segment.
 
-    If a stale worktree or branch exists, it is removed first. If
-    *delete_remote* is True, also deletes the remote branch via ``git push
-    origin --delete``; defaults to False so remote refs (such as branches
-    backing open pull requests) are preserved.
+    If a stale worktree or branch exists, it is removed first.  The remote
+    branch is deliberately left alone — under ``merge_strategy = "pr"`` it
+    backs an open pull request, and under carry-patch it is registered on
+    the hub's patch stack (issue #34).
 
     All worktree registry mutations (prune, add, remove, branch delete)
     are serialized under a per-repo asyncio lock so that concurrent
@@ -297,16 +295,16 @@ async def create_worktree(
                 branch_name,
             )
         else:
-            # Clean up stale feature branch if it exists (03-REQ-1.E2)
+            # Clean up stale feature branch if it exists (03-REQ-1.E2).
+            #
+            # Local only.  The remote branch is deliberately left alone: under
+            # merge_strategy = "pr" it is the head ref of an open pull request,
+            # and under carry-patch it is registered on the hub's patch stack.
+            # Deleting it here destroyed that work (issue #34).  A stale remote
+            # ref cannot block local worktree creation; divergence between the
+            # recreated branch and the remote is resolved at the push site,
+            # which force-pushes with a lease.
             await delete_branch(repo_root, branch_name, force=True)
-
-            # Also delete the remote tracking branch if explicitly requested.
-            if delete_remote:
-                await run_git(
-                    ["push", "origin", "--delete", branch_name],
-                    cwd=repo_root,
-                    check=False,
-                )
 
         # Defence-in-depth: delete any prefix ref that would cause a git D/F
         # conflict.  The 2-level ref ``feature/{spec}/{group}`` left by a prior

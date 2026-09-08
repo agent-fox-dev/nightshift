@@ -592,48 +592,6 @@ class TestCreateWorktreeDeleteRemote:
         assert push_delete_calls == []
 
     @pytest.mark.asyncio
-    async def test_deletes_remote_branch_when_explicitly_requested(
-        self,
-        repo_with_origin: tuple[Path, Path],
-    ) -> None:
-        """create_worktree deletes remote branch when delete_remote=True is explicitly passed."""
-        import subprocess
-
-        repo, _origin = repo_with_origin
-        branch_name = "fix/issue-34-delete-test"
-
-        subprocess.run(["git", "branch", branch_name, "develop"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(["git", "push", "origin", branch_name], cwd=repo, check=True, capture_output=True)
-
-        res = subprocess.run(
-            ["git", "ls-remote", "--heads", "origin", branch_name],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        assert f"refs/heads/{branch_name}" in res.stdout
-
-        ws = await create_worktree(
-            repo,
-            "fix-issue-34",
-            0,
-            base_branch="develop",
-            branch_name=branch_name,
-            delete_remote=True,
-        )
-        assert ws.path.is_dir()
-
-        res_after = subprocess.run(
-            ["git", "ls-remote", "--heads", "origin", branch_name],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        assert f"refs/heads/{branch_name}" not in res_after.stdout
-
-    @pytest.mark.asyncio
     async def test_stale_local_branch_is_still_force_deleted(
         self,
         tmp_worktree_repo: Path,
