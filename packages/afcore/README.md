@@ -91,9 +91,8 @@ Sub-config models (all pydantic `BaseModel` subclasses with documented defaults)
 
 | Symbol | Module | Description |
 |--------|--------|-------------|
-| `ExecutionState` | `engine.state` | Run outcome. Fields: `run_status`, `node_states: dict[str, str]`, `session_history`, `total_cost`, `total_input_tokens`, `total_output_tokens`, `total_sessions`, `blocked_reasons`. |
-| `RunStatus` | `engine.state` | StrEnum: `RUNNING`, `COMPLETED`, `COMPLETED_DIRTY`, `INTERRUPTED`, `COST_LIMIT`, `SESSION_LIMIT`, `STALLED`, `BLOCK_LIMIT`. |
-| `SessionRecord` | `engine.state` | Per-session outcome: `node_id`, `attempt`, `status`, `archetype`, `model`, `duration_ms`, `cost`, `error_message`, token counts. |
+| `SessionOutcomeRecord` | `engine.state` | Unified session record written to the `session_outcomes` DB table. Fields: `id`, `spec_name`, `node_id`, `status`, `input_tokens`, `output_tokens`, `cost`, `model`, `archetype`, `error_message`. |
+| `cleanup_stale_runs` | `engine.state` | Transition orphaned `status='running'` rows to `'stalled'` at startup and shutdown. |
 
 ### Night Shift (`afcore.nightshift`)
 

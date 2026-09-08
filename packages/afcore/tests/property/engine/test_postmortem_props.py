@@ -13,19 +13,60 @@ from __future__ import annotations
 
 import json
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from afcore.engine.state import ExecutionState, SessionRecord
 from hypothesis import given, settings
 from hypothesis import strategies as st
+
+# -- Test-local data classes satisfying afaudit.postmortem protocols -----------
+
+
+@dataclass
+class _SessionRecord:
+    """Test-local stand-in satisfying the ``SessionRecordLike`` protocol."""
+
+    node_id: str
+    attempt: int
+    status: str
+    input_tokens: int
+    output_tokens: int
+    cost: float
+    duration_ms: int
+    error_message: str | None
+    timestamp: str
+    model: str = ""
+    archetype: str = "coder"
+    is_transport_error: bool = False
+    is_budget_exhausted: bool = False
+    is_non_retryable: bool = False
+
+
+@dataclass
+class _ExecutionState:
+    """Test-local stand-in satisfying the ``PostmortemInput`` protocol."""
+
+    plan_hash: str
+    node_states: dict[str, str]
+    session_history: list[_SessionRecord] = field(default_factory=list)
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cost: float = 0.0
+    total_sessions: int = 0
+    started_at: str = ""
+    updated_at: str = ""
+    run_status: str = "running"
+    blocked_reasons: dict[str, str] = field(default_factory=dict)
+    run_id: str = ""
+
 
 # -- Strategies ---------------------------------------------------------------
 
 
 @st.composite
-def session_record_strategy(draw: st.DrawFn) -> SessionRecord:
-    """Generate a random SessionRecord for property testing."""
-    return SessionRecord(
+def session_record_strategy(draw: st.DrawFn) -> _SessionRecord:
+    """Generate a random _SessionRecord for property testing."""
+    return _SessionRecord(
         node_id=draw(
             st.text(
                 alphabet=st.characters(whitelist_categories=("L", "N")),
@@ -57,8 +98,8 @@ def session_record_strategy(draw: st.DrawFn) -> SessionRecord:
 
 
 @st.composite
-def execution_state_strategy(draw: st.DrawFn) -> ExecutionState:
-    """Generate a random ExecutionState for property testing.
+def execution_state_strategy(draw: st.DrawFn) -> _ExecutionState:
+    """Generate a random _ExecutionState for property testing.
 
     Generates node_states with a mix of statuses, blocked_reasons
     that may or may not cover all blocked nodes, and arbitrary
@@ -87,7 +128,7 @@ def execution_state_strategy(draw: st.DrawFn) -> ExecutionState:
 
     session_history = draw(st.lists(session_record_strategy(), min_size=0, max_size=10))
 
-    return ExecutionState(
+    return _ExecutionState(
         plan_hash=draw(st.text(min_size=1, max_size=10)),
         node_states=node_states,
         session_history=session_history,
@@ -137,7 +178,7 @@ class TestTriggerCompleteness:
         """should_dump returns True for every trigger status."""
         from afaudit.postmortem import should_dump
 
-        state = ExecutionState(plan_hash="h", node_states={}, run_status=status)
+        state = _ExecutionState(plan_hash="h", node_states={}, run_status=status)
         assert should_dump(state) is True
 
 
@@ -159,7 +200,7 @@ class TestNoFalseTriggers:
         """should_dump returns False for every non-trigger status."""
         from afaudit.postmortem import should_dump
 
-        state = ExecutionState(plan_hash="h", node_states={}, run_status=status)
+        state = _ExecutionState(plan_hash="h", node_states={}, run_status=status)
         assert should_dump(state) is False
 
 
@@ -175,7 +216,7 @@ class TestSchemaCompleteness:
 
     @given(state=execution_state_strategy())
     @settings(max_examples=50)
-    def test_schema_completeness(self, state: ExecutionState) -> None:
+    def test_schema_completeness(self, state: _ExecutionState) -> None:
         """All required keys present and schema_version == 1."""
         from afaudit.postmortem import build_postmortem
 
@@ -207,7 +248,7 @@ class TestBlockedTaskFidelity:
 
     @given(state=execution_state_strategy())
     @settings(max_examples=50)
-    def test_blocked_task_fidelity(self, state: ExecutionState) -> None:
+    def test_blocked_task_fidelity(self, state: _ExecutionState) -> None:
         """Blocked task count matches node_states; each has non-empty fields."""
         from afaudit.postmortem import build_postmortem
 
@@ -231,7 +272,7 @@ class TestSessionHistoryFidelity:
 
     @given(state=execution_state_strategy())
     @settings(max_examples=50)
-    def test_session_history_fidelity(self, state: ExecutionState) -> None:
+    def test_session_history_fidelity(self, state: _ExecutionState) -> None:
         """session_history length matches state."""
         from afaudit.postmortem import build_postmortem
 
@@ -251,7 +292,7 @@ class TestCostSummaryAccuracy:
 
     @given(state=execution_state_strategy())
     @settings(max_examples=50)
-    def test_cost_summary_accuracy(self, state: ExecutionState) -> None:
+    def test_cost_summary_accuracy(self, state: _ExecutionState) -> None:
         """cost_summary matches state totals exactly."""
         from afaudit.postmortem import build_postmortem
 
@@ -274,7 +315,7 @@ class TestFileRoundTrip:
 
     @given(state=execution_state_strategy())
     @settings(max_examples=20)
-    def test_file_round_trip(self, state: ExecutionState) -> None:
+    def test_file_round_trip(self, state: _ExecutionState) -> None:
         """json.loads(path.read_text()) == postmortem."""
         from afaudit.postmortem import build_postmortem, write_postmortem
 
@@ -297,7 +338,7 @@ class TestTaskSummaryAccuracy:
 
     @given(state=execution_state_strategy())
     @settings(max_examples=50)
-    def test_task_summary_accuracy(self, state: ExecutionState) -> None:
+    def test_task_summary_accuracy(self, state: _ExecutionState) -> None:
         """total == len(node_states) and status counts sum <= total."""
         from afaudit.postmortem import build_postmortem
 

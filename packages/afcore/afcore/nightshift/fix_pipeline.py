@@ -661,7 +661,7 @@ class FixPipeline:
         """Mark the runs row as finished (best-effort).
 
         No-op when conn is not set.  The *status* value should be a
-        ``RunStatus`` string (e.g. ``"completed"`` or ``"interrupted"``).
+        run status string (e.g. ``"completed"`` or ``"interrupted"``).
         """
         if self._conn is None:
             return

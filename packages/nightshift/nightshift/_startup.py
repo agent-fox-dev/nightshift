@@ -129,7 +129,33 @@ def init_knowledge(config, project_root):
     except Exception:
         logger.warning("Audit retention failed", exc_info=True)
 
+    # Transition any orphaned 'running' rows left by a prior crashed process
+    # to 'stalled'.  Best-effort: never blocks startup.
+    try:
+        from afcore.engine.state import cleanup_stale_runs
+
+        stale = cleanup_stale_runs(kdb.connection, "")
+        if stale:
+            logger.info("Transitioned %d stale run(s) to 'stalled' at startup", stale)
+    except Exception:
+        logger.warning("Stale run cleanup failed", exc_info=True)
+
     return kdb, sink, kprov
+
+
+def cleanup_runs_on_shutdown(kdb) -> None:
+    """Transition all running rows to 'stalled' during daemon shutdown.
+
+    Best-effort: exceptions are swallowed so shutdown is never blocked.
+    """
+    if not kdb:
+        return
+    try:
+        from afcore.engine.state import cleanup_stale_runs
+
+        cleanup_stale_runs(kdb.connection, "")
+    except Exception:
+        logger.warning("Failed to clean up run rows during shutdown", exc_info=True)
 
 
 def wrap_task_callback(progress, om):

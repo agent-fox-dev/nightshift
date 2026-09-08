@@ -10,6 +10,8 @@ Requirements: 34-REQ-1.1, 34-REQ-1.2, 34-REQ-1.3, 34-REQ-1.4,
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from afcore.core.config import (
     AgentFoxConfig,
     ModelPricing,
@@ -18,9 +20,26 @@ from afcore.core.config import (
 from afcore.core.models import MODEL_REGISTRY, calculate_cost
 from afcore.core.node_id import spec_name_of as extract_spec_name
 from afcore.core.token_tracker import TokenAccumulator
-from afcore.engine.state import SessionRecord
 from hypothesis import given, settings
 from hypothesis import strategies as st
+
+
+@dataclass
+class _SessionRecord:
+    """Test-local session record for archetype round-trip testing."""
+
+    node_id: str
+    attempt: int
+    status: str
+    input_tokens: int
+    output_tokens: int
+    cost: float
+    duration_ms: int
+    error_message: str | None
+    timestamp: str
+    model: str = ""
+    archetype: str = "coder"
+
 
 # Strategies
 model_ids = st.sampled_from(["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"])
@@ -161,7 +180,7 @@ class TestArchetypePreserved:
     @given(archetype=archetype_names)
     @settings(max_examples=20)
     def test_roundtrip(self, archetype: str) -> None:
-        record = SessionRecord(
+        record = _SessionRecord(
             node_id="spec:1",
             attempt=1,
             status="completed",
@@ -178,7 +197,7 @@ class TestArchetypePreserved:
         from dataclasses import asdict
 
         data = asdict(record)
-        restored = SessionRecord(**data)
+        restored = _SessionRecord(**data)
         assert restored.archetype == archetype
 
 

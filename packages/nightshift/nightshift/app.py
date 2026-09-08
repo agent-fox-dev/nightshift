@@ -93,6 +93,7 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     from nightshift._startup import (
         check_cache_policy_advisory,
         check_root_permission_mode,
+        cleanup_runs_on_shutdown,
         init_knowledge,
         report_failure,
         wrap_task_callback,
@@ -205,6 +206,7 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
         report_failure(exc)
     finally:
         progress.stop()
+        cleanup_runs_on_shutdown(kdb)
         for fn in [
             lambda: asyncio.run(platform.close()) if hasattr(platform, "close") else None,
             lambda: kdb.close() if kdb else None,

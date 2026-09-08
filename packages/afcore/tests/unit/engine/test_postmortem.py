@@ -7,11 +7,53 @@ Requirements: 126-REQ-1.1 through 126-REQ-7.1
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from afcore.engine.state import ExecutionState, SessionRecord
+
+# -- Test-local data classes satisfying afaudit.postmortem protocols -----------
+
+
+@dataclass
+class _SessionRecord:
+    """Test-local stand-in satisfying the ``SessionRecordLike`` protocol."""
+
+    node_id: str
+    attempt: int
+    status: str
+    input_tokens: int
+    output_tokens: int
+    cost: float
+    duration_ms: int
+    error_message: str | None
+    timestamp: str
+    model: str = ""
+    archetype: str = "coder"
+    is_transport_error: bool = False
+    is_budget_exhausted: bool = False
+    is_non_retryable: bool = False
+
+
+@dataclass
+class _ExecutionState:
+    """Test-local stand-in satisfying the ``PostmortemInput`` protocol."""
+
+    plan_hash: str
+    node_states: dict[str, str]
+    session_history: list[_SessionRecord] = field(default_factory=list)
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cost: float = 0.0
+    total_sessions: int = 0
+    started_at: str = ""
+    updated_at: str = ""
+    run_status: str = "running"
+    blocked_reasons: dict[str, str] = field(default_factory=dict)
+    run_id: str = ""
+    postmortem_path: str = ""
+
 
 # -- Helpers ------------------------------------------------------------------
 
@@ -32,9 +74,9 @@ def _make_session_record(
     is_transport_error: bool = False,
     is_budget_exhausted: bool = False,
     is_non_retryable: bool = False,
-) -> SessionRecord:
-    """Create a SessionRecord for testing."""
-    return SessionRecord(
+) -> _SessionRecord:
+    """Create a _SessionRecord for testing."""
+    return _SessionRecord(
         node_id=node_id,
         attempt=attempt,
         status=status,
@@ -69,7 +111,7 @@ class TestShouldDumpTriggerStatuses:
         """should_dump() returns True for each trigger status."""
         from afaudit.postmortem import should_dump
 
-        state = ExecutionState(plan_hash="h", node_states={}, run_status=status)
+        state = _ExecutionState(plan_hash="h", node_states={}, run_status=status)
         assert should_dump(state) is True
 
 
@@ -90,7 +132,7 @@ class TestShouldDumpNonTriggerStatuses:
         """should_dump() returns False for non-trigger statuses."""
         from afaudit.postmortem import should_dump
 
-        state = ExecutionState(plan_hash="h", node_states={}, run_status=status)
+        state = _ExecutionState(plan_hash="h", node_states={}, run_status=status)
         assert should_dump(state) is False
 
 
@@ -107,7 +149,7 @@ class TestBuildPostmortemRequiredKeys:
         """Output dict has all required keys and schema_version is 1."""
         from afaudit.postmortem import build_postmortem
 
-        state = ExecutionState(
+        state = _ExecutionState(
             plan_hash="h",
             node_states={"a": "completed", "b": "blocked"},
             run_status="stalled",
@@ -145,7 +187,7 @@ class TestBuildPostmortemTaskSummary:
         """task_summary counts are derived correctly from node_states."""
         from afaudit.postmortem import build_postmortem
 
-        state = ExecutionState(
+        state = _ExecutionState(
             plan_hash="h",
             node_states={
                 "a": "completed",
@@ -179,10 +221,10 @@ class TestBuildPostmortemCostSummary:
     """
 
     def test_cost_summary_matches_state(self) -> None:
-        """cost_summary fields match ExecutionState aggregates."""
+        """cost_summary fields match state aggregates."""
         from afaudit.postmortem import build_postmortem
 
-        state = ExecutionState(
+        state = _ExecutionState(
             plan_hash="h",
             node_states={},
             run_status="stalled",
@@ -214,7 +256,7 @@ class TestBuildPostmortemBlockedTasks:
         """Blocked tasks are included and sorted by node_id."""
         from afaudit.postmortem import build_postmortem
 
-        state = ExecutionState(
+        state = _ExecutionState(
             plan_hash="h",
             node_states={
                 "z_task": "blocked",
@@ -244,7 +286,7 @@ class TestBuildPostmortemSessionHistory:
     """
 
     def test_session_history_contains_all_records_with_required_fields(self) -> None:
-        """All SessionRecords are serialized with all required fields."""
+        """All session records are serialized with all required fields."""
         from afaudit.postmortem import build_postmortem
 
         records = [
@@ -262,7 +304,7 @@ class TestBuildPostmortemSessionHistory:
                 is_transport_error=True,
             ),
         ]
-        state = ExecutionState(
+        state = _ExecutionState(
             plan_hash="h",
             node_states={"spec_01_group_1": "completed", "spec_01_group_2": "failed"},
             run_status="stalled",
@@ -345,15 +387,15 @@ class TestWritePostmortemCreatesDirectory:
 # -- TS-126-12: ExecutionState has run_id field -------------------------------
 
 
-class TestExecutionStateRunId:
-    """TS-126-12: ExecutionState has run_id field.
+class TestPostmortemInputRunId:
+    """TS-126-12: PostmortemInput has run_id field.
 
     Requirement: 126-REQ-7.1
     """
 
     def test_run_id_field_exists_with_default(self) -> None:
         """run_id field exists with empty string default."""
-        state = ExecutionState(plan_hash="h", node_states={})
+        state = _ExecutionState(plan_hash="h", node_states={})
         assert hasattr(state, "run_id")
         assert state.run_id == ""
 
@@ -371,7 +413,7 @@ class TestGenerationFailureNonBlocking:
         """If build_postmortem raises, state remains valid with empty postmortem_path."""
         import afaudit.postmortem as pm_mod
 
-        state = ExecutionState(
+        state = _ExecutionState(
             plan_hash="h",
             node_states={},
             run_status="stalled",
@@ -406,7 +448,7 @@ class TestFallbackRunId:
         """When run_id is empty, build_postmortem uses a fallback."""
         from afaudit.postmortem import build_postmortem
 
-        state = ExecutionState(
+        state = _ExecutionState(
             plan_hash="",
             node_states={},
             run_id="",
@@ -429,7 +471,7 @@ class TestBlockedTaskMissingReason:
         """A blocked node not in blocked_reasons gets reason 'unknown'."""
         from afaudit.postmortem import build_postmortem
 
-        state = ExecutionState(
+        state = _ExecutionState(
             plan_hash="h",
             node_states={"x": "blocked"},
             blocked_reasons={},
@@ -453,7 +495,7 @@ class TestEmptySessionHistory:
         """Empty session_history produces empty arrays and zero cost values."""
         from afaudit.postmortem import build_postmortem
 
-        state = ExecutionState(
+        state = _ExecutionState(
             plan_hash="h",
             node_states={},
             run_status="stalled",

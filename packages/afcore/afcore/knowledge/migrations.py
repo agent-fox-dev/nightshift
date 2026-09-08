@@ -433,7 +433,7 @@ def _migrate_v11(conn: duckdb.DuckDBPyConnection) -> None:
     Creates four new tables (plan_nodes, plan_edges, plan_meta, runs) that
     replace the file-based plan.json and state.jsonl stores. Extends
     session_outcomes with columns that were previously held in the legacy
-    SessionRecord dataclass.
+    session record dataclass (since removed).
 
     All CREATE TABLE statements use IF NOT EXISTS for idempotency. All
     ALTER TABLE ADD COLUMN statements use IF NOT EXISTS for idempotency.
@@ -491,7 +491,7 @@ def _migrate_v11(conn: duckdb.DuckDBPyConnection) -> None:
             total_sessions      INTEGER NOT NULL DEFAULT 0
         )
     """)
-    # Extend session_outcomes with columns from the legacy SessionRecord.
+    # Extend session_outcomes with columns from the legacy session record.
     # Uses ADD COLUMN IF NOT EXISTS for idempotency on fresh databases that
     # already have the updated _CURRENT_SCHEMA_DDL. Skips if the table does not
     # exist (e.g., during testing with minimal schema fixtures).
