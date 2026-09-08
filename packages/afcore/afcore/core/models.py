@@ -215,11 +215,17 @@ def collect_configured_model_ids(
 def _format_inaccessible_models(
     inaccessible: list[str],
     tiers_by_model: dict[str, set[str]],
+    config_path: str | None = None,
 ) -> str:
     """Build the multi-line error message for inaccessible models.
 
     Names the tier each inaccessible model serves and shows the exact
     ``[models.tier_defaults]`` snippet needed to override it.
+
+    When *config_path* is given it is named as the file to edit. This
+    matters because a local ``.nightshift/config.toml`` shadows the global
+    one outright, so the config in effect is not necessarily the one the
+    user last edited.
 
     Requirements: NS-REQ-3
     """
@@ -236,17 +242,22 @@ def _format_inaccessible_models(
         else:
             lines.append(f"  - {model_id}")
 
-    lines.append("Check your API key permissions, or override the affected tier(s) in config.toml:")
+    target = config_path or "config.toml"
+    lines.append(f"Check your API key permissions, or override the affected tier(s) in {target}:")
     if affected_tiers:
         lines.append("  [models.tier_defaults]")
         for tier_name in sorted(affected_tiers, key=lambda t: tier_order.get(t, len(tier_order))):
             lines.append(f'  {tier_name} = "<an-accessible-model-id>"')
     else:
-        lines.append("  Update [models] in config.toml, or the archetype override naming the model.")
+        lines.append(f"  Update [models] in {target}, or the archetype override naming the model.")
     return "\n".join(lines)
 
 
-def validate_model_access(models_config: ModelsConfig | None = None) -> None:
+def validate_model_access(
+    models_config: ModelsConfig | None = None,
+    *,
+    config_path: str | None = None,
+) -> None:
     """Validate that all configured model IDs are accessible via the API key.
 
     Calls the Anthropic models API to list available models, then checks
@@ -264,6 +275,9 @@ def validate_model_access(models_config: ModelsConfig | None = None) -> None:
     Args:
         models_config: Optional config-driven model overrides from
             ``[models]`` in config.toml.
+        config_path: Path of the config file actually in effect, named in
+            the error so the user edits the right one. See
+            :attr:`AgentFoxConfig.source_path`.
 
     Requirements: NS-REQ-3, NS-REQ-4, NS-REQ-5
     """
@@ -303,7 +317,10 @@ def validate_model_access(models_config: ModelsConfig | None = None) -> None:
 
     inaccessible = sorted(set(tiers_by_model) - available)
     if inaccessible:
-        logger.error("%s", _format_inaccessible_models(inaccessible, tiers_by_model))
+        logger.error(
+            "%s",
+            _format_inaccessible_models(inaccessible, tiers_by_model, config_path),
+        )
         sys.exit(1)
 
     logger.info(

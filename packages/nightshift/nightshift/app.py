@@ -111,7 +111,7 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     # Validate model access before entering the daemon loop (NS-REQ-3).
     from afcore.core.models import validate_model_access
 
-    validate_model_access(models_config=config.models)
+    validate_model_access(models_config=config.models, config_path=config.source_path)
 
     platform = create_platform(config, root)
     try:

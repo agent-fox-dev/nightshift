@@ -3,8 +3,27 @@
 Night Shift reads configuration from `.nightshift/config.toml` (local,
 project-level) or `~/.nightshift/config.toml` (global, user-level). Local
 config takes precedence — when a local config exists, the global config is
-ignored entirely. If neither exists, a minimal local config is auto-created
-with default values for reference.
+**ignored entirely**, not merged section-by-section. If neither exists, a
+minimal global config is auto-created at `~/.nightshift/config.toml` with
+default values for reference.
+
+Because the two are never merged, a local config that omits a section falls
+back to the built-in defaults for it — *not* to the global config's values.
+A local `[hub]`-only file, for example, discards a global `[models]` block
+entirely. Night Shift logs a warning naming both paths whenever a local
+config shadows an existing global one:
+
+```
+[WARNING] afcore.core.config: Local config /path/repo/.nightshift/config.toml
+is the sole config source — the global config at /home/you/.nightshift/config.toml
+is ignored entirely, including any [models] overrides it defines. Move settings
+you need into the local file.
+```
+
+Note that carry-patch bootstrap writes a local `.nightshift/config.toml`
+(`[hub]`, `[carry_patch]`, `[workspace]`) on first run in a workspace. From
+the second run onward that file is the sole config source, so settings you
+keep globally must be copied into it.
 
 ### General behavior
 
@@ -288,15 +307,19 @@ ADVANCED = "claude-sonnet-4-6"
 
 At startup nightshift checks every model it would use against the models your
 API key can reach. If one is unavailable it names the model, the tier it
-serves, and the override you need:
+serves, the config file actually in effect, and the override you need:
 
 ```
 The following model(s) are not accessible with the current API key:
   - claude-haiku-4-5 (used by the SIMPLE tier)
-Check your API key permissions, or override the affected tier(s) in config.toml:
+Check your API key permissions, or override the affected tier(s) in
+/data/workspace/nightshift/.nightshift/config.toml:
   [models.tier_defaults]
   SIMPLE = "<an-accessible-model-id>"
 ```
+
+The path is the config that won precedence — edit that file, not
+necessarily the one you last changed.
 
 Overriding every tier default to an accessible model means the hardcoded
 defaults are never checked.

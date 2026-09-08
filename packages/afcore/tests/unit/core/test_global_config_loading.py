@@ -284,6 +284,105 @@ class TestLocalSoleSource:
         assert config.orchestrator.session_timeout == 45
 
 
+class TestLocalShadowingIsAnnounced:
+    """A local config silently discarding a global one must be visible.
+
+    The loader never merges the two — a local config replaces the global
+    outright.  When the user has a global config they have been editing,
+    that discard is announced at WARNING so it shows at the default log
+    level (setup_logging uses WARNING unless --verbose/--quiet).
+    """
+
+    def test_warns_when_local_shadows_existing_global(
+        self, fake_home, global_config_dir, tmp_path, monkeypatch, caplog, clean_af_env
+    ):
+        """Both paths are named at WARNING when a global config is shadowed."""
+        global_path = global_config_dir / "config.toml"
+        global_path.write_text('[models.tier_defaults]\nSIMPLE = "claude-sonnet-4-6"\n')
+        repo = tmp_path / "repo"
+        repo.mkdir(exist_ok=True)
+        local_dir = repo / ".nightshift"
+        local_dir.mkdir(exist_ok=True)
+        local_path = local_dir / "config.toml"
+        local_path.write_text("[orchestrator]\nmax_retries = 5\n")
+        monkeypatch.chdir(repo)
+
+        with caplog.at_level(logging.WARNING):
+            config = load_config()
+
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert warnings, "shadowing a global config must warn at WARNING"
+        message = warnings[0]
+        assert str(local_path) in message
+        assert str(global_path) in message
+        # The global's [models] override must genuinely be gone.
+        assert config.models.tier_defaults == {}
+
+    def test_no_warning_when_no_global_exists(self, fake_home, tmp_path, monkeypatch, caplog, clean_af_env):
+        """With nothing to shadow, the local config loads without a warning."""
+        repo = tmp_path / "repo"
+        repo.mkdir(exist_ok=True)
+        local_dir = repo / ".nightshift"
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 5\n")
+        monkeypatch.chdir(repo)
+
+        with caplog.at_level(logging.WARNING):
+            load_config()
+
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+class TestConfigSourcePath:
+    """AgentFoxConfig records which file is actually in effect."""
+
+    def test_source_path_is_local_when_local_wins(
+        self, fake_home, global_config_dir, tmp_path, monkeypatch, clean_af_env
+    ):
+        """The shadowing local config is reported, not the global one."""
+        (global_config_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 3\n")
+        repo = tmp_path / "repo"
+        repo.mkdir(exist_ok=True)
+        local_dir = repo / ".nightshift"
+        local_dir.mkdir(exist_ok=True)
+        local_path = local_dir / "config.toml"
+        local_path.write_text("[orchestrator]\nmax_retries = 5\n")
+        monkeypatch.chdir(repo)
+
+        assert load_config().source_path == str(local_path)
+
+    def test_source_path_is_global_when_no_local(
+        self, fake_home, global_config_dir, tmp_path, monkeypatch, clean_af_env
+    ):
+        """With no local config the global path is reported."""
+        global_path = global_config_dir / "config.toml"
+        global_path.write_text("[orchestrator]\nmax_retries = 3\n")
+        repo = tmp_path / "repo"
+        repo.mkdir(exist_ok=True)
+        monkeypatch.chdir(repo)
+
+        assert load_config().source_path == str(global_path)
+
+    def test_source_path_none_when_no_config_exists(self, fake_home, tmp_path, monkeypatch, clean_af_env):
+        """Defaults-only startup reports no source file."""
+        repo = tmp_path / "repo"
+        repo.mkdir(exist_ok=True)
+        monkeypatch.chdir(repo)
+
+        assert load_config().source_path is None
+
+    def test_source_path_for_explicit_path(self, tmp_path):
+        """The single-file loader records the path it was handed."""
+        cfg = tmp_path / "explicit.toml"
+        cfg.write_text("[orchestrator]\nmax_retries = 3\n")
+
+        assert load_config(cfg).source_path == str(cfg)
+
+    def test_source_path_none_for_missing_explicit_path(self, tmp_path):
+        """A missing explicit path yields defaults with no source."""
+        assert load_config(tmp_path / "absent.toml").source_path is None
+
+
 # ===================================================================
 # TS-13-8: No local config — global used unchanged, DEBUG log
 # ===================================================================
