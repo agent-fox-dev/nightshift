@@ -1,19 +1,14 @@
-"""Unit tests for extract_json_array — prose-bracket disambiguation fix.
-
-Regression tests for GitHub issue #212: extract_json_array() returning prose
-bracket arrays (e.g. ``["req-1", "req-2"]``) instead of the real findings
-array of dicts when the LLM writes analytical prose before its JSON block.
+"""Unit tests for JSON extraction helpers.
 
 Covers:
-- Option B: two-pass scan preferring arrays of objects over primitive arrays
-- Option A: unwrapping single-key wrapper objects from markdown fences
-- Combined: prose string arrays + wrapper object in one response
-- Backward compatibility: existing behaviour preserved for other inputs
+- extract_json_array: prose-bracket disambiguation (issue #212)
+- extract_json_object: prose-prefixed JSON scanning (issue #57)
 """
 
 from __future__ import annotations
 
-from afcore.core.json_extraction import extract_json_array
+import pytest
+from afcore.core.json_extraction import extract_json_array, extract_json_object
 
 # ---------------------------------------------------------------------------
 # Option B — two-pass scan: prefer dict-containing arrays over string arrays
@@ -236,3 +231,107 @@ class TestBackwardCompatibility:
         assert result is not None
         assert len(result) >= 1
         assert result[0] == {"a": 1}
+
+
+# ---------------------------------------------------------------------------
+# extract_json_object — issue #57
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonObject:
+    """Tests for extract_json_object, including prose-prefixed scanning."""
+
+    # -- AC-1: prose-prefixed JSON ----------------------------------------
+
+    def test_prose_prefixed_json_returns_object(self) -> None:
+        """Leading prose followed by a valid JSON object is extracted."""
+        text = 'Here is my assessment:\n{"verdict": "PASS"}'
+        result = extract_json_object(text)
+        assert result == {"verdict": "PASS"}
+
+    def test_prose_inline_prefix_returns_object(self) -> None:
+        """Inline prose on the same line before JSON object is extracted."""
+        text = 'Result: {"status": "ok"}'
+        result = extract_json_object(text)
+        assert result == {"status": "ok"}
+
+    def test_multiline_prose_prefix(self) -> None:
+        """Multiple lines of prose before JSON object are handled."""
+        text = 'Let me analyze this.\nHere are my findings:\n{"score": 95, "pass": true}'
+        result = extract_json_object(text)
+        assert result == {"score": 95, "pass": True}
+
+    # -- AC-2: invalid braces before real object --------------------------
+
+    def test_skips_invalid_brace_finds_real_object(self) -> None:
+        """Non-JSON braces in prose are skipped, real object is found."""
+        text = 'cost {high} note\n{"k": 1}'
+        result = extract_json_object(text)
+        assert result == {"k": 1}
+
+    def test_skips_multiple_invalid_braces(self) -> None:
+        """Multiple non-JSON braces before the real object are skipped."""
+        text = 'values {x} and {y} then\n{"actual": "data"}'
+        result = extract_json_object(text)
+        assert result == {"actual": "data"}
+
+    # -- AC-3: no JSON object raises ValueError ---------------------------
+
+    def test_no_json_raises_value_error(self) -> None:
+        """Plain text with no JSON object raises ValueError."""
+        with pytest.raises(ValueError, match="No JSON object found"):
+            extract_json_object("just plain prose no json here")
+
+    def test_empty_string_raises_value_error(self) -> None:
+        """Empty string raises ValueError."""
+        with pytest.raises(ValueError, match="No JSON object found"):
+            extract_json_object("")
+
+    def test_only_array_raises_value_error(self) -> None:
+        """A JSON array (not object) raises ValueError."""
+        with pytest.raises(ValueError, match="No JSON object found"):
+            extract_json_object("[1, 2, 3]")
+
+    # -- AC-4: existing behaviours unchanged ------------------------------
+
+    def test_bare_json_object(self) -> None:
+        """Bare JSON object (Strategy 1) is returned."""
+        result = extract_json_object('{"a": 1}')
+        assert result == {"a": 1}
+
+    def test_fenced_json_object(self) -> None:
+        """Fenced JSON object (Strategy 2) is returned."""
+        text = 'Sure!\n```json\n{"a": 1}\n```'
+        result = extract_json_object(text)
+        assert result == {"a": 1}
+
+    def test_fenced_json_without_label(self) -> None:
+        """Fenced JSON without 'json' label (Strategy 2) is returned."""
+        text = '```\n{"a": 1}\n```'
+        result = extract_json_object(text)
+        assert result == {"a": 1}
+
+    def test_trailing_prose_returns_object(self) -> None:
+        """JSON object followed by trailing prose is returned."""
+        text = '{"a": 1}\ntrailing prose'
+        result = extract_json_object(text)
+        assert result == {"a": 1}
+
+    # -- Edge cases -------------------------------------------------------
+
+    def test_nested_object(self) -> None:
+        """Nested JSON objects are correctly decoded."""
+        text = 'prefix\n{"outer": {"inner": 42}}'
+        result = extract_json_object(text)
+        assert result == {"outer": {"inner": 42}}
+
+    def test_object_with_array_value(self) -> None:
+        """JSON object containing an array value is correctly decoded."""
+        text = 'Here:\n{"items": [1, 2, 3]}'
+        result = extract_json_object(text)
+        assert result == {"items": [1, 2, 3]}
+
+    def test_whitespace_only_raises(self) -> None:
+        """Whitespace-only input raises ValueError."""
+        with pytest.raises(ValueError, match="No JSON object found"):
+            extract_json_object("   \n\t  ")

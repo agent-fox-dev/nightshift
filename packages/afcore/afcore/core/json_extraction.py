@@ -105,12 +105,21 @@ def extract_json_object(text: str) -> dict:
             continue
 
     # Strategy 3: raw_decode scan for first object
-    try:
-        obj, _ = json.JSONDecoder().raw_decode(stripped)
-        if isinstance(obj, dict):
-            return obj
-    except (json.JSONDecodeError, ValueError):
-        pass
+    # Scan left-to-right for the first '{' that begins a valid JSON object,
+    # mirroring the array scanning approach in _scan_bracket_arrays.
+    pos = 0
+    text_len = len(stripped)
+    while pos < text_len:
+        idx = stripped.find("{", pos)
+        if idx == -1:
+            break
+        try:
+            obj, _ = _DECODER.raw_decode(stripped, idx)
+            if isinstance(obj, dict):
+                return obj
+        except (json.JSONDecodeError, ValueError):
+            pass
+        pos = idx + 1
 
     raise ValueError("No JSON object found in text")
 
