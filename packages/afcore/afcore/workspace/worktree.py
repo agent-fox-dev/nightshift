@@ -319,6 +319,7 @@ async def destroy_worktree(
     workspace: WorkspaceInfo,
     *,
     preserve_branch: bool = False,
+    keep_branch: bool = False,
 ) -> None:
     """Remove a git worktree and its feature branch.
 
@@ -330,8 +331,9 @@ async def destroy_worktree(
 
     When *preserve_branch* is True, the feature branch is renamed to
     ``stalled/<original-branch-name>`` instead of being deleted, so that
-    committed work is recoverable after a harvest failure.  The worktree
-    directory is still removed.
+    committed work is recoverable after a harvest failure. When
+    *keep_branch* is True, the feature branch retains its original name for
+    manual review. The worktree directory is still removed in both cases.
 
     All operations use ``workspace.path`` directly — the path is never
     re-derived from ``spec_name``/``task_group``/``role``/``mode``,
@@ -369,6 +371,8 @@ async def destroy_worktree(
             "Branch '%s' is still referenced by a worktree after two prune attempts; skipping branch deletion",
             workspace.branch,
         )
+    elif keep_branch:
+        logger.info("Retaining feature branch '%s' for manual review", workspace.branch)
     elif preserve_branch:
         # AC-3: Rename instead of deleting so committed coder work is recoverable.
         stalled_name = f"stalled/{workspace.branch}"
