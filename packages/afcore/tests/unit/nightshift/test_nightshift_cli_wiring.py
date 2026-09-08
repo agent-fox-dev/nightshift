@@ -45,6 +45,7 @@ _PATCHES = {
     "build_streams": "afcore.nightshift.streams.build_streams",
     "engine_cls": "afcore.nightshift.engine.NightShiftEngine",
     "shared_budget": "afcore.nightshift.daemon.SharedBudget",
+    "ensure_labels": "nightshift._label_provisioning.ensure_labels",
 }
 
 
@@ -66,6 +67,7 @@ class TestCliUsesDaemonRunner:
             patch(_PATCHES["build_streams"], return_value=[MagicMock()]),
             patch(_PATCHES["engine_cls"]) as mock_engine_cls,
             patch(_PATCHES["shared_budget"]),
+            patch(_PATCHES["ensure_labels"]),
         ):
             mock_progress = MagicMock()
             mock_progress_cls.return_value = mock_progress
@@ -107,6 +109,7 @@ class TestCliUsesDaemonRunner:
             patch(_PATCHES["build_streams"], return_value=[MagicMock()]),
             patch(_PATCHES["engine_cls"]) as mock_engine_cls,
             patch(_PATCHES["shared_budget"]),
+            patch(_PATCHES["ensure_labels"]),
         ):
             mock_progress = MagicMock()
             mock_progress_cls.return_value = mock_progress
@@ -156,6 +159,7 @@ class TestCliSpinnerCallbackWiring:
             patch(_PATCHES["build_streams"], return_value=[MagicMock()]),
             patch(_PATCHES["engine_cls"]) as mock_engine_cls,
             patch(_PATCHES["shared_budget"]),
+            patch(_PATCHES["ensure_labels"]),
         ):
             mock_progress = MagicMock()
             mock_progress_cls.return_value = mock_progress
@@ -234,6 +238,7 @@ class TestCredentialPreflightCheck:
             patch(_PATCHES["build_streams"], return_value=[MagicMock()]),
             patch(_PATCHES["engine_cls"]) as mock_engine_cls,
             patch(_PATCHES["shared_budget"]),
+            patch(_PATCHES["ensure_labels"]),
         ):
             mock_progress_cls.return_value = MagicMock()
 

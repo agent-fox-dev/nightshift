@@ -58,7 +58,7 @@ class TestHuntModeConfig:
 
         entry = ARCHETYPE_REGISTRY["maintainer"]
         cfg = resolve_effective_config(entry, "hunt")
-        expected = {"ls", "cat", "git", "wc", "head", "tail"}
+        expected = {"ls", "cat", "git", "wc", "head", "tail", "grep"}
         actual = set(cfg.default_allowlist or [])
         assert actual == expected, f"Hunt mode allowlist mismatch: expected {expected}, got {actual} (100-REQ-1.2)"
 

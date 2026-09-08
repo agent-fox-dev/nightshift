@@ -176,6 +176,7 @@ class TestCliCreatesSinkDispatcher:
             patch("afcore.nightshift.engine.NightShiftEngine") as mock_engine_cls,
             patch("afcore.nightshift.daemon.SharedBudget"),
             patch("afcore.knowledge.db.open_knowledge_store", return_value=MagicMock()),
+            patch("nightshift._label_provisioning.ensure_labels"),
         ):
             mock_create_plat.return_value.check_credentials = AsyncMock(return_value=None)
 
@@ -695,6 +696,7 @@ class TestCliDuckDBUnavailable:
                 side_effect=Exception("db locked"),
                 create=True,
             ) as mock_open_store,
+            patch("nightshift._label_provisioning.ensure_labels"),
         ):
             mock_create_plat.return_value.check_credentials = AsyncMock(return_value=None)
 

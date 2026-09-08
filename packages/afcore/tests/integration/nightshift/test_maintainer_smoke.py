@@ -54,7 +54,7 @@ class TestNightshiftTriageViaMaintainer:
         assert sec is not None, (
             "resolve_security_config must return a SecurityConfig for maintainer:hunt, not None (100-REQ-5.2)"
         )
-        expected_allowlist = {"ls", "cat", "git", "wc", "head", "tail"}
+        expected_allowlist = {"ls", "cat", "git", "wc", "head", "tail", "grep"}
         actual_allowlist = set(sec.bash_allowlist or [])
         assert actual_allowlist == expected_allowlist, (
             f"Hunt mode bash allowlist mismatch.\n"

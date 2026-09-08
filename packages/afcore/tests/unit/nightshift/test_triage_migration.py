@@ -141,7 +141,7 @@ class TestNightshiftModelTierResolution:
         config = AgentFoxConfig()
         sec = resolve_security_config(config, "maintainer", mode="hunt")
         assert sec is not None, "resolve_security_config should return SecurityConfig for maintainer:hunt (100-REQ-5.2)"
-        expected_allowlist = {"ls", "cat", "git", "wc", "head", "tail"}
+        expected_allowlist = {"ls", "cat", "git", "wc", "head", "tail", "grep"}
         actual_allowlist = set(sec.bash_allowlist or [])
         assert actual_allowlist == expected_allowlist, (
             f"Hunt mode allowlist mismatch: expected {expected_allowlist}, got {actual_allowlist} (100-REQ-5.2)"

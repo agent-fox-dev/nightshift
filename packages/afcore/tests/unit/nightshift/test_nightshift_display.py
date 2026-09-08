@@ -221,6 +221,7 @@ class TestProgressDisplayCreated:
             patch("afcore.ui.progress.ProgressDisplay") as MockProgress,
             patch("afcore.nightshift.daemon.DaemonRunner") as MockRunner,
             patch("afcore.nightshift.streams.build_streams", return_value=[]),
+            patch("nightshift._label_provisioning.ensure_labels"),
         ):
             mock_engine = MagicMock()
             mock_engine.state = MagicMock()
@@ -276,6 +277,7 @@ class TestExitSummary:
             patch("afcore.ui.progress.ProgressDisplay") as MockProgress,
             patch("afcore.nightshift.daemon.DaemonRunner") as MockRunner,
             patch("afcore.nightshift.streams.build_streams", return_value=[]),
+            patch("nightshift._label_provisioning.ensure_labels"),
         ):
             mock_create_plat.return_value.check_credentials = AsyncMock(return_value=None)
 
@@ -329,6 +331,7 @@ class TestPropDisplayLifecycle:
             patch("afcore.ui.progress.ProgressDisplay") as MockProgress,
             patch("afcore.nightshift.daemon.DaemonRunner") as MockRunner,
             patch("afcore.nightshift.streams.build_streams", return_value=[]),
+            patch("nightshift._label_provisioning.ensure_labels"),
         ):
             mock_create_plat.return_value.check_credentials = AsyncMock(return_value=None)
 

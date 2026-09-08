@@ -1294,6 +1294,7 @@ class TestExceptionSanitizationInFailureComment:
 
         config = MagicMock()
         config.archetypes.overrides.get.return_value = None
+        config.orchestrator.max_retries = 2
         mock_platform = AsyncMock()
 
         pipeline = FixPipeline(config=config, platform=mock_platform)
@@ -1347,6 +1348,7 @@ class TestExceptionSanitizationInFailureComment:
 
         config = MagicMock()
         config.archetypes.overrides.get.return_value = None
+        config.orchestrator.max_retries = 2
         mock_platform = AsyncMock()
 
         pipeline = FixPipeline(config=config, platform=mock_platform)
@@ -1388,6 +1390,7 @@ class TestExceptionSanitizationInFailureComment:
 
         config = MagicMock()
         config.archetypes.overrides.get.return_value = None
+        config.orchestrator.max_retries = 2
         mock_platform = AsyncMock()
 
         pipeline = FixPipeline(config=config, platform=mock_platform)
