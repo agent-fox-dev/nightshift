@@ -234,12 +234,20 @@ class DaemonRunner:
     def request_shutdown(self) -> None:
         """Request graceful shutdown. Second call raises SystemExit(130).
 
-        Requirements: 85-REQ-2.2, 85-REQ-2.3
+        Propagates the shutdown signal to engine-backed streams so that
+        cooperative guards inside long-running operations (e.g.
+        ``_drain_issues``, ``_fill_pool``) observe the signal and stop
+        dispatching new work.
+
+        Requirements: 85-REQ-2.2, 85-REQ-2.3, NS-REQ-51 (issue #51)
         """
         if self._shutting_down:
             raise SystemExit(130)
         self._shutting_down = True
         self._shutdown_event.set()
+        for stream in self._streams:
+            if hasattr(stream, "request_shutdown"):
+                stream.request_shutdown()
 
     def _sorted_streams(self) -> list[WorkStream]:
         """Return streams sorted by priority order.
@@ -333,6 +341,9 @@ class DaemonRunner:
                 self._fatal_error = exc
                 self._shutting_down = True
                 self._shutdown_event.set()
+                for s in self._streams:
+                    if hasattr(s, "request_shutdown"):
+                        s.request_shutdown()
                 return
             except Exception:  # noqa: BLE001
                 logger.exception(
@@ -354,6 +365,9 @@ class DaemonRunner:
                 )
                 self._shutdown_event.set()
                 self._shutting_down = True
+                for s in self._streams:
+                    if hasattr(s, "request_shutdown"):
+                        s.request_shutdown()
                 return
 
             # Check shutdown before sleeping.

@@ -204,6 +204,18 @@ class NightShiftEngine:
         """
         return self._repo_root
 
+    def request_shutdown(self) -> None:
+        """Signal the engine to stop dispatching new work.
+
+        Sets ``state.is_shutting_down`` so the cooperative shutdown
+        guards in ``_fill_pool`` and ``_drain_issues`` take effect.
+        In-flight operations run to completion; only new dispatch is
+        suppressed.
+
+        Requirements: NS-REQ-51 (issue #51)
+        """
+        self.state.is_shutting_down = True
+
     def _build_pipeline(self) -> FixPipeline:
         """Build a fully-wired ``FixPipeline`` instance.
 

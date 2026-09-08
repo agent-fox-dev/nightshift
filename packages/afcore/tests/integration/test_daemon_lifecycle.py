@@ -321,3 +321,223 @@ class TestSmokePidBlocksCode:
 
 
 # ---------------------------------------------------------------------------
+# TS-NS-1: _fill_pool dispatches no new issues after request_shutdown
+# Requirement: NS-REQ-1 (issue #51)
+# ---------------------------------------------------------------------------
+
+
+class TestEngineShutdownStopsFillPool:
+    """Verify _fill_pool returns immediately after shutdown is requested."""
+
+    async def test_drain_returns_false_when_shutting_down(self) -> None:
+        """_drain_issues returns False immediately when is_shutting_down is set.
+
+        This exercises the guard at the top of _drain_issues which prevents
+        _run_issue_check (and therefore _fill_pool) from ever being called.
+        """
+        from afcore.nightshift.engine import NightShiftEngine
+
+        config = MagicMock()
+        config.orchestrator = MagicMock()
+        config.orchestrator.max_cost = None
+        config.orchestrator.max_sessions = None
+        config.gate = None
+
+        platform = MagicMock()
+        engine = NightShiftEngine(config, platform)
+
+        # Request shutdown before drain starts
+        engine.request_shutdown()
+        assert engine.state.is_shutting_down is True
+
+        # Patch _run_issue_check to detect if it's called
+        engine._run_issue_check = AsyncMock()
+
+        result = await engine._drain_issues()
+
+        assert result is False
+        engine._run_issue_check.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-2: _drain_issues returns False after shutdown mid-drain
+# Requirement: NS-REQ-2 (issue #51)
+# ---------------------------------------------------------------------------
+
+
+class TestDrainStopsOnShutdownMidIteration:
+    """Verify _drain_issues stops on the next iteration after shutdown."""
+
+    async def test_shutdown_mid_drain_stops_after_current_check(self) -> None:
+        """_drain_issues returns False after one _run_issue_check when shutdown
+        is requested between iterations.
+
+        Simulates shutdown being requested during the first _run_issue_check:
+        the first check runs to completion, then the loop re-enters and the
+        is_shutting_down guard returns False.
+        """
+        from afcore.nightshift.engine import NightShiftEngine
+
+        config = MagicMock()
+        config.orchestrator = MagicMock()
+        config.orchestrator.max_cost = None
+        config.orchestrator.max_sessions = None
+        config.gate = None
+
+        platform = MagicMock()
+        engine = NightShiftEngine(config, platform)
+
+        check_count = 0
+
+        async def fake_run_issue_check(_seen: set[int] | None = None) -> None:
+            nonlocal check_count
+            check_count += 1
+            # Signal shutdown during the first check
+            engine.request_shutdown()
+            # Add a seen issue so the drain considers progress was made
+            if _seen is not None:
+                _seen.add(100 + check_count)
+
+        engine._run_issue_check = AsyncMock(side_effect=fake_run_issue_check)
+
+        # _drain_issues re-polls after _run_issue_check; stub the platform
+        # to return one remaining issue so the drain would normally loop.
+        remaining_issue = MagicMock()
+        remaining_issue.number = 999
+        remaining_issue.labels = ["af:fix"]
+        platform.list_issues_by_label = AsyncMock(return_value=[remaining_issue])
+
+        result = await engine._drain_issues()
+
+        assert result is False
+        assert check_count == 1, "Expected exactly one _run_issue_check call before shutdown stopped the drain"
+
+
+# ---------------------------------------------------------------------------
+# TS-NS-3: DaemonRunner.request_shutdown propagates to engine
+# Requirement: NS-REQ-51 (issue #51)
+# ---------------------------------------------------------------------------
+
+
+class TestDaemonShutdownPropagesToEngine:
+    """Verify DaemonRunner.request_shutdown() sets engine.state.is_shutting_down."""
+
+    def test_request_shutdown_sets_engine_flag(self) -> None:
+        """Calling request_shutdown on DaemonRunner sets is_shutting_down on the
+        engine wired through an EngineWorkStream.
+        """
+        from afcore.nightshift.daemon import DaemonRunner, SharedBudget
+        from afcore.nightshift.engine import NightShiftEngine
+        from afcore.nightshift.streams import EngineWorkStream
+
+        config = MagicMock()
+        config.orchestrator = MagicMock()
+        config.orchestrator.max_cost = None
+        config.orchestrator.max_sessions = None
+        config.gate = None
+        config.night_shift = MagicMock()
+        config.night_shift.enabled_streams = ["fixes"]
+
+        platform = MagicMock()
+        engine = NightShiftEngine(config, platform)
+
+        stream = EngineWorkStream(
+            stream_name="fix-pipeline",
+            engine=engine,
+            method_name="_drain_issues",
+        )
+        budget = SharedBudget(max_cost=None)
+        runner = DaemonRunner(config, platform, [stream], budget)
+
+        assert engine.state.is_shutting_down is False
+        runner.request_shutdown()
+        assert engine.state.is_shutting_down is True
+
+    async def test_shutdown_during_drain_stops_new_dispatch(self) -> None:
+        """Full integration: daemon with engine-backed stream stops dispatching
+        new issues when shutdown is requested during a drain.
+
+        AC-3: only one _process_fix runs; run() returns promptly.
+        """
+        from afcore.nightshift.daemon import DaemonRunner, SharedBudget
+        from afcore.nightshift.engine import NightShiftEngine
+        from afcore.nightshift.streams import EngineWorkStream
+
+        config = MagicMock()
+        config.orchestrator = MagicMock()
+        config.orchestrator.max_cost = None
+        config.orchestrator.max_sessions = None
+        config.orchestrator.max_retries = 0
+        config.gate = None
+        config.night_shift = MagicMock()
+        config.night_shift.enabled_streams = ["fixes"]
+        config.night_shift.max_parallel = 1
+        config.night_shift.max_attempts_per_issue = 99
+
+        platform = MagicMock()
+        engine = NightShiftEngine(config, platform)
+
+        fix_count = 0
+
+        async def fake_process_fix(issue, issue_body=""):
+            nonlocal fix_count
+            fix_count += 1
+            # Simulate a short fix
+            await asyncio.sleep(0.01)
+            return True
+
+        engine._process_fix = AsyncMock(side_effect=fake_process_fix)
+
+        # _drain_issues does its own platform polling; set up 3 issues
+        issue1 = MagicMock()
+        issue1.number = 1
+        issue1.title = "Issue 1"
+        issue1.labels = ["af:fix"]
+        issue2 = MagicMock()
+        issue2.number = 2
+        issue2.title = "Issue 2"
+        issue2.labels = ["af:fix"]
+        issue3 = MagicMock()
+        issue3.number = 3
+        issue3.title = "Issue 3"
+        issue3.labels = ["af:fix"]
+
+        # We'll test at the _run_issue_check level by patching it to:
+        # 1. On first call: process one issue, request shutdown
+        # 2. Should not get a second call
+        check_count = 0
+        runner = None
+
+        async def fake_run_issue_check(_seen=None):
+            nonlocal check_count
+            check_count += 1
+            # Simulate processing one issue
+            await fake_process_fix(issue1)
+            if _seen is not None:
+                _seen.add(1)
+            # Signal shutdown
+            runner.request_shutdown()
+
+        engine._run_issue_check = AsyncMock(side_effect=fake_run_issue_check)
+
+        # Stub re-poll to return remaining issues
+        platform.list_issues_by_label = AsyncMock(return_value=[issue2, issue3])
+
+        stream = EngineWorkStream(
+            stream_name="fix-pipeline",
+            engine=engine,
+            method_name="_drain_issues",
+            interval=999,
+        )
+        budget = SharedBudget(max_cost=None)
+        runner = DaemonRunner(config, platform, [stream], budget)
+
+        # run() should return promptly after shutdown
+        await asyncio.wait_for(runner.run(), timeout=5.0)
+
+        assert check_count == 1, f"Expected 1 issue check, got {check_count}"
+        assert fix_count == 1, f"Expected 1 fix, got {fix_count}"
+        assert engine.state.is_shutting_down is True
+
+
+# ---------------------------------------------------------------------------

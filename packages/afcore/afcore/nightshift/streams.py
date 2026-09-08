@@ -170,6 +170,20 @@ class EngineWorkStream:
             self._consecutive_failures = 0
             self._interval = self._base_interval
 
+    def request_shutdown(self) -> None:
+        """Propagate shutdown signal to the wrapped engine.
+
+        Called by ``DaemonRunner.request_shutdown()`` so that
+        cooperative shutdown guards inside long-running engine
+        methods (e.g. ``_drain_issues``, ``_fill_pool``) observe
+        the signal and stop dispatching new work.
+
+        Requirements: NS-REQ-51 (issue #51)
+        """
+        engine = self._engine
+        if hasattr(engine, "request_shutdown"):
+            engine.request_shutdown()
+
     async def shutdown(self) -> None:
         """No resources to clean up."""
 
