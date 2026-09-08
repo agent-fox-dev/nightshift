@@ -150,6 +150,48 @@ class TestShellVariableExpansionBlockedProperty:
         )
 
 
+class TestShellSeparatorsBlockedProperty:
+    """AC-4: Joining an allowlisted command with any shell separator is blocked.
+
+    Covers separators: {";", "&&", "||", "|", "&", "\n"}.
+    Tests both allowlisted joined to non-allowlisted, and allowlisted joined to arbitrary commands.
+    """
+
+    _separators = st.sampled_from([";", "&&", "||", "|", "&", "\n"])
+
+    @given(
+        cmd=st.sampled_from(sorted(DEFAULT_ALLOWLIST)),
+        sep=_separators,
+        non_allowlisted=st.text(
+            alphabet=st.characters(
+                whitelist_categories=("L", "N"),
+                whitelist_characters=" _-./",
+            ),
+            min_size=1,
+            max_size=25,
+        ).filter(lambda s: s.strip().split()[0] not in DEFAULT_ALLOWLIST if s.strip() else False),
+        allowlisted_first=st.booleans(),
+        spacing=st.sampled_from(["", " ", "  "]),
+    )
+    @settings(max_examples=60)
+    def test_separator_chained_command_always_blocked(
+        self,
+        cmd: str,
+        sep: str,
+        non_allowlisted: str,
+        allowlisted_first: bool,
+        spacing: str,
+    ) -> None:
+        """Allowlisted command joined to non-allowlisted command with any separator is blocked."""
+        assume(non_allowlisted.strip())
+        if allowlisted_first:
+            command = f"{cmd}{spacing}{sep}{spacing}{non_allowlisted}"
+        else:
+            command = f"{non_allowlisted}{spacing}{sep}{spacing}{cmd}"
+        allowed, _ = check_command_allowed(command, DEFAULT_ALLOWLIST)
+        assert allowed is False, f"Expected chained command '{command}' to be blocked"
+
+
 class TestDefaultAllowlistStability:
     """TS-06-P2: Default allowlist stability.
 

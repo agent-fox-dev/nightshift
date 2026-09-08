@@ -129,6 +129,11 @@ def extract_command_name(command_string: str) -> str:
     - "/usr/bin/python3 -m pytest" -> "python3"
     - "  ls -la  " -> "ls"
 
+    Note:
+        Inspecting only token 0 is safe only because check_shell_operators()
+        guarantees that no chaining or separator operators (e.g., ;, &&, &,
+        |, newlines) exist in the command string.
+
     Args:
         command_string: The full command string from the Bash tool.
 
@@ -161,9 +166,10 @@ _SHELL_OPERATOR_PATTERN = re.compile(
       \|              # pipe (including ||)
     | ;               # command separator
     | &&              # logical AND chaining
+    | &               # background execution / command separator
     | `               # backtick subshell
     | \$\(            # $() subshell
-    | \$[a-zA-Z_{]   # variable expansion ($VAR, ${VAR}) — prevents secret leakage
+    | \$[a-zA-Z_{]    # variable expansion ($VAR, ${VAR}) — prevents secret leakage
     | [<>]            # redirects (>, <, >>, etc.)
     """,
     re.VERBOSE,
