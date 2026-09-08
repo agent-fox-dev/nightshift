@@ -518,3 +518,44 @@ class TestValidateModelAccessVertexBedrock:
             validate_model_access()
 
         mock_client.models.list.assert_called_once()
+
+
+class TestCurrentGenerationPricing:
+    """Built-in pricing must cover the models tier defaults can point at.
+
+    A model missing from pricing costs zero, so `orchestrator.max_budget_usd`
+    silently never trips — the daemon runs unbounded.
+    """
+
+    def test_current_models_have_pricing(self) -> None:
+        """claude-sonnet-5 and claude-opus-5 are priced out of the box."""
+        from afcore.core.config import PricingConfig
+
+        pricing = PricingConfig()
+
+        for model_id in ("claude-sonnet-5", "claude-opus-5"):
+            assert model_id in pricing.models, f"{model_id} has no built-in pricing"
+            assert pricing.models[model_id].input_price_per_m > 0
+            assert pricing.models[model_id].output_price_per_m > 0
+
+    def test_cost_is_non_zero_for_current_models(self) -> None:
+        """The zero-cost fallback no longer fires for these models."""
+        from afcore.core.config import PricingConfig
+        from afcore.core.models import calculate_cost
+
+        pricing = PricingConfig()
+
+        for model_id in ("claude-sonnet-5", "claude-opus-5"):
+            cost = calculate_cost(1_000_000, 1_000_000, model_id, pricing)
+            assert cost > 0, f"{model_id} still costs zero — budget would never trip"
+
+    def test_cache_rates_follow_the_input_rate(self) -> None:
+        """Cache read is 0.1x and cache creation 1.25x the input rate."""
+        from afcore.core.config import PricingConfig
+
+        pricing = PricingConfig()
+
+        for model_id in ("claude-sonnet-5", "claude-opus-5"):
+            entry = pricing.models[model_id]
+            assert entry.cache_read_price_per_m == pytest.approx(entry.input_price_per_m * 0.1)
+            assert entry.cache_creation_price_per_m == pytest.approx(entry.input_price_per_m * 1.25)

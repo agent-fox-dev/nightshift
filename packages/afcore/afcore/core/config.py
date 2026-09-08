@@ -361,6 +361,18 @@ def _default_pricing_models() -> dict[str, ModelPricing]:
             cache_read_price_per_m=0.50,
             cache_creation_price_per_m=6.25,
         ),
+        "claude-sonnet-5": ModelPricing(
+            input_price_per_m=2.00,
+            output_price_per_m=10.00,
+            cache_read_price_per_m=0.20,
+            cache_creation_price_per_m=2.50,
+        ),
+        "claude-opus-5": ModelPricing(
+            input_price_per_m=5.00,
+            output_price_per_m=25.00,
+            cache_read_price_per_m=0.50,
+            cache_creation_price_per_m=6.25,
+        ),
     }
 
 

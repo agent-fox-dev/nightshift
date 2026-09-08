@@ -58,7 +58,10 @@ class LiveAwareHandler(logging.Handler):
             if self._live_console is not None:
                 msg = self.format(record)
                 style = _level_style(record.levelno)
-                self._live_console.print(msg, style=style, highlight=False)
+                # markup=False: log messages routinely name TOML tables such
+                # as [gate] or [models.tier_defaults], which Rich would parse
+                # as style tags and silently delete from the output.
+                self._live_console.print(msg, style=style, highlight=False, markup=False)
             else:
                 self._fallback.emit(record)
         except Exception:
