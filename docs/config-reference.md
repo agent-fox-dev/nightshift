@@ -202,11 +202,13 @@ and other artifacts across sessions.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `store_path` | str | `".nightshift/knowledge.duckdb"` | Path to the DuckDB knowledge store file |
+| `audit_max_runs` | int | `20` | Maximum number of audit runs to retain. Oldest runs beyond this limit are pruned from `audit_events` (and their `audit_*.jsonl` files deleted) at daemon startup. Must be ≥ 1. |
 | `provider` | table | -- | Knowledge provider configuration (see below) |
 
 ```toml
 [knowledge]
 store_path = ".nightshift/knowledge.duckdb"
+audit_max_runs = 20
 ```
 
 ### knowledge.provider

@@ -117,6 +117,18 @@ def init_knowledge(config, project_root):
         run_startup_migrations(kdb, specs, project_root)
     except Exception:
         logger.warning("Startup migrations failed", exc_info=True)
+
+    # Enforce audit retention — prune oldest runs beyond the configured
+    # limit.  Best-effort: a failure here must not prevent daemon startup.
+    try:
+        from afaudit.constants import AUDIT_DIR
+        from afcore.knowledge.duckdb_sink import enforce_audit_retention
+
+        max_runs = getattr(config.knowledge, "audit_max_runs", 20)
+        enforce_audit_retention(AUDIT_DIR, kdb.connection, max_runs=max_runs)
+    except Exception:
+        logger.warning("Audit retention failed", exc_info=True)
+
     return kdb, sink, kprov
 
 

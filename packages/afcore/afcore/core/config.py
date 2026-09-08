@@ -188,6 +188,12 @@ class KnowledgeConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     store_path: str = Field(default=".nightshift/knowledge.duckdb", description="Path to knowledge store")
+    audit_max_runs: int = Field(
+        default=20,
+        ge=1,
+        description="Maximum number of audit runs to retain in the knowledge store. "
+        "Oldest runs beyond this limit are pruned at daemon startup.",
+    )
     provider: KnowledgeProviderConfig = Field(
         default_factory=KnowledgeProviderConfig,
         description="Pluggable knowledge provider configuration (gotcha TTL, retrieval caps, etc.)",

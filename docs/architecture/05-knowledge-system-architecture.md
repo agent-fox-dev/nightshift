@@ -457,8 +457,12 @@ metrics). These traces can be reconstructed into full conversation transcripts
 from the JSONL audit trail after the fact.
 
 Completed spec audit files are cleaned up at end-of-run to avoid unbounded
-growth. Audit retention is managed per-run: the oldest runs beyond a
-configurable limit are pruned at the start of each new run.
+growth. Audit retention is enforced at daemon startup via
+``enforce_audit_retention``: the oldest runs beyond the ``[knowledge]
+audit_max_runs`` limit (default 20) are pruned from ``audit_events`` and
+their corresponding ``audit_*.jsonl`` files are deleted. The retention
+call is best-effort — failures are logged at WARNING level but do not
+abort startup.
 
 ---
 
