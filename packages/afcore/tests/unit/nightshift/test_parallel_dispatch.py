@@ -13,6 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from afissues.protocol import IssueResult
 
+# A representative non-empty diff so check_staleness reaches the AI path
+# rather than short-circuiting (issue #53 guard).
+_SAMPLE_DIFF = "diff --git a/foo.py b/foo.py\n-old\n+new\n"
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -323,7 +327,7 @@ class TestInFlightStalenessExclusion:
             result = await check_staleness(
                 fixed,
                 remaining,
-                "",
+                _SAMPLE_DIFF,
                 config,
                 mock_platform,
                 in_flight={3},
@@ -355,7 +359,7 @@ class TestInFlightStalenessExclusion:
             "afcore.nightshift.staleness._run_ai_staleness",
             AsyncMock(return_value=ai_result),
         ):
-            result = await check_staleness(fixed, remaining, "", config, mock_platform, in_flight=set())
+            result = await check_staleness(fixed, remaining, _SAMPLE_DIFF, config, mock_platform, in_flight=set())
 
         assert 2 in result.obsolete_issues
 
@@ -376,7 +380,7 @@ class TestInFlightStalenessExclusion:
         result = await check_staleness(
             fixed,
             remaining,
-            "",
+            _SAMPLE_DIFF,
             config,
             mock_platform,
             in_flight={2, 3},

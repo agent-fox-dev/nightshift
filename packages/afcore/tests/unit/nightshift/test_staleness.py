@@ -4,12 +4,19 @@ Covers issue #228: check_staleness must close issues that the AI says are
 obsolete AND that GitHub confirms are still open — not issues that are already
 closed externally.
 
-Requirements: 71-REQ-5.1, 71-REQ-5.2, 71-REQ-5.E1, 71-REQ-5.E2
+Issue #53: check_staleness must return empty when fix_diff is empty, without
+calling the AI.
+
+Requirements: 71-REQ-5.1, 71-REQ-5.2, 71-REQ-5.E1, 71-REQ-5.E2, NS-REQ-1
 """
 
 from __future__ import annotations
 
 import pytest
+
+# A representative non-empty diff used by normal-path tests.
+# Tests that exercise the empty-diff guard use "" explicitly.
+_SAMPLE_DIFF = "diff --git a/foo.py b/foo.py\n--- a/foo.py\n+++ b/foo.py\n@@ -1 +1 @@\n-old\n+new\n"
 
 # ---------------------------------------------------------------------------
 # Response parser (unchanged, just regression coverage)
@@ -88,6 +95,71 @@ class TestRunAiStalenessModelTier:
 
 
 # ---------------------------------------------------------------------------
+# Issue #53: empty diff must short-circuit (fail closed)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckStalenessEmptyDiffGuard:
+    """check_staleness returns empty immediately when fix_diff is empty (issue #53).
+
+    AC-1: Given fix_diff="", check_staleness returns obsolete_issues=[]
+    regardless of what the model would return.  _run_ai_staleness is
+    never invoked.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_diff_returns_empty_without_ai_call(self) -> None:
+        """fix_diff="" → StalenessResult(obsolete_issues=[], rationale={}).
+
+        _run_ai_staleness must NOT be called.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.staleness import StalenessResult, check_staleness
+        from afissues.protocol import IssueResult
+
+        fixed = IssueResult(number=1, title="Fixed", html_url="", body="")
+        remaining = [IssueResult(number=2, title="Remaining", html_url="", body="")]
+
+        mock_platform = AsyncMock()
+        config = MagicMock()
+
+        # The AI would return a non-empty nomination — but it should never be called.
+        ai_result = StalenessResult(obsolete_issues=[2], rationale={2: "fixed by issue 1"})
+        mock_ai = AsyncMock(return_value=ai_result)
+
+        with patch("afcore.nightshift.staleness._run_ai_staleness", mock_ai):
+            result = await check_staleness(fixed, remaining, "", config, mock_platform)
+
+        assert result.obsolete_issues == []
+        assert result.rationale == {}
+        mock_ai.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_diff_returns_empty(self) -> None:
+        """fix_diff containing only whitespace is treated as empty."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.staleness import StalenessResult, check_staleness
+        from afissues.protocol import IssueResult
+
+        fixed = IssueResult(number=1, title="Fixed", html_url="", body="")
+        remaining = [IssueResult(number=2, title="Remaining", html_url="", body="")]
+
+        mock_platform = AsyncMock()
+        config = MagicMock()
+
+        ai_result = StalenessResult(obsolete_issues=[2], rationale={2: "fixed"})
+        mock_ai = AsyncMock(return_value=ai_result)
+
+        with patch("afcore.nightshift.staleness._run_ai_staleness", mock_ai):
+            result = await check_staleness(fixed, remaining, "   \n  ", config, mock_platform)
+
+        assert result.obsolete_issues == []
+        mock_ai.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Issue #228: corrected gate logic in check_staleness
 # ---------------------------------------------------------------------------
 
@@ -121,7 +193,7 @@ class TestCheckStalenessGateLogic:
             "afcore.nightshift.staleness._run_ai_staleness",
             AsyncMock(return_value=ai_result),
         ):
-            result = await check_staleness(fixed, remaining, "", config, mock_platform)
+            result = await check_staleness(fixed, remaining, _SAMPLE_DIFF, config, mock_platform)
 
         assert 2 in result.obsolete_issues
         assert result.rationale[2] == "fixed by issue 1"
@@ -152,7 +224,7 @@ class TestCheckStalenessGateLogic:
             "afcore.nightshift.staleness._run_ai_staleness",
             AsyncMock(return_value=ai_result),
         ):
-            result = await check_staleness(fixed, remaining, "", config, mock_platform)
+            result = await check_staleness(fixed, remaining, _SAMPLE_DIFF, config, mock_platform)
 
         assert 2 not in result.obsolete_issues
 
@@ -179,7 +251,7 @@ class TestCheckStalenessGateLogic:
             "afcore.nightshift.staleness._run_ai_staleness",
             AsyncMock(side_effect=RuntimeError("AI unavailable")),
         ):
-            result = await check_staleness(fixed, remaining, "", config, mock_platform)
+            result = await check_staleness(fixed, remaining, _SAMPLE_DIFF, config, mock_platform)
 
         # Without AI, we cannot know what to close
         assert result.obsolete_issues == []
@@ -211,7 +283,7 @@ class TestCheckStalenessGateLogic:
             "afcore.nightshift.staleness._run_ai_staleness",
             AsyncMock(side_effect=RuntimeError("AI unavailable")),
         ):
-            result = await check_staleness(fixed, remaining, "", config, mock_platform)
+            result = await check_staleness(fixed, remaining, _SAMPLE_DIFF, config, mock_platform)
 
         # Must NOT nominate issue 2 — we have no AI confirmation.
         assert result.obsolete_issues == []
@@ -245,7 +317,7 @@ class TestCheckStalenessGateLogic:
             "afcore.nightshift.staleness._run_ai_staleness",
             AsyncMock(side_effect=RuntimeError("AI unavailable")),
         ):
-            result = await check_staleness(fixed, remaining, "", config, mock_platform)
+            result = await check_staleness(fixed, remaining, _SAMPLE_DIFF, config, mock_platform)
 
         # No issues nominated — AI failure means return empty.
         assert result.obsolete_issues == []
@@ -271,6 +343,6 @@ class TestCheckStalenessGateLogic:
             "afcore.nightshift.staleness._run_ai_staleness",
             AsyncMock(return_value=ai_result),
         ):
-            result = await check_staleness(fixed, remaining, "", config, mock_platform)
+            result = await check_staleness(fixed, remaining, _SAMPLE_DIFF, config, mock_platform)
 
         assert result.obsolete_issues == []

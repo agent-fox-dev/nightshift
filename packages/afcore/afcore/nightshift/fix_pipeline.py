@@ -174,6 +174,11 @@ class FixMetrics:
     only ``"fixed"`` -- the branch was actually merged into the
     integration branch -- should gate ``NightShiftEngine.state.issues_fixed``
     and the post-fix staleness sweep.
+
+    ``fix_diff`` carries a bounded preview of the post-merge diff so the
+    staleness check has real evidence to evaluate remaining issues against
+    (issue #53).  Truncated to 3 000 characters -- the staleness prompt
+    already enforces this ceiling.
     """
 
     input_tokens: int = 0
@@ -183,6 +188,7 @@ class FixMetrics:
     sessions_run: int = 0
     cost_usd: float = 0.0
     outcome: str = "failed"
+    fix_diff: str = ""
 
 
 # Maps FixPipeline._integrate_fix()'s harvest_result to the FixMetrics
@@ -300,6 +306,9 @@ class FixPipeline:
         self._run_id: str = ""
         self._pr_number: int | None = None
         self._pr_url: str | None = None
+        # Bounded diff preview captured by _integrate_fix for the
+        # staleness check (issue #53).  Set on the "merged" path only.
+        self._last_fix_diff: str = ""
 
     @property
     def repo_root(self) -> Path:
@@ -1562,6 +1571,19 @@ class FixPipeline:
             self._update_spinner(f"Pushing fix branch for issue #{issue.number}…")
             await self._push_fix_branch_upstream(spec, workspace)
 
+        # Capture the diff BEFORE harvest, which changes the working tree.
+        # The staleness prompt truncates at 3 000 chars anyway, so bound
+        # it here to keep FixMetrics lean (issue #53).
+        self._last_fix_diff = ""
+        try:
+            self._last_fix_diff = await self._capture_fix_diff(workspace)
+        except Exception:
+            logger.warning(
+                "Failed to capture fix diff for issue #%d, staleness check will be skipped",
+                spec.issue_number,
+                exc_info=True,
+            )
+
         # Harvest fix branch into develop and push to origin (65-REQ-3.2).
         # Must run BEFORE cleanup destroys the feature branch.
         self._update_spinner(f"Merging fix for issue #{issue.number} into develop…")
@@ -2045,6 +2067,7 @@ class FixPipeline:
             )
 
             harvest_result, changed_files = await self._integrate_fix(issue, spec, workspace)
+            metrics.fix_diff = self._last_fix_diff
 
             # 05-REQ-2.1: Post-harvest knowledge ingestion with real touched_files.
             # This call is independent of the pre-harvest ingestion in
@@ -2154,6 +2177,26 @@ class FixPipeline:
                 "Auto-commit sweep failed, continuing with harvest: %s",
                 exc,
             )
+
+    async def _capture_fix_diff(
+        self,
+        workspace: WorkspaceInfo,
+    ) -> str:
+        """Capture a bounded diff of the fix branch against the integration branch.
+
+        Returns up to 3 000 characters of ``git diff`` output so the
+        staleness check has real evidence to evaluate remaining issues
+        against (issue #53).
+
+        Must be called BEFORE harvest, which changes the working tree.
+        """
+        integration_branch = self._config.workspace.integration_branch
+        _rc, stdout, _stderr = await _workspace_git.run_git(
+            ["diff", integration_branch, workspace.branch],
+            cwd=workspace.path,
+        )
+        # Bound to 3 000 chars — the staleness prompt enforces this ceiling.
+        return stdout[:3000]
 
     async def _harvest_and_push(
         self,

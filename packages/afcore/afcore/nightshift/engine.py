@@ -186,6 +186,9 @@ class NightShiftEngine:
         # _run_one's finally block, both on the event-loop thread with no
         # await between read and write, so no lock is needed (issue #33).
         self._reserved_cost: float = 0.0
+        # Per-issue diff previews captured by _process_fix for the
+        # staleness check in _dispatch_parallel (issue #53).
+        self._fix_diffs: dict[int, str] = {}
 
         # AC-4 (issue #35): log once at startup when no gate command is
         # configured so the operator knows the daemon is running ungated.
@@ -732,7 +735,7 @@ class NightShiftEngine:
                             staleness = await check_staleness(
                                 issue_map[issue_num],
                                 remaining,
-                                "",  # diff not available in current implementation
+                                self._fix_diffs.get(issue_num, ""),
                                 self._config,
                                 self._platform,
                                 sink=self._sink,
@@ -865,8 +868,12 @@ class NightShiftEngine:
         exception) or that raises is reported as not fixed, so callers no
         longer have to infer success from "did not raise" (issue #50).
 
+        As a side-effect, stores the bounded diff preview in
+        ``self._fix_diffs[issue.number]`` so the staleness check in
+        ``_dispatch_parallel`` can pass it through (issue #53).
+
         Requirements: 61-REQ-6.1, 61-REQ-6.2, 61-REQ-6.3, 61-REQ-6.4,
-                      61-REQ-9.3, NS-REQ-50 (issue #50)
+                      61-REQ-9.3, NS-REQ-50 (issue #50), NS-REQ-53 (issue #53)
         """
         from afissues.protocol import IssueResult
 
@@ -904,6 +911,11 @@ class NightShiftEngine:
             # "the pipeline call returned without raising" is not evidence
             # the fix landed.
             succeeded = getattr(metrics, "outcome", "failed") == "fixed"
+            # Store the bounded diff preview for the staleness check
+            # (issue #53).  The dict is read by _run_one in _dispatch_parallel.
+            fix_diff = getattr(metrics, "fix_diff", "")
+            if fix_diff:
+                self._fix_diffs[issue.number] = fix_diff
         except Exception:
             logger.warning(
                 "Fix pipeline raised unexpectedly for issue #%d",

@@ -161,7 +161,14 @@ async def check_staleness(
     evaluation — they are currently being processed in parallel and
     must not be closed by a sibling fix's staleness check.
 
+    When ``fix_diff`` is empty or whitespace-only, the function returns
+    an empty result immediately without calling the AI.  Absence of
+    evidence is not evidence of obsolescence — a diffless verdict would
+    close issues based only on titles, which is unsafe for an unattended
+    daemon (issue #53, #31).
+
     Fallback chain:
+    - If fix_diff is empty: return empty immediately (NS-REQ-1)
     - If AI fails: verify via GitHub API only (71-REQ-5.E1)
     - If GitHub fails: log warning, return empty (71-REQ-5.E2)
 
@@ -169,8 +176,18 @@ async def check_staleness(
     fallback — a rejected or unfunded API key is propagated so the daemon
     aborts with a clear message.
 
-    Requirements: 71-REQ-5.1, 71-REQ-5.2, 71-REQ-5.E1, 71-REQ-5.E2
+    Requirements: 71-REQ-5.1, 71-REQ-5.2, 71-REQ-5.E1, 71-REQ-5.E2, NS-REQ-1
     """
+    # Fail closed: refuse to nominate anything without a real diff.
+    # An empty diff means the AI would decide based on titles alone,
+    # which is unsafe for an unattended daemon (issue #53, #31).
+    if not fix_diff or not fix_diff.strip():
+        logger.info(
+            "Staleness check skipped for fix #%d: no diff available",
+            fixed_issue.number,
+        )
+        return StalenessResult(obsolete_issues=[], rationale={})
+
     # Exclude in-flight issues from staleness evaluation
     if in_flight:
         remaining_issues = [i for i in remaining_issues if i.number not in in_flight]

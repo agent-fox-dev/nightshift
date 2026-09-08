@@ -17,6 +17,10 @@ from afissues.protocol import IssueResult
 
 FATAL = FatalAPIError("Anthropic API credit balance is too low — no further model calls can succeed.")
 
+# A representative non-empty diff so check_staleness reaches the AI call
+# path rather than short-circuiting (issue #53 guard).
+_SAMPLE_DIFF = "diff --git a/foo.py b/foo.py\n-old\n+new\n"
+
 
 def _make_issue(number: int, title: str = "Test issue") -> IssueResult:
     return IssueResult(
@@ -50,7 +54,7 @@ class TestStalenessPropagatesFatal:
                 await check_staleness(
                     _make_issue(1),
                     [_make_issue(2)],
-                    "",
+                    _SAMPLE_DIFF,
                     MagicMock(),
                     platform,
                 )
@@ -73,7 +77,7 @@ class TestStalenessPropagatesFatal:
             result = await check_staleness(
                 _make_issue(1),
                 [_make_issue(2)],
-                "",
+                _SAMPLE_DIFF,
                 MagicMock(),
                 platform,
             )
