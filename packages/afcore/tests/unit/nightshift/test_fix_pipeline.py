@@ -1654,3 +1654,34 @@ class TestSessionParamsForwarding:
         _, kwargs = mock_run.call_args
         assert kwargs["effort"] == "medium", f"Expected effort='medium', got {kwargs.get('effort')!r}"
         assert kwargs["compaction"] is False, f"Expected compaction=False, got {kwargs.get('compaction')!r}"
+
+
+class TestSetupWorkspaceDeleteRemote:
+    """Issue #34: _setup_workspace passes delete_remote=False to create_worktree."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("merge_strategy", ["pr", "direct", "branch"])
+    async def test_setup_workspace_passes_delete_remote_false(self, merge_strategy: str) -> None:
+        """AC-1, AC-2: _setup_workspace passes delete_remote=False regardless of merge strategy."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.fix_pipeline import FixPipeline
+
+        config = MagicMock()
+        config.workspace.integration_branch = "develop"
+        config.workspace.merge_strategy = merge_strategy
+        pipeline = FixPipeline(config=config, platform=AsyncMock())
+
+        spec = MagicMock()
+        spec.issue_number = 42
+        spec.branch_name = "fix/42-test-branch"
+
+        with (
+            patch("afcore.workspace.ensure_integration_branch", new_callable=AsyncMock),
+            patch("afcore.workspace.create_worktree", new_callable=AsyncMock) as mock_create_wt,
+        ):
+            await pipeline._setup_workspace(spec)
+
+        mock_create_wt.assert_awaited_once()
+        _, kwargs = mock_create_wt.call_args
+        assert kwargs.get("delete_remote") is False

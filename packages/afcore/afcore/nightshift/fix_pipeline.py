@@ -569,6 +569,7 @@ class FixPipeline:
             task_group=0,
             base_branch=integration_branch,
             branch_name=spec.branch_name,
+            delete_remote=False,
         )
 
     async def _cleanup_workspace(

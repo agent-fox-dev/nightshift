@@ -153,6 +153,8 @@ async def create_worktree(
     branch_name: str | None = None,
     role: str | None = None,
     mode: str | None = None,
+    *,
+    delete_remote: bool = False,
 ) -> WorkspaceInfo:
     """Create an isolated git worktree for a coding session.
 
@@ -174,7 +176,10 @@ async def create_worktree(
     WARNING-level log is emitted and ``"unknown"`` is substituted as the
     role segment.
 
-    If a stale worktree or branch exists, it is removed first.
+    If a stale worktree or branch exists, it is removed first. If
+    *delete_remote* is True, also deletes the remote branch via ``git push
+    origin --delete``; defaults to False so remote refs (such as branches
+    backing open pull requests) are preserved.
 
     Requirements: 80-REQ-1.2, 80-REQ-3.2, 09-REQ-1, 09-REQ-2, 09-REQ-5
 
@@ -266,13 +271,13 @@ async def create_worktree(
         # Clean up stale feature branch if it exists (03-REQ-1.E2)
         await delete_branch(repo_root, branch_name, force=True)
 
-        # Also delete the remote tracking branch to prevent divergent
-        # histories when the branch is recreated from a newer base.
-        await run_git(
-            ["push", "origin", "--delete", branch_name],
-            cwd=repo_root,
-            check=False,
-        )
+        # Also delete the remote tracking branch if explicitly requested.
+        if delete_remote:
+            await run_git(
+                ["push", "origin", "--delete", branch_name],
+                cwd=repo_root,
+                check=False,
+            )
 
     # Defence-in-depth: delete any prefix ref that would cause a git D/F
     # conflict.  The 2-level ref ``feature/{spec}/{group}`` left by a prior

@@ -483,3 +483,211 @@ class TestPreserveBranchOnHarvestFailure:
         branches = list_branches(tmp_worktree_repo)
         assert ws.branch in branches
         assert f"stalled/{ws.branch}" not in branches
+
+
+class TestCreateWorktreeDeleteRemote:
+    """Issue #34: create_worktree must not delete remote branches by default."""
+
+    @pytest.fixture
+    def repo_with_origin(self, tmp_path: Path) -> tuple[Path, Path]:
+        """A git repo with a bare origin remote."""
+        import subprocess
+
+        origin = tmp_path / "origin.git"
+        origin.mkdir()
+        subprocess.run(["git", "init", "--bare"], cwd=origin, check=True, capture_output=True)
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True, capture_output=True)
+        (repo / "README.md").write_text("# Test repo\n")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "branch", "-M", "develop"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "remote", "add", "origin", str(origin)], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "push", "-u", "origin", "develop"], cwd=repo, check=True, capture_output=True)
+        return repo, origin
+
+    @pytest.mark.asyncio
+    async def test_does_not_delete_remote_branch_by_default(
+        self,
+        repo_with_origin: tuple[Path, Path],
+    ) -> None:
+        """AC-1: create_worktree does not push origin --delete by default, preserving remote ref."""
+        import subprocess
+
+        repo, _origin = repo_with_origin
+        branch_name = "fix/issue-34-test"
+
+        # Create and push branch to origin
+        subprocess.run(["git", "branch", branch_name, "develop"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "push", "origin", branch_name], cwd=repo, check=True, capture_output=True)
+
+        # Confirm branch exists on remote
+        res = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin", branch_name],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert f"refs/heads/{branch_name}" in res.stdout
+
+        # Call create_worktree without delete_remote (default False)
+        ws = await create_worktree(
+            repo,
+            "fix-issue-34",
+            0,
+            base_branch="develop",
+            branch_name=branch_name,
+        )
+        assert ws.path.is_dir()
+
+        # Branch must STILL exist on origin
+        res_after = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin", branch_name],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert f"refs/heads/{branch_name}" in res_after.stdout
+
+    @pytest.mark.asyncio
+    async def test_no_push_origin_delete_command_issued(
+        self,
+        repo_with_origin: tuple[Path, Path],
+    ) -> None:
+        """AC-1: create_worktree does not execute git push origin --delete."""
+        import subprocess
+
+        import afcore.workspace.worktree as wt_module
+
+        repo, _origin = repo_with_origin
+        branch_name = "fix/issue-34-test-cmd"
+        subprocess.run(["git", "branch", branch_name, "develop"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "push", "origin", branch_name], cwd=repo, check=True, capture_output=True)
+
+        original_run_git = wt_module.run_git
+        run_git_calls: list[list[str]] = []
+
+        async def tracked_run_git(args: list[str], *a: object, **kw: object) -> str:
+            run_git_calls.append(list(args))
+            return await original_run_git(args, *a, **kw)
+
+        with patch.object(wt_module, "run_git", side_effect=tracked_run_git):
+            await create_worktree(
+                repo,
+                "fix-issue-34",
+                0,
+                base_branch="develop",
+                branch_name=branch_name,
+            )
+
+        push_delete_calls = [
+            call for call in run_git_calls if len(call) >= 4 and call[0] == "push" and "--delete" in call
+        ]
+        assert push_delete_calls == []
+
+    @pytest.mark.asyncio
+    async def test_deletes_remote_branch_when_explicitly_requested(
+        self,
+        repo_with_origin: tuple[Path, Path],
+    ) -> None:
+        """create_worktree deletes remote branch when delete_remote=True is explicitly passed."""
+        import subprocess
+
+        repo, _origin = repo_with_origin
+        branch_name = "fix/issue-34-delete-test"
+
+        subprocess.run(["git", "branch", branch_name, "develop"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "push", "origin", branch_name], cwd=repo, check=True, capture_output=True)
+
+        res = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin", branch_name],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert f"refs/heads/{branch_name}" in res.stdout
+
+        ws = await create_worktree(
+            repo,
+            "fix-issue-34",
+            0,
+            base_branch="develop",
+            branch_name=branch_name,
+            delete_remote=True,
+        )
+        assert ws.path.is_dir()
+
+        res_after = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin", branch_name],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert f"refs/heads/{branch_name}" not in res_after.stdout
+
+    @pytest.mark.asyncio
+    async def test_stale_local_branch_is_still_force_deleted(
+        self,
+        tmp_worktree_repo: Path,
+    ) -> None:
+        """AC-3: Stale local branch is still force-deleted and worktree created successfully."""
+        import subprocess
+
+        branch_name = "fix/issue-34-local-stale"
+
+        # Create a local branch with an extra commit ahead of develop
+        subprocess.run(
+            ["git", "branch", branch_name, "develop"],
+            cwd=tmp_worktree_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "checkout", branch_name],
+            cwd=tmp_worktree_repo,
+            check=True,
+            capture_output=True,
+        )
+        (tmp_worktree_repo / "stale_file.txt").write_text("stale data")
+        subprocess.run(
+            ["git", "add", "stale_file.txt"],
+            cwd=tmp_worktree_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Stale commit"],
+            cwd=tmp_worktree_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "checkout", "develop"],
+            cwd=tmp_worktree_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        stale_tip = get_branch_tip(tmp_worktree_repo, branch_name)
+        develop_tip = get_branch_tip(tmp_worktree_repo, "develop")
+        assert stale_tip != develop_tip
+
+        # create_worktree should force-delete the stale branch and recreate it from develop tip
+        ws = await create_worktree(
+            tmp_worktree_repo,
+            "fix-issue-34",
+            0,
+            base_branch="develop",
+            branch_name=branch_name,
+        )
+        assert ws.path.is_dir()
+        new_tip = get_branch_tip(tmp_worktree_repo, branch_name)
+        assert new_tip == develop_tip
