@@ -147,6 +147,18 @@ def emit_auxiliary_cost_fail(
         )
 
 
+#: ``max_tokens`` ceiling for nightshift's auxiliary AI calls (triage,
+#: staleness).  These return small JSON payloads, but on models that think by
+#: default (Claude Opus 5, Sonnet 5, and the 4.6+ family under adaptive
+#: thinking) reasoning tokens are drawn from the same ceiling.  The previous
+#: 4096 left too little room: the model could exhaust it while thinking and
+#: return no text block at all, which surfaces as "AI response has no text
+#: content".  These calls stream, so a generous ceiling costs nothing until
+#: the tokens are actually produced, and it stays well under every supported
+#: model's output cap.
+AUX_CALL_MAX_TOKENS = 16000
+
+
 async def nightshift_ai_call(
     *,
     model_tier: str,

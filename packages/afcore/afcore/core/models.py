@@ -42,11 +42,19 @@ class ModelEntry:
     tier: ModelTier
 
 
+#: Known model IDs and the tier each belongs to.
+#:
+#: Every entry here MUST also have a ``[pricing.models.<id>]`` default in
+#: :func:`afcore.core.config._default_pricing_models` — an unpriced model is
+#: costed at zero, which silently disables ``orchestrator.max_budget_usd``.
+#: ``tests/unit/core/test_model_validation.py`` enforces that pairing.
 MODEL_REGISTRY: dict[str, ModelEntry] = {
     "claude-haiku-4-5": ModelEntry("claude-haiku-4-5", ModelTier.SIMPLE),
     "claude-sonnet-4-6": ModelEntry("claude-sonnet-4-6", ModelTier.STANDARD),
+    "claude-sonnet-5": ModelEntry("claude-sonnet-5", ModelTier.STANDARD),
     "claude-opus-4-5": ModelEntry("claude-opus-4-5", ModelTier.ADVANCED),
     "claude-opus-4-6": ModelEntry("claude-opus-4-6", ModelTier.ADVANCED),
+    "claude-opus-5": ModelEntry("claude-opus-5", ModelTier.ADVANCED),
 }
 
 TIER_DEFAULTS: dict[ModelTier, str] = {

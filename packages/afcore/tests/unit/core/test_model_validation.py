@@ -559,3 +559,87 @@ class TestCurrentGenerationPricing:
             entry = pricing.models[model_id]
             assert entry.cache_read_price_per_m == pytest.approx(entry.input_price_per_m * 0.1)
             assert entry.cache_creation_price_per_m == pytest.approx(entry.input_price_per_m * 1.25)
+
+
+class TestRegistryPricingInvariant:
+    """Every registered model must be priced.
+
+    A model in MODEL_REGISTRY with no pricing entry is costed at zero, which
+    silently disables `orchestrator.max_budget_usd` for anyone who selects it.
+    This pairing is the guard against that whole class of bug.
+    """
+
+    def test_every_registered_model_has_pricing(self) -> None:
+        from afcore.core.config import PricingConfig
+        from afcore.core.models import MODEL_REGISTRY
+
+        priced = set(PricingConfig().models)
+        unpriced = sorted(set(MODEL_REGISTRY) - priced)
+
+        assert not unpriced, (
+            f"Models in MODEL_REGISTRY without built-in pricing: {unpriced}. "
+            "An unpriced model costs zero, so max_budget_usd never trips. "
+            "Add a matching entry to _default_pricing_models in config.py."
+        )
+
+    def test_every_tier_default_is_registered(self) -> None:
+        """A tier default must name a model the registry knows."""
+        from afcore.core.models import MODEL_REGISTRY, TIER_DEFAULTS
+
+        for tier, model_id in TIER_DEFAULTS.items():
+            assert model_id in MODEL_REGISTRY, f"{tier} default '{model_id}' is not in MODEL_REGISTRY"
+
+
+class TestCurrentGenerationRegistered:
+    """Current-generation models resolve without a [models.registry] entry."""
+
+    def test_registry_contains_current_models(self) -> None:
+        from afcore.core.models import MODEL_REGISTRY, ModelTier
+
+        assert MODEL_REGISTRY["claude-sonnet-5"].tier is ModelTier.STANDARD
+        assert MODEL_REGISTRY["claude-opus-5"].tier is ModelTier.ADVANCED
+
+    def test_tier_defaults_accept_current_models_without_registry_entries(self) -> None:
+        """The friction that started this: no hand-written registry needed."""
+        from afcore.core.models import resolve_model
+
+        models_cfg = ModelsConfig(
+            tier_defaults={
+                "SIMPLE": "claude-sonnet-5",
+                "STANDARD": "claude-opus-5",
+                "ADVANCED": "claude-opus-5",
+            },
+        )
+
+        assert resolve_model("SIMPLE", models_config=models_cfg) == "claude-sonnet-5"
+        assert resolve_model("ADVANCED", models_config=models_cfg) == "claude-opus-5"
+
+    def test_resolve_by_bare_model_id(self) -> None:
+        """The IDs are also selectable directly, e.g. as an archetype override."""
+        from afcore.core.models import resolve_model
+
+        assert resolve_model("claude-opus-5") == "claude-opus-5"
+        assert resolve_model("claude-sonnet-5") == "claude-sonnet-5"
+
+
+class TestAuxCallTokenCeiling:
+    """Auxiliary calls need room for reasoning tokens plus the JSON payload."""
+
+    def test_ceiling_leaves_room_for_thinking(self) -> None:
+        from afcore.nightshift.cost_helpers import AUX_CALL_MAX_TOKENS
+
+        # Comfortably above the old 4096, which a thinking model could exhaust
+        # before emitting any text block.
+        assert AUX_CALL_MAX_TOKENS >= 16000
+
+    def test_both_aux_call_sites_use_the_constant(self) -> None:
+        """No stray 4096 left behind in triage or staleness."""
+        from pathlib import Path
+
+        import afcore
+
+        pkg = Path(afcore.__file__).parent
+        for name in ("nightshift/triage.py", "nightshift/staleness.py"):
+            source = (pkg / name).read_text(encoding="utf-8")
+            assert "max_tokens=AUX_CALL_MAX_TOKENS" in source, f"{name} does not use the shared ceiling"
+            assert "max_tokens=4096" not in source, f"{name} still hardcodes 4096"

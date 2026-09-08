@@ -156,7 +156,7 @@ async def _run_ai_triage(
 
     Requirements: 71-REQ-3.2, 100-REQ-2.2, 100-REQ-5.1, 100-REQ-5.2, 100-REQ-5.3
     """
-    from afcore.nightshift.cost_helpers import nightshift_ai_call
+    from afcore.nightshift.cost_helpers import AUX_CALL_MAX_TOKENS, nightshift_ai_call
 
     # Resolve model tier and security config via maintainer:hunt archetype identity
     # (100-REQ-5.1, 100-REQ-5.2, 100-REQ-2.2)
@@ -172,7 +172,7 @@ async def _run_ai_triage(
 
     response_text, _response = await nightshift_ai_call(
         model_tier=tier,
-        max_tokens=4096,
+        max_tokens=AUX_CALL_MAX_TOKENS,
         messages=[{"role": "user", "content": prompt}],
         context="batch triage",
         cost_label="batch_triage",

@@ -264,6 +264,12 @@ model or tier leaves the built-in value unchanged.
 Additional model entries keyed by model ID. Each entry declares the tier
 for that model.
 
+You only need this for a model nightshift does not already know. The built-in
+registry covers `claude-haiku-4-5` (SIMPLE), `claude-sonnet-4-6` and
+`claude-sonnet-5` (STANDARD), and `claude-opus-4-5`, `claude-opus-4-6` and
+`claude-opus-5` (ADVANCED) — any of those can be named in
+`[models.tier_defaults]` directly, with no registry entry.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `tier` | str | required | Model tier: `SIMPLE`, `STANDARD`, or `ADVANCED` |
@@ -304,6 +310,15 @@ entry:
 # Use Sonnet as the ADVANCED default (cheap experiments)
 [models.tier_defaults]
 ADVANCED = "claude-sonnet-4-6"
+```
+
+Built-in models need no registry entry:
+
+```toml
+[models.tier_defaults]
+SIMPLE   = "claude-sonnet-5"
+STANDARD = "claude-opus-5"
+ADVANCED = "claude-opus-5"
 ```
 
 #### When a default model is not accessible
