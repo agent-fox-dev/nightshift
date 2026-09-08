@@ -185,6 +185,72 @@ class TestCheckStalenessGateLogic:
         assert result.obsolete_issues == []
 
     @pytest.mark.asyncio
+    async def test_ai_failure_label_removed_still_open_returns_empty(self) -> None:
+        """Issue #54: AI fails and issue lost af:fix label but is still open.
+
+        The label-scoped list_issues_by_label returns [] because the label
+        was removed — NOT because the issue was closed.  The old code would
+        nominate this issue as obsolete; the fix must return empty.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.staleness import check_staleness
+        from afissues.protocol import IssueResult
+
+        fixed = IssueResult(number=1, title="Fixed", html_url="", body="")
+        remaining = [IssueResult(number=2, title="Remaining", html_url="", body="")]
+
+        mock_platform = AsyncMock()
+        # Issue 2 is still open but lost its af:fix label → absent from
+        # the label-scoped query.
+        mock_platform.list_issues_by_label = AsyncMock(return_value=[])
+
+        config = MagicMock()
+
+        with patch(
+            "afcore.nightshift.staleness._run_ai_staleness",
+            AsyncMock(side_effect=RuntimeError("AI unavailable")),
+        ):
+            result = await check_staleness(fixed, remaining, "", config, mock_platform)
+
+        # Must NOT nominate issue 2 — we have no AI confirmation.
+        assert result.obsolete_issues == []
+
+    @pytest.mark.asyncio
+    async def test_ai_failure_issue_genuinely_closed_returns_empty(self) -> None:
+        """Issue #54: AI fails, issue genuinely closed externally → still empty.
+
+        Even when the issue is truly closed (absent from label list for
+        legitimate reasons), on AI failure we should not nominate it.
+        The next successful AI cycle can handle it.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from afcore.nightshift.staleness import check_staleness
+        from afissues.protocol import IssueResult
+
+        fixed = IssueResult(number=1, title="Fixed", html_url="", body="")
+        remaining = [
+            IssueResult(number=2, title="Remaining", html_url="", body=""),
+            IssueResult(number=3, title="Also remaining", html_url="", body=""),
+        ]
+
+        mock_platform = AsyncMock()
+        # Neither issue in the open-af:fix list (one closed, one lost label)
+        mock_platform.list_issues_by_label = AsyncMock(return_value=[])
+
+        config = MagicMock()
+
+        with patch(
+            "afcore.nightshift.staleness._run_ai_staleness",
+            AsyncMock(side_effect=RuntimeError("AI unavailable")),
+        ):
+            result = await check_staleness(fixed, remaining, "", config, mock_platform)
+
+        # No issues nominated — AI failure means return empty.
+        assert result.obsolete_issues == []
+
+    @pytest.mark.asyncio
     async def test_github_failure_returns_empty(self) -> None:
         """When GitHub re-fetch fails, return empty (71-REQ-5.E2)."""
         from unittest.mock import AsyncMock, MagicMock, patch

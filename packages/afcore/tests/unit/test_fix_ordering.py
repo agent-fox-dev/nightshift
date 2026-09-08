@@ -846,7 +846,12 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_ts_71_e6_staleness_ai_failure_github_fallback(self) -> None:
-        """AI failure falls back to GitHub API verification only."""
+        """AI failure returns empty — cannot safely determine obsolescence.
+
+        Issue #54: the old code nominated issues absent from the label-
+        scoped list, which conflated "closed" with "label removed".  The
+        corrected behaviour is to return empty on AI failure.
+        """
         from afcore.nightshift.staleness import check_staleness
 
         mock_platform = AsyncMock()
@@ -864,7 +869,8 @@ class TestEdgeCases:
         ):
             result = await check_staleness(fixed_issue, remaining, "diff", config, mock_platform)
 
-        assert 20 in result.obsolete_issues
+        # Issue #54: on AI failure, no issues should be nominated
+        assert result.obsolete_issues == []
 
     # -----------------------------------------------------------------------
     # TS-71-E7: Staleness GitHub re-fetch failure

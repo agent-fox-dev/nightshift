@@ -218,12 +218,13 @@ async def check_staleness(
     rationale: dict[int, str] = {}
 
     if ai_failed:
-        # AI failure fallback (71-REQ-5.E1): an issue is obsolete when
-        # GitHub confirms it is no longer open.
-        for num in remaining_numbers:
-            if num not in still_open_numbers:
-                obsolete_issues.append(num)
-                rationale[num] = "closed externally (AI fallback)"
+        # AI failure fallback (71-REQ-5.E1, issue #54): without AI we
+        # cannot determine which issues are obsolete.  The label-scoped
+        # ``still_open_numbers`` conflates "closed" with "open but label
+        # removed", so nominating absent issues risks closing live issues.
+        # Return empty — genuinely superseded issues will be picked up on
+        # the next cycle when the AI is available again.
+        return StalenessResult(obsolete_issues=[], rationale={})
     else:
         # Normal path: an issue is obsolete when the AI says it is
         # resolved AND GitHub confirms it is still open (so our
