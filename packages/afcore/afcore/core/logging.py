@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 
 _LOG_FORMAT = "[%(levelname)s] %(name)s: %(message)s"
 
+# Every top-level package whose loggers should be configured by setup_logging().
+# Add new workspace packages here so they inherit verbosity flags and the
+# LiveAwareHandler (prevents unformatted stderr output and Rich Live corruption).
+_CONFIGURED_PACKAGES = ("afcore", "nightshift")
+
 
 class LiveAwareHandler(logging.Handler):
     """Log handler that routes output through a Rich Live console when active.
@@ -89,7 +94,8 @@ def get_live_handler() -> LiveAwareHandler | None:
 def setup_logging(*, verbose: bool = False, quiet: bool = False) -> None:
     """Configure Python logging for agent-fox.
 
-    Sets the root ``agent_fox`` logger level and format.
+    Sets the level and format for every package listed in
+    ``_CONFIGURED_PACKAGES``, sharing a single ``LiveAwareHandler``.
 
     Verbosity tiers (highest to lowest detail):
       - ``verbose=True`` → DEBUG (10) — detailed debug messages
@@ -114,21 +120,22 @@ def setup_logging(*, verbose: bool = False, quiet: bool = False) -> None:
     else:
         level = logging.WARNING
 
-    # Configure the agent_fox logger (not the root logger)
-    agent_logger = logging.getLogger("afcore")
-    agent_logger.setLevel(level)
-
-    # Avoid duplicate handlers on repeated calls
-    if not agent_logger.handlers:
+    # Create or reuse the shared LiveAwareHandler singleton.
+    # Built once, then attached to every configured package logger.
+    if _live_handler is None:
         handler = LiveAwareHandler()
-        handler.setLevel(level)
         formatter = logging.Formatter(_LOG_FORMAT)
         handler.setFormatter(formatter)
-        agent_logger.addHandler(handler)
         _live_handler = handler
-    else:
-        # Update existing handler levels
-        for h in agent_logger.handlers:
-            h.setLevel(level)
-            if isinstance(h, LiveAwareHandler):
-                _live_handler = h
+
+    _live_handler.setLevel(level)
+
+    # Configure each workspace package logger (not the root logger, to
+    # avoid capturing third-party library logs).
+    for pkg in _CONFIGURED_PACKAGES:
+        pkg_logger = logging.getLogger(pkg)
+        pkg_logger.setLevel(level)
+
+        # Avoid duplicate handlers on repeated calls
+        if _live_handler not in pkg_logger.handlers:
+            pkg_logger.addHandler(_live_handler)

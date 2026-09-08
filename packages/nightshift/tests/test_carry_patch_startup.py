@@ -1279,7 +1279,7 @@ class TestCwdValidationOriginUrl:
                 "subprocess.run",
                 return_value=mock_git,
             ),
-            caplog.at_level(logging.INFO),
+            caplog.at_level(logging.INFO, logger="nightshift._carry_patch_startup"),
         ):
             _run_startup()
 
