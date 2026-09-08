@@ -1,7 +1,16 @@
-"""CRUD operations for review_findings and drift_findings tables.
+"""CRUD operations for the review_findings table.
 
 Provides insert-with-supersession, active-record queries, and
 session-scoped queries for convergence.
+
+Note: The drift persistence and query surface (``insert_drift_findings``,
+``query_active_drift_findings``, ``supersede_drift_findings_by_files``,
+etc.) was removed in issue #86 — it was never wired into the fix pipeline,
+so ``drift_findings`` was permanently empty.  The ``DriftFinding`` dataclass
+is retained because ``review_parser.py`` references it for oracle output
+parsing, and removing it would break the import chain.  The
+``drift_findings`` *table* is also retained (created by migrations) so
+existing databases continue to open.
 
 Requirements: 27-REQ-1.1, 27-REQ-2.1, 27-REQ-4.1, 27-REQ-4.3,
               27-REQ-4.E1, 27-REQ-5.1, 27-REQ-6.1
@@ -10,7 +19,6 @@ Requirements: 27-REQ-1.1, 27-REQ-2.1, 27-REQ-4.1, 27-REQ-4.3,
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -30,7 +38,7 @@ VALID_VERDICTS = {"PASS", "FAIL"}
 ACTIONABLE_SEVERITIES: frozenset[str] = frozenset({"critical", "major"})
 
 # Defense-in-depth: only these table names may be interpolated into SQL.
-_ALLOWED_TABLES: frozenset[str] = frozenset({"review_findings", "drift_findings"})
+_ALLOWED_TABLES: frozenset[str] = frozenset({"review_findings"})
 
 
 def _validate_table_name(table: str) -> None:
@@ -93,6 +101,12 @@ class DriftFinding:
     """A single Oracle drift finding stored in DuckDB.
 
     Requirements: 32-REQ-6.3
+
+    Note: The drift persistence and query surface was removed in issue #86
+    (it was never wired into the fix pipeline, so ``drift_findings`` was
+    always empty).  This dataclass is retained because ``review_parser.py``
+    references it for parsing oracle output, and removing it would break
+    the import chain for ``fix_pipeline.py`` and ``coder_reviewer.py``.
     """
 
     id: str
@@ -149,8 +163,7 @@ def _insert_with_supersession(
 ) -> int:
     """Insert records with supersession.
 
-    Shared logic for insert_findings and insert_drift_findings.  Old
-    records are marked via the ``superseded_by`` column; no causal
+    Old records are marked via the ``superseded_by`` column; no causal
     links are written.
 
     Requirements: 116-REQ-5.1, 116-REQ-5.2
@@ -236,38 +249,6 @@ def insert_findings(
     )
 
 
-def insert_drift_findings(
-    conn: duckdb.DuckDBPyConnection,
-    findings: list[DriftFinding],
-) -> int:
-    """Insert drift findings, superseding existing active records for the same
-    (spec_name, task_group). Returns count of inserted records.
-
-    Requirements: 32-REQ-7.1, 32-REQ-7.3, 32-REQ-7.E1
-    """
-    try:
-        return _insert_with_supersession(
-            conn,
-            table="drift_findings",
-            columns=("id, severity, description, spec_ref, artifact_ref, spec_name, task_group, session_id"),
-            records=findings,
-            value_extractor=lambda f: [
-                f.id,
-                f.severity,
-                f.description,
-                f.spec_ref,
-                f.artifact_ref,
-                f.spec_name,
-                f.task_group,
-                f.session_id,
-            ],
-            record_type_label="drift findings",
-        )
-    except Exception as exc:
-        logger.warning("Failed to insert drift findings: %s", exc)
-        return 0
-
-
 # ---------------------------------------------------------------------------
 # Query functions
 # ---------------------------------------------------------------------------
@@ -302,11 +283,6 @@ _FINDING_COLS = (
     "spec_name, task_group, session_id, superseded_by::VARCHAR, created_at, category"
 )
 
-_DRIFT_COLS = (
-    "id::VARCHAR, severity, description, spec_ref, artifact_ref, "
-    "spec_name, task_group, session_id, superseded_by::VARCHAR, created_at"
-)
-
 
 def query_cross_group_findings(
     conn: duckdb.DuckDBPyConnection,
@@ -339,41 +315,6 @@ def query_cross_group_findings(
             [spec_name, task_group],
         ).fetchall()
     findings = [_row_to_finding(r) for r in rows if r[1] in ACTIONABLE_SEVERITIES]
-    findings.sort(key=lambda f: (_SEVERITY_ORDER.get(f.severity, 99), f.description))
-    return findings
-
-
-def query_cross_spec_drift_findings(
-    conn: duckdb.DuckDBPyConnection,
-    spec_name: str,
-    file_footprint: list[str],
-) -> list[DriftFinding]:
-    """Query active critical/major drift findings from OTHER specs referencing overlapping files.
-
-    Returns drift findings where ``spec_name != ?`` and ``artifact_ref``
-    matches any path in *file_footprint*.  Only ``critical`` and ``major``
-    findings are returned.
-
-    Args:
-        spec_name: The current spec name (excluded from results).
-        file_footprint: List of file paths the current spec touches.
-            Matched against ``artifact_ref`` in ``drift_findings``.
-
-    Returns:
-        List of ``DriftFinding`` objects from other specs.
-    """
-    if not file_footprint:
-        return []
-
-    placeholders = ", ".join("?" for _ in file_footprint)
-    rows = conn.execute(
-        f"SELECT {_DRIFT_COLS} FROM drift_findings "  # noqa: S608
-        f"WHERE spec_name != ? AND artifact_ref IN ({placeholders}) "
-        "AND superseded_by IS NULL "
-        "ORDER BY severity, created_at DESC",
-        [spec_name, *file_footprint],
-    ).fetchall()
-    findings = [_row_to_drift_finding(r) for r in rows if r[1] in ACTIONABLE_SEVERITIES]
     findings.sort(key=lambda f: (_SEVERITY_ORDER.get(f.severity, 99), f.description))
     return findings
 
@@ -438,76 +379,9 @@ def query_findings_by_session(
     return findings
 
 
-def query_active_drift_findings(
-    conn: duckdb.DuckDBPyConnection,
-    spec_name: str,
-    task_group: str | None = None,
-    include_prereview: bool = False,
-    max_age_days: int | None = None,
-) -> list[DriftFinding]:
-    """Query non-superseded drift findings for a spec, sorted by severity.
-
-    When *include_prereview* is ``True`` and *task_group* is not ``None``
-    and not ``"0"``, findings from both the requested task group and group
-    ``"0"`` (pre-review drift) are returned.  This mirrors the behaviour of
-    ``query_active_findings`` so callers can surface drift-review findings
-    on the first coder attempt without a separate query.
-
-    When *max_age_days* is set, findings older than that many days are
-    excluded.  This is a safety net for abandoned specs whose drift
-    findings would otherwise persist indefinitely.
-
-    Requirements: 32-REQ-7.4
-    """
-    age_clause = ""
-    if max_age_days is not None:
-        age_clause = f" AND created_at > CURRENT_TIMESTAMP - INTERVAL {int(max_age_days)} DAY"
-
-    if include_prereview and task_group is not None and task_group != "0":
-        rows = conn.execute(
-            f"SELECT {_DRIFT_COLS} FROM drift_findings "  # noqa: S608
-            f"WHERE spec_name = ? AND task_group IN (?, '0') AND superseded_by IS NULL{age_clause} "
-            "ORDER BY severity, description",
-            [spec_name, task_group],
-        ).fetchall()
-    elif task_group is not None:
-        rows = conn.execute(
-            f"SELECT {_DRIFT_COLS} FROM drift_findings "  # noqa: S608
-            f"WHERE spec_name = ? AND task_group = ? AND superseded_by IS NULL{age_clause} "
-            "ORDER BY severity, description",
-            [spec_name, task_group],
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            f"SELECT {_DRIFT_COLS} FROM drift_findings "  # noqa: S608
-            f"WHERE spec_name = ? AND superseded_by IS NULL{age_clause} "
-            "ORDER BY severity, description",
-            [spec_name],
-        ).fetchall()
-    findings = [_row_to_drift_finding(r) for r in rows]
-    findings.sort(key=lambda f: (_SEVERITY_ORDER.get(f.severity, 99), f.description))
-    return findings
-
-
 # ---------------------------------------------------------------------------
 # Row converters
 # ---------------------------------------------------------------------------
-
-
-def _row_to_drift_finding(row: tuple) -> DriftFinding:
-    """Convert a DB row to a DriftFinding."""
-    return DriftFinding(
-        id=row[0],
-        severity=row[1],
-        description=row[2],
-        spec_ref=row[3],
-        artifact_ref=row[4],
-        spec_name=row[5],
-        task_group=row[6],
-        session_id=row[7],
-        superseded_by=row[8],
-        created_at=row[9],
-    )
 
 
 def _row_to_finding(row: tuple) -> ReviewFinding:
@@ -638,12 +512,12 @@ def dismiss_finding_by_id(
     finding_id: str,
     reason: str,
 ) -> str | None:
-    """Manually supersede a finding by ID across finding tables.
+    """Manually supersede a finding by ID in the review_findings table.
 
     Sets ``superseded_by`` to ``dismissed:<ISO-timestamp>`` on the matching
-    active row (``superseded_by IS NULL``) in ``review_findings`` or
-    ``drift_findings``, whichever contains the record.  Only active rows
-    are dismissed; already-superseded rows are treated as "not found".
+    active row (``superseded_by IS NULL``) in ``review_findings``.
+    Only active rows are dismissed; already-superseded rows are treated as
+    "not found".
 
     Args:
         conn: DuckDB connection.
@@ -655,39 +529,30 @@ def dismiss_finding_by_id(
     Returns:
         A human-readable description of the dismissed finding (e.g.
         ``"[critical] Missing error handling"``), or ``None`` if the ID is
-        not found as an active row in any table.
+        not found as an active row.
 
     Requirements: 592-AC-1, 592-AC-2
     """
     marker = f"dismissed:{datetime.now(UTC).isoformat()}"
 
-    _tables = [
-        ("review_findings", "description, severity", "review finding"),
-        ("drift_findings", "description, severity", "drift finding"),
-    ]
-
-    for table, select_cols, log_label in _tables:
-        row = conn.execute(
-            f"SELECT {select_cols} FROM {table} "  # noqa: S608
-            "WHERE id::VARCHAR = ? AND superseded_by IS NULL",
-            [finding_id],
-        ).fetchone()
-        if row is not None:
-            col_a, col_b = row
-            conn.execute(
-                f"UPDATE {table} SET superseded_by = ? "  # noqa: S608
-                "WHERE id::VARCHAR = ? AND superseded_by IS NULL",
-                [marker, finding_id],
-            )
-            logger.info(
-                "Dismissed %s %s (%s): %s [reason: %s]",
-                log_label,
-                finding_id,
-                col_b,
-                col_a,
-                reason,
-            )
-            return f"[{col_b}] {col_a}"
+    row = conn.execute(
+        "SELECT description, severity FROM review_findings WHERE id::VARCHAR = ? AND superseded_by IS NULL",
+        [finding_id],
+    ).fetchone()
+    if row is not None:
+        description, severity = row
+        conn.execute(
+            "UPDATE review_findings SET superseded_by = ? WHERE id::VARCHAR = ? AND superseded_by IS NULL",
+            [marker, finding_id],
+        )
+        logger.info(
+            "Dismissed review finding %s (%s): %s [reason: %s]",
+            finding_id,
+            severity,
+            description,
+            reason,
+        )
+        return f"[{severity}] {description}"
 
     return None
 
@@ -696,12 +561,12 @@ def supersede_injected_findings(
     conn: duckdb.DuckDBPyConnection,
     session_id: str,
 ) -> None:
-    """Supersede all findings (review and drift) injected into a completed session.
+    """Supersede all review findings injected into a completed session.
 
     Looks up the finding_injections table for the given session_id, then marks
-    each referenced row in both ``review_findings`` and ``drift_findings`` as
-    superseded (sets ``superseded_by`` to the session_id string).  Only rows
-    that are still active (``superseded_by IS NULL``) are updated.
+    each referenced row in ``review_findings`` as superseded (sets
+    ``superseded_by`` to the session_id string).  Only rows that are still
+    active (``superseded_by IS NULL``) are updated.
 
     A missing ``finding_injections`` table (pre-v23 DB) raises no exception —
     the caller is responsible for catching and logging the error.
@@ -724,179 +589,9 @@ def supersede_injected_findings(
             "UPDATE review_findings SET superseded_by = ? WHERE id::VARCHAR = ? AND superseded_by IS NULL",
             [marker, finding_id],
         )
-        conn.execute(
-            "UPDATE drift_findings SET superseded_by = ? WHERE id::VARCHAR = ? AND superseded_by IS NULL",
-            [marker, finding_id],
-        )
 
     logger.info(
         "Superseded %d injected finding(s) for completed session %s",
         len(finding_ids),
         session_id,
     )
-
-
-# ---------------------------------------------------------------------------
-# File-based drift finding supersession (spec 12)
-# ---------------------------------------------------------------------------
-
-
-def _query_active_drift_findings_for_spec(
-    conn: duckdb.DuckDBPyConnection,
-    spec_name: str,
-) -> list[tuple]:
-    """Return ``(id, artifact_ref)`` for all active drift findings for a spec.
-
-    Queries across **all** task groups (no task_group filter) so that
-    file-based supersession evaluates every finding regardless of which
-    orchestrator group created it.  Only rows with ``superseded_by IS NULL``
-    are returned.
-
-    This is a module-private helper — it is NOT part of the public
-    review_store API.
-
-    Requirements: 12-REQ-2.1, 12-REQ-2.2
-    """
-    return conn.execute(
-        "SELECT id, artifact_ref FROM drift_findings WHERE spec_name = ? AND superseded_by IS NULL",
-        [spec_name],
-    ).fetchall()
-
-
-# Regex to strip trailing line-number suffixes such as ':42' or ':42:10'.
-_LINE_NUMBER_SUFFIX_RE = re.compile(r"(:\d+)+$")
-
-
-def _normalize_artifact_ref(ref: str) -> str:
-    """Normalize an artifact_ref value for matching.
-
-    Strips trailing line-number suffixes (e.g. ``':42'``, ``':42:10'``)
-    and leading/trailing whitespace.
-
-    Requirements: 12-REQ-1.5, 12-REQ-4.E1
-    """
-    normalized = ref.strip()
-    normalized = _LINE_NUMBER_SUFFIX_RE.sub("", normalized)
-    return normalized
-
-
-def supersede_drift_findings_by_files(
-    conn: duckdb.DuckDBPyConnection,
-    spec_name: str,
-    touched_files: list[str] | None,
-    node_id: str,
-) -> int:
-    """Supersede drift findings whose artifact_ref matches a touched file.
-
-    Evaluates all active drift findings for *spec_name* across every task
-    group.  Each finding's ``artifact_ref`` is normalized (line-number
-    suffixes stripped, whitespace trimmed) and matched against
-    *touched_files* using either:
-
-    - **exact matching** — when the normalized ref does not end with ``/``
-    - **prefix matching** — when it ends with ``/``; any touched file
-      starting with the prefix triggers supersession
-
-    Findings with a ``NULL`` artifact_ref are always skipped.
-
-    Args:
-        conn: DuckDB connection.
-        spec_name: Spec owning the drift findings.
-        touched_files: File paths modified by the completing session.
-            ``None`` or empty list causes an immediate short-circuit
-            (return 0, no DB access).
-        node_id: Session identifier written to ``superseded_by``.
-
-    Returns:
-        Count of findings superseded in this invocation.
-
-    Requirements: 12-REQ-1.1, 12-REQ-1.2, 12-REQ-1.3, 12-REQ-1.4,
-                  12-REQ-1.5, 12-REQ-1.6, 12-REQ-1.7, 12-REQ-1.8,
-                  12-REQ-1.9, 12-REQ-6.1
-    """
-    # 12-REQ-1.2: short-circuit on None or empty touched_files.
-    if not touched_files:
-        logger.debug(
-            "No touched files for drift supersession in spec %s — skipping",
-            spec_name,
-        )
-        return 0
-
-    touched_files_set = set(touched_files)
-
-    # 12-REQ-1.3: query across ALL task groups via private helper.
-    active_findings = _query_active_drift_findings_for_spec(conn, spec_name)
-
-    matched_ids: list[tuple[str, str]] = []  # (id, artifact_ref) for logging
-
-    for row in active_findings:
-        finding_id = row[0]
-        artifact_ref = row[1]
-
-        # 12-REQ-1.4: skip null artifact_ref.
-        if artifact_ref is None:
-            continue
-
-        # 12-REQ-1.5: normalize.
-        normalized = _normalize_artifact_ref(artifact_ref)
-
-        # 12-REQ-1.6 / 12-REQ-1.7: prefix vs. exact matching.
-        if normalized.endswith("/"):
-            if any(f.startswith(normalized) for f in touched_files):
-                matched_ids.append((str(finding_id), artifact_ref))
-        else:
-            if normalized in touched_files_set:
-                matched_ids.append((str(finding_id), artifact_ref))
-
-    if not matched_ids:
-        return 0
-
-    # 12-REQ-1.8: batch-update superseded_by for all matched findings.
-    for finding_id, _ in matched_ids:
-        conn.execute(
-            "UPDATE drift_findings SET superseded_by = ? WHERE id::VARCHAR = ? AND superseded_by IS NULL",
-            [node_id, finding_id],
-        )
-
-    # 12-REQ-1.9: log each superseded finding for observability.
-    for finding_id, artifact_ref in matched_ids:
-        logger.info(
-            "Superseded drift finding %s (artifact_ref=%s) via session %s",
-            finding_id,
-            artifact_ref,
-            node_id,
-        )
-
-    return len(matched_ids)
-
-
-def supersede_stale_pre_code_findings(
-    conn: duckdb.DuckDBPyConnection,
-    spec_name: str,
-    session_id: str,
-) -> int:
-    """Supersede active pre-code drift findings that have no artifact reference.
-
-    These are findings from group ``"0"`` (pre-coder drift-review) with
-    ``artifact_ref IS NULL`` — typically observations like "no source code
-    exists yet" that become stale once any coder has successfully completed.
-
-    Returns the number of findings superseded.
-    """
-    result = conn.execute(
-        "UPDATE drift_findings "
-        "SET superseded_by = ? "
-        "WHERE spec_name = ? "
-        "AND task_group = '0' "
-        "AND artifact_ref IS NULL "
-        "AND superseded_by IS NULL",
-        [session_id, spec_name],
-    )
-    count = result.fetchone()[0] if result.description else 0
-    if count:
-        logger.debug(
-            "Superseded %d stale pre-code drift finding(s) for %s",
-            count,
-            spec_name,
-        )
-    return count

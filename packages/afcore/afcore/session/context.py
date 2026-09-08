@@ -249,38 +249,6 @@ def _render_severity_findings(
     return "\n".join(lines)
 
 
-def render_drift_context(
-    conn: duckdb.DuckDBPyConnection,
-    spec_name: str,
-) -> str | None:
-    """Render active drift findings as a markdown section.
-
-    Returns None if no findings exist (32-REQ-8.E1).
-
-    Requirements: 32-REQ-8.1, 32-REQ-8.2
-    """
-    from afcore.knowledge.review_store import (
-        query_active_drift_findings,
-    )
-
-    findings = query_active_drift_findings(conn, spec_name)
-    if not findings:
-        return None
-
-    def _format(f):
-        desc = sanitize_prompt_content(f.description, label="drift-finding")
-        refs = []
-        if f.spec_ref:
-            refs.append(f"spec: {f.spec_ref}")
-        if f.artifact_ref:
-            refs.append(f"artifact: {f.artifact_ref}")
-        if refs:
-            desc += f" ({', '.join(refs)})"
-        return f"- {desc}"
-
-    return _render_severity_findings(findings, "## Drift Report", _format)
-
-
 def render_review_context(
     conn: duckdb.DuckDBPyConnection,
     spec_name: str,
@@ -483,8 +451,8 @@ def assemble_context(
         sections.append(f"## Memory Facts\n\n{facts_text}")
 
     # Prior group findings now arrive exclusively via
-    # FoxKnowledgeProvider memory facts ([REVIEW], [DRIFT],
-    # [CROSS-GROUP]) to avoid duplication.
+    # FoxKnowledgeProvider memory facts ([REVIEW], [CROSS-GROUP])
+    # to avoid duplication.
 
     # Retry history for the reviewer archetype
     if archetype == "reviewer":
@@ -529,7 +497,7 @@ def get_prior_group_findings(
     given spec, excluding superseded findings.  Results are sorted by severity
     (critical first) then recency (newest first) and capped at *max_items*.
 
-    Queries review_findings, drift_findings, and verification_results tables.
+    Queries review_findings and verification_results tables.
     If any table does not exist (pre-migration database), that table's results
     are silently skipped.
 
@@ -579,7 +547,6 @@ def get_prior_group_findings(
             )
 
     _query_findings_table("review_findings", "review")
-    _query_findings_table("drift_findings", "drift")
 
     # Sort by severity rank (critical first) then recency (newest first),
     # and cap at max_items to bound context size.

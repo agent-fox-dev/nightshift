@@ -17,13 +17,9 @@ import pytest
 from afcore.core.errors import KnowledgeStoreError
 from afcore.knowledge.migrations import Migration
 from afcore.knowledge.review_store import (
-    DriftFinding,
     ReviewFinding,
-    insert_drift_findings,
     insert_findings,
-    query_active_drift_findings,
     query_active_findings,
-    query_cross_spec_drift_findings,
     query_findings_by_session,
 )
 
@@ -222,8 +218,8 @@ class TestTableNameValidation:
     def test_validate_table_name_accepts_allowed(self) -> None:
         from afcore.knowledge.review_store import _validate_table_name
 
-        for name in ("review_findings", "drift_findings"):
-            _validate_table_name(name)  # should not raise
+        # drift_findings removed from _ALLOWED_TABLES in issue #86
+        _validate_table_name("review_findings")  # should not raise
 
     def test_validate_table_name_rejects_unknown(self) -> None:
         from afcore.knowledge.review_store import _validate_table_name
@@ -408,123 +404,7 @@ class TestQueryActiveFindingsExcludesNonActionable:
 
 
 # ===========================================================================
-# Cross-spec drift findings (issue #677)
+# Cross-spec drift findings and drift age filter tests removed in issue #86:
+# drift persistence surface deleted (insert_drift_findings,
+# query_cross_spec_drift_findings, query_active_drift_findings removed).
 # ===========================================================================
-
-
-def _make_drift_finding(
-    *,
-    spec_name: str = "test_spec",
-    description: str = "Drift finding",
-    artifact_ref: str | None = None,
-    severity: str = "critical",
-) -> DriftFinding:
-    return DriftFinding(
-        id=str(uuid.uuid4()),
-        severity=severity,
-        description=description,
-        spec_ref=None,
-        artifact_ref=artifact_ref,
-        spec_name=spec_name,
-        task_group="0",
-        session_id="drift-session",
-    )
-
-
-class TestCrossSpecDriftFindings:
-    """Issue #677: query_cross_spec_drift_findings returns drift findings
-    from other specs whose artifact_ref matches the file footprint."""
-
-    def test_returns_matching_drift_from_other_spec(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
-        f = _make_drift_finding(spec_name="spec_other", description="API mismatch", artifact_ref="src/api.py")
-        insert_drift_findings(schema_conn, [f])
-
-        results = query_cross_spec_drift_findings(schema_conn, "spec_mine", ["src/api.py"])
-        assert len(results) == 1
-        assert results[0].description == "API mismatch"
-        assert results[0].spec_name == "spec_other"
-
-    def test_excludes_same_spec(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
-        own = _make_drift_finding(spec_name="spec_mine", description="own drift", artifact_ref="src/x.py")
-        other = _make_drift_finding(spec_name="spec_other", description="other drift", artifact_ref="src/x.py")
-        insert_drift_findings(schema_conn, [own, other])
-
-        results = query_cross_spec_drift_findings(schema_conn, "spec_mine", ["src/x.py"])
-        descriptions = [r.description for r in results]
-        assert "other drift" in descriptions
-        assert "own drift" not in descriptions
-
-    def test_excludes_superseded(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
-        f = _make_drift_finding(spec_name="spec_other", description="old drift", artifact_ref="src/a.py")
-        insert_drift_findings(schema_conn, [f])
-        schema_conn.execute(
-            "UPDATE drift_findings SET superseded_by = 'some-session' WHERE id = ?::UUID",
-            [f.id],
-        )
-
-        results = query_cross_spec_drift_findings(schema_conn, "spec_mine", ["src/a.py"])
-        assert len(results) == 0
-
-    def test_empty_footprint_returns_empty(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
-        f = _make_drift_finding(spec_name="spec_other", description="drift", artifact_ref="src/a.py")
-        insert_drift_findings(schema_conn, [f])
-
-        assert query_cross_spec_drift_findings(schema_conn, "spec_mine", []) == []
-
-    def test_no_overlap_returns_empty(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
-        f = _make_drift_finding(spec_name="spec_other", description="drift", artifact_ref="src/unrelated.py")
-        insert_drift_findings(schema_conn, [f])
-
-        results = query_cross_spec_drift_findings(schema_conn, "spec_mine", ["src/different.py"])
-        assert len(results) == 0
-
-    def test_filters_to_actionable_severities(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
-        crit = _make_drift_finding(
-            spec_name="spec_a", description="critical drift", artifact_ref="f.py", severity="critical"
-        )
-        obs = _make_drift_finding(
-            spec_name="spec_a", description="observation drift", artifact_ref="f.py", severity="observation"
-        )
-        insert_drift_findings(schema_conn, [crit, obs])
-
-        results = query_cross_spec_drift_findings(schema_conn, "spec_b", ["f.py"])
-        descriptions = [r.description for r in results]
-        assert "critical drift" in descriptions
-        assert "observation drift" not in descriptions
-
-
-class TestDriftFindingAgeFilter:
-    """Issue #676: max_age_days parameter filters old drift findings."""
-
-    def test_max_age_days_excludes_old_findings(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
-        """Findings older than max_age_days are excluded."""
-        schema_conn.execute(
-            "INSERT INTO drift_findings "
-            "(id, severity, description, spec_name, task_group, session_id, created_at) "
-            "VALUES (gen_random_uuid(), 'critical', 'old finding', 'spec_age', '0', 's1', "
-            "CURRENT_TIMESTAMP - INTERVAL 60 DAY)",
-        )
-        schema_conn.execute(
-            "INSERT INTO drift_findings "
-            "(id, severity, description, spec_name, task_group, session_id, created_at) "
-            "VALUES (gen_random_uuid(), 'critical', 'recent finding', 'spec_age', '0', 's2', "
-            "CURRENT_TIMESTAMP - INTERVAL 5 DAY)",
-        )
-
-        results = query_active_drift_findings(schema_conn, "spec_age", max_age_days=30)
-        descriptions = [r.description for r in results]
-        assert "recent finding" in descriptions
-        assert "old finding" not in descriptions
-
-    def test_max_age_days_none_returns_all(self, schema_conn: duckdb.DuckDBPyConnection) -> None:
-        """When max_age_days is None, all findings are returned regardless of age."""
-        schema_conn.execute(
-            "INSERT INTO drift_findings "
-            "(id, severity, description, spec_name, task_group, session_id, created_at) "
-            "VALUES (gen_random_uuid(), 'critical', 'ancient finding', 'spec_noage', '0', 's1', "
-            "CURRENT_TIMESTAMP - INTERVAL 365 DAY)",
-        )
-
-        results = query_active_drift_findings(schema_conn, "spec_noage", max_age_days=None)
-        assert len(results) == 1
-        assert results[0].description == "ancient finding"

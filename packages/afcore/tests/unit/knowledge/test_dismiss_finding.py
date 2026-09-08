@@ -1,7 +1,6 @@
 """Unit tests for dismiss_finding_by_id in review_store.
 
-Validates manual dismissal of findings across review_findings
-and drift_findings tables.
+Validates manual dismissal of findings in the review_findings table.
 
 Requirements: 592-AC-1, 592-AC-2
 """
@@ -11,10 +10,8 @@ from __future__ import annotations
 import uuid
 
 from afcore.knowledge.review_store import (
-    DriftFinding,
     ReviewFinding,
     dismiss_finding_by_id,
-    insert_drift_findings,
     insert_findings,
     query_active_findings,
 )
@@ -84,37 +81,8 @@ class TestDismissReviewFinding:
         assert "T" in timestamp_part or "-" in timestamp_part
 
 
-class TestDismissDriftFinding:
-    """AC-1: dismiss_finding_by_id sets superseded_by on drift_findings."""
-
-    def test_dismiss_active_drift_finding(self, knowledge_conn) -> None:
-        """Dismissing an active drift finding marks it superseded and returns description."""
-        finding = DriftFinding(
-            id=str(uuid.uuid4()),
-            severity="critical",
-            description="Spec says auth required but code has no auth check",
-            spec_ref="84-REQ-2.1",
-            artifact_ref="afcore/cli/findings.py",
-            spec_name="84_spec",
-            task_group="2",
-            session_id="84_spec:2:1",
-        )
-        insert_drift_findings(knowledge_conn, [finding])
-
-        result = dismiss_finding_by_id(knowledge_conn, finding.id, "Auth was added in PR #100")
-
-        assert result is not None
-        assert "critical" in result
-        assert "Spec says auth required" in result
-
-        # Verify the row is now superseded
-        row = knowledge_conn.execute(
-            "SELECT superseded_by FROM drift_findings WHERE id::VARCHAR = ?",
-            [finding.id],
-        ).fetchone()
-        assert row is not None
-        assert row[0] is not None
-        assert row[0].startswith("dismissed:")
+# TestDismissDriftFinding removed in issue #86 — drift persistence surface deleted,
+# dismiss_finding_by_id no longer checks drift_findings table.
 
 
 # TestDismissVerificationResult removed in spec 10.

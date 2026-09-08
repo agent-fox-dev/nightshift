@@ -18,7 +18,6 @@ from afcore.session.context import (  # noqa: F401
     PriorFinding,
     assemble_context,
     get_prior_group_findings,
-    render_drift_context,
     render_prior_group_findings,
     render_review_context,
     render_verification_context,

@@ -23,11 +23,9 @@ from afcore.knowledge.formatting import (
     _extract_keywords,
     _score_relevance,
     format_finding_parts,
-    generate_archetype_summary,
     sort_findings,
 )
 from afcore.knowledge.review_store import (
-    supersede_drift_findings_by_files,
     supersede_injected_findings,
 )
 
@@ -77,7 +75,6 @@ __all__ = [
     "_SEVERITY_RANK",
     "_extract_keywords",
     "_score_relevance",
-    "generate_archetype_summary",
 ]
 
 
@@ -214,8 +211,8 @@ class FoxKnowledgeProvider:
                 same retrieval behaviour as before (backward-compatible
                 default).
             file_footprint: Optional list of file paths the current spec
-                modifies.  Used to find cross-spec drift findings from
-                other specs that reference overlapping files.
+                modifies.  Reserved for future use (drift retrieval was
+                removed in issue #86).
             archetype: Optional session archetype (e.g. ``'coder'``,
                 ``'reviewer'``, ``'verifier'``, ``'gate'``).  Controls
                 which knowledge categories are queried:
@@ -223,8 +220,6 @@ class FoxKnowledgeProvider:
                 - ``'gate'``: skip all queries, return ``[]``.
                 - ``'reviewer'`` / ``'verifier'``: skip ``[CONTEXT]``
                   (same-spec summaries).
-                - ``'verifier'`` / ``'gate'``: skip ``[CROSS-SPEC]``
-                  (cross-spec drift).
 
                 When ``None``, all categories are queried (backward-
                 compatible default).
@@ -252,12 +247,9 @@ class FoxKnowledgeProvider:
             conn, spec_name, task_group=task_group, task_description=task_description
         )
 
-        drift, drift_ids = self._query_drift(conn, spec_name, task_group=task_group, task_description=task_description)
-
         # Build a parallel list of (text, finding_id) so we can track which
-        # finding IDs survive the max_items cap.  Review and drift findings
-        # share the same cap and injection lifecycle.
-        items_with_ids: list[tuple[str, str]] = list(zip(reviews, review_ids)) + list(zip(drift, drift_ids))
+        # finding IDs survive the max_items cap.
+        items_with_ids: list[tuple[str, str]] = list(zip(reviews, review_ids))
 
         # Cross-group items: findings from other task groups in the same spec.
         # These are informational (not tracked for injection) and have their
@@ -267,16 +259,8 @@ class FoxKnowledgeProvider:
             cross_reviews = self._query_cross_group_reviews(conn, spec_name, task_group, task_description)
             cross_group_items = cross_reviews[: self._config.max_cross_group_items]
 
-        # Cross-spec drift items: drift findings from other specs that
-        # reference the same files.  Informational only, not tracked.
-        # NS-REQ-4: Skip for verifier (gate already returned above).
-        cross_spec_items: list[str] = []
-        if task_group is not None and file_footprint and archetype != "verifier":
-            cross_spec = self._query_cross_spec_drift(conn, spec_name, file_footprint, task_description)
-            cross_spec_items = cross_spec[: self._config.max_cross_spec_items]
-
         capped = items_with_ids[: self._config.max_items]
-        result = [text for text, _ in capped] + cross_group_items + cross_spec_items
+        result = [text for text, _ in capped] + cross_group_items
 
         # Session summary injection (119-REQ-2.1)
         # NS-REQ-3: Skip [CONTEXT] summaries for reviewer/verifier archetypes.
@@ -290,11 +274,9 @@ class FoxKnowledgeProvider:
             summary_count = 0
 
         logger.debug(
-            "Retrieved %d review + %d drift + %d cross-group + %d cross-spec + %d context items for %s (archetype=%s)",
+            "Retrieved %d review + %d cross-group + %d context items for %s (archetype=%s)",
             len(reviews),
-            len(drift),
             len(cross_group_items),
-            len(cross_spec_items),
             summary_count,
             spec_name,
             archetype,
@@ -366,36 +348,6 @@ class FoxKnowledgeProvider:
                     session_id,
                     exc_info=True,
                 )
-
-            # 12-REQ-3.1, 12-REQ-3.2: File-based drift finding supersession
-            # for coder sessions only.  Reviewer and verifier sessions must
-            # not trigger drift finding supersession.
-            archetype = context.get("archetype", "coder")
-            if archetype == "coder":
-                try:
-                    supersede_drift_findings_by_files(
-                        conn,
-                        spec_name,
-                        context.get("touched_files"),
-                        session_id,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to supersede drift findings for session %s",
-                        session_id,
-                        exc_info=True,
-                    )
-
-                try:
-                    from afcore.knowledge.review_store import supersede_stale_pre_code_findings
-
-                    supersede_stale_pre_code_findings(conn, spec_name, session_id)
-                except Exception:
-                    logger.warning(
-                        "Failed to supersede stale pre-code findings for session %s",
-                        session_id,
-                        exc_info=True,
-                    )
 
         # Session summary storage (119-REQ-5.2).
         # Only store for completed sessions with a non-empty summary.
@@ -497,76 +449,6 @@ class FoxKnowledgeProvider:
         for f in actionable:
             result.append(f"[CROSS-GROUP] (group {f.task_group}) {format_finding_parts(f)}")
         return result
-
-    def _query_cross_spec_drift(
-        self,
-        conn: Any,
-        spec_name: str,
-        file_footprint: list[str],
-        task_description: str,
-    ) -> list[str]:
-        """Query active drift findings from OTHER specs referencing overlapping files.
-
-        Returns formatted strings with a ``[CROSS-SPEC]`` prefix that includes
-        the source spec name.  Uses relevance scoring so the most relevant
-        cross-spec findings surface first.
-
-        These items are informational — they are NOT tracked in
-        ``finding_injections``.
-        """
-
-        def _do_query():
-            from afcore.knowledge.review_store import query_cross_spec_drift_findings
-
-            return query_cross_spec_drift_findings(conn, spec_name, file_footprint)
-
-        findings = _query_safe(_do_query, (), label="cross-spec drift findings", spec_name=spec_name)
-        actionable = _filter_actionable(findings, task_description)
-
-        from afcore.knowledge.formatting import format_drift_finding_parts
-
-        result: list[str] = []
-        for f in actionable:
-            result.append(f"[CROSS-SPEC] (spec: {f.spec_name}) {format_drift_finding_parts(f)}")
-        return result
-
-    def _query_drift(
-        self,
-        conn: Any,
-        spec_name: str,
-        task_group: str | None = None,
-        task_description: str = "",
-    ) -> tuple[list[str], list[str]]:
-        """Query unresolved critical/major drift findings for the spec.
-
-        Mirrors ``_query_reviews()`` but queries ``drift_findings`` via
-        ``query_active_drift_findings()``.  Returns ``(formatted_strings,
-        finding_ids)`` for injection tracking.
-        """
-        include_prereview = task_group is not None and task_group != "0"
-
-        def _do_query():
-            from afcore.knowledge.review_store import query_active_drift_findings
-
-            return query_active_drift_findings(
-                conn,
-                spec_name,
-                task_group=task_group,
-                include_prereview=include_prereview,
-                max_age_days=self._config.max_drift_age_days,
-            )
-
-        findings = _query_safe(_do_query, (), label="drift findings", spec_name=spec_name)
-        actionable = _filter_actionable(findings, task_description)
-
-        from afcore.knowledge.formatting import format_drift_finding_parts
-
-        result: list[str] = []
-        ids: list[str] = []
-        for f in actionable:
-            result.append(f"[DRIFT] {format_drift_finding_parts(f)}")
-            ids.append(f.id)
-        return result, ids
 
     # ------------------------------------------------------------------
     # Session summary helpers (spec 119)

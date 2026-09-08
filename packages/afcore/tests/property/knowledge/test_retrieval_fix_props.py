@@ -29,8 +29,8 @@ from hypothesis import strategies as st
 
 
 def _generate_archetype_summary(*args, **kwargs):
-    """Deferred import of generate_archetype_summary (not yet implemented)."""
-    from afcore.knowledge.fox_provider import generate_archetype_summary
+    """Deferred import of generate_archetype_summary."""
+    from afcore.knowledge.formatting import generate_archetype_summary
 
     return generate_archetype_summary(*args, **kwargs)
 
