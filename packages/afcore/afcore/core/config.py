@@ -796,6 +796,34 @@ def _global_config_path() -> Path | None:
         return None
 
 
+def read_global_models_section() -> dict[str, Any]:
+    """Return the raw ``[models]`` table from the global config.
+
+    Returns an empty dict when there is no global config, it has no
+    ``[models]`` table, or it cannot be read or parsed. Callers use this to
+    carry a user's model overrides into a newly generated local config —
+    a local config shadows the global one outright, so without this the
+    overrides would silently stop applying.
+
+    The table is returned raw (as parsed from TOML) rather than as a
+    :class:`ModelsConfig`, so it round-trips back to TOML exactly as the
+    user wrote it.
+    """
+    global_path = _global_config_path()
+    if global_path is None or not _path_exists(global_path):
+        return {}
+
+    try:
+        _check_symlink(global_path)
+        data = _parse_toml_file(global_path)
+    except (ConfigError, OSError):
+        logger.debug("Global config at %s could not be read for [models]", global_path)
+        return {}
+
+    models = data.get("models")
+    return models if isinstance(models, dict) else {}
+
+
 def _load_config_global_local() -> AgentFoxConfig:
     """Load config from local or global source.
 
@@ -819,13 +847,23 @@ def _load_config_global_local() -> AgentFoxConfig:
         # global config actually exists to be shadowed.
         global_path = _global_config_path()
         if global_path is not None and _path_exists(global_path):
-            logger.warning(
-                "Local config %s is the sole config source — the global config at %s "
-                "is ignored entirely, including any [models] overrides it defines. "
-                "Move settings you need into the local file.",
-                local_path,
-                global_path,
-            )
+            # Call out [models] only when this file does not define it —
+            # otherwise the overrides are right here and nothing was lost.
+            if "models" in local_dict:
+                logger.warning(
+                    "Local config %s is the sole config source — the global config at %s "
+                    "is ignored entirely. Settings you keep globally must be repeated here.",
+                    local_path,
+                    global_path,
+                )
+            else:
+                logger.warning(
+                    "Local config %s is the sole config source — the global config at %s "
+                    "is ignored entirely, including any [models] overrides it defines. "
+                    "Move settings you need into the local file.",
+                    local_path,
+                    global_path,
+                )
         else:
             logger.debug(
                 "Local config found at %s — using as sole config source",

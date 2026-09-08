@@ -23,7 +23,10 @@ you need into the local file.
 Note that carry-patch bootstrap writes a local `.nightshift/config.toml`
 (`[hub]`, `[carry_patch]`, `[workspace]`) on first run in a workspace. From
 the second run onward that file is the sole config source, so settings you
-keep globally must be copied into it.
+keep globally must be copied into it. The one exception is `[models]`: the
+generator copies your global model registry and tier defaults into the file
+it writes, so model overrides keep applying. Every other global section
+still needs copying by hand.
 
 ### General behavior
 

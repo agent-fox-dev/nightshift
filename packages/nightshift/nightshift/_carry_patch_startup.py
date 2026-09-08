@@ -167,6 +167,12 @@ def _maybe_generate_config(
     renamed.  Any OS-level error is logged as a warning and does **not**
     abort startup.
 
+    The user's global ``[models]`` table is copied into the generated file.
+    Once this local config exists it becomes the *sole* config source — the
+    global one is ignored entirely — so without carrying the block forward,
+    global tier defaults and registry entries would silently stop applying
+    from the second run onward.
+
     Requirements: 02-REQ-4.1, 02-REQ-4.2, 02-REQ-4.3, 02-REQ-4.4,
                   02-REQ-4.5, 02-REQ-4.E1, 02-REQ-4.E2
     """
@@ -201,6 +207,26 @@ def _maybe_generate_config(
         f'integration_branch = "{integration_branch}"\n'
         f'merge_strategy = "direct"\n'
     )
+
+    # This file shadows ~/.nightshift/config.toml from the next run onward,
+    # so the user's model overrides have to come with it.  Table headers must
+    # follow the bare keys above, hence the append.  Failure here is never
+    # fatal — a config without [models] still starts, it just uses the
+    # built-in tier defaults.
+    try:
+        from afcore.core.config_gen import render_global_models_toml
+
+        models_toml = render_global_models_toml()
+    except Exception:  # pragma: no cover - defensive; must not abort startup
+        logger.warning("Could not carry the global [models] section into the local config")
+        models_toml = ""
+
+    if models_toml:
+        content += (
+            "\n# Carried over from ~/.nightshift/config.toml — a local config is\n"
+            "# the sole config source, so the global [models] block no longer applies.\n"
+            f"{models_toml}"
+        )
 
     try:
         # REQ-4.E1: create directory if absent; no-op if it already exists

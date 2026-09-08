@@ -41,6 +41,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from afcore.core.config import load_config
 from afhub.errors import (
     HubAuthError,
     HubConnectionError,
@@ -1491,6 +1492,122 @@ class TestConfigGenerationSkipIfExists:
             "Existing .nightshift/config.toml was modified during startup; "
             "config generation must be skipped when the file already exists"
         )
+
+
+# ---------------------------------------------------------------------------
+# Global [models] carry-forward — a generated local config shadows the global
+# one, so model overrides must travel into it.
+# ---------------------------------------------------------------------------
+
+
+class TestGeneratedConfigCarriesGlobalModels:
+    """The generated local config preserves the user's global [models] block.
+
+    Once .nightshift/config.toml exists it is the sole config source, so a
+    global [models] block would otherwise stop applying from the second run
+    onward and startup would fall back to the built-in tier defaults.
+
+    Requirements: 02-REQ-4.1
+    """
+
+    @staticmethod
+    def _global_config(home: Path, body: str) -> Path:
+        d = home / ".nightshift"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / "config.toml"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def _generate(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+        mock_client, mock_git = _passing_cwd_mocks()
+        repo = tmp_path / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        with (
+            _successful_cwd_patches(mock_client, mock_git),
+            patch("os.getcwd", return_value=str(repo)),
+        ):
+            _run_startup(hub_url=_VALID_HUB_URL, slug=_VALID_SLUG)
+        return (repo / ".nightshift" / "config.toml").read_text(encoding="utf-8")
+
+    def test_global_models_written_into_local_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Registry entries and tier defaults both survive the copy."""
+        home = tmp_path / "home"
+        self._global_config(
+            home,
+            '[models.registry.claude-sonnet-5]\ntier = "SIMPLE"\n\n'
+            '[models.tier_defaults]\nSIMPLE = "claude-sonnet-5"\n',
+        )
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+        content = self._generate(tmp_path, monkeypatch)
+
+        assert "[models.registry.claude-sonnet-5]" in content
+        assert "[models.tier_defaults]" in content
+        assert 'SIMPLE = "claude-sonnet-5"' in content
+
+    def test_generated_config_reloads_with_overrides_intact(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The round trip is what matters: reloading resolves the override.
+
+        This is the regression guard — the generated file must resolve
+        SIMPLE to the user's model, not the built-in claude-haiku-4-5.
+        """
+        from afcore.core.models import resolve_model
+
+        home = tmp_path / "home"
+        self._global_config(
+            home,
+            '[models.registry.claude-sonnet-5]\ntier = "SIMPLE"\n\n'
+            '[models.tier_defaults]\nSIMPLE = "claude-sonnet-5"\n',
+        )
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+        self._generate(tmp_path, monkeypatch)
+
+        monkeypatch.chdir(tmp_path / "repo")
+        config = load_config()
+
+        assert resolve_model("SIMPLE", models_config=config.models) == "claude-sonnet-5"
+
+    def test_no_models_section_when_global_has_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A global config without [models] adds nothing to the local file."""
+        home = tmp_path / "home"
+        self._global_config(home, "[orchestrator]\nmax_retries = 3\n")
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+        content = self._generate(tmp_path, monkeypatch)
+
+        assert "[models" not in content
+        assert "[hub]" in content
+
+    def test_generation_survives_missing_global_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No global config at all must not break generation."""
+        home = tmp_path / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+        content = self._generate(tmp_path, monkeypatch)
+
+        assert "[hub]" in content
+        assert "[carry_patch]" in content
+
+    def test_generated_config_is_valid_toml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Appending table headers must not corrupt the earlier bare keys."""
+        import tomllib
+
+        home = tmp_path / "home"
+        self._global_config(
+            home,
+            '[models.registry."odd.model.id"]\ntier = "ADVANCED"\n\n'
+            '[models.tier_defaults]\nADVANCED = "odd.model.id"\n',
+        )
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+        parsed = tomllib.loads(self._generate(tmp_path, monkeypatch))
+
+        assert parsed["carry_patch"]["enabled"] is True
+        assert parsed["workspace"]["merge_strategy"] == "direct"
+        assert parsed["models"]["tier_defaults"]["ADVANCED"] == "odd.model.id"
 
 
 # ---------------------------------------------------------------------------
