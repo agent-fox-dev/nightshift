@@ -596,13 +596,14 @@ class FoxKnowledgeProvider:
         if task_group is None:
             return []
 
-        run_id = self._run_id
-        if not run_id:
-            return []
-
         max_items = self._config.max_summary_items
         use_relevance = bool(file_footprint)
 
+        # Cross-run retrieval (issue #83): pass run_id=None so
+        # query_same_spec_summaries skips the run_id filter and uses
+        # ``<=`` for task_group, enabling summaries from prior runs of
+        # the same spec to be returned.  Intra-run retrieval (spec-
+        # driven workflow) can still pass a run_id when needed.
         def _do_query():
             from afcore.knowledge.summary_store import query_same_spec_summaries
 
@@ -613,7 +614,7 @@ class FoxKnowledgeProvider:
                 conn,
                 spec_name,
                 task_group,
-                run_id,
+                run_id=None,
                 max_items=query_limit,
             )
 

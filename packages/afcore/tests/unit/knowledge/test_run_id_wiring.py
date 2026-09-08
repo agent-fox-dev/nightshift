@@ -120,14 +120,19 @@ class TestSummariesRetrievedAfterSetRunId:
 
 
 # ---------------------------------------------------------------------------
-# TS-120-E1: set_run_id never called — summaries return empty (120-REQ-1.E1)
+# TS-120-E1: set_run_id never called — summaries still returned via
+# cross-run retrieval (issue #83).
+#
+# Prior to issue #83, summaries required a matching run_id.  Cross-run
+# retrieval now passes run_id=None to query_same_spec_summaries, so
+# summaries are returned regardless of whether set_run_id was called.
 # ---------------------------------------------------------------------------
 
 
 class TestSetRunIdNeverCalled:
-    """Summaries return empty when run_id is not set."""
+    """Summaries returned even when run_id is not set (cross-run retrieval)."""
 
-    def test_no_context_items(
+    def test_context_items_returned_cross_run(
         self,
         provider_db: KnowledgeDB,
         provider_conn: duckdb.DuckDBPyConnection,
@@ -136,21 +141,22 @@ class TestSetRunIdNeverCalled:
             provider_conn,
             _make_summary(spec_name="test_spec", task_group="1", run_id="run1"),
         )
-        # Do NOT call set_run_id
+        # Do NOT call set_run_id — cross-run retrieval still works
         provider = FoxKnowledgeProvider(provider_db, KnowledgeProviderConfig())
         result = provider.retrieve("test_spec", "test", task_group="2")
-        assert not any("[CONTEXT]" in item for item in result)
+        assert any("[CONTEXT]" in item for item in result)
 
 
 # ---------------------------------------------------------------------------
-# TS-120-E2: set_run_id with empty string (120-REQ-1.E2)
+# TS-120-E2: set_run_id with empty string — summaries still returned via
+# cross-run retrieval (issue #83).
 # ---------------------------------------------------------------------------
 
 
 class TestSetRunIdEmptyString:
-    """Empty string treated as unset."""
+    """Empty string no longer prevents summary retrieval (cross-run mode)."""
 
-    def test_empty_string_no_summaries(
+    def test_empty_string_still_returns_summaries(
         self,
         provider_db: KnowledgeDB,
         provider_conn: duckdb.DuckDBPyConnection,
@@ -161,4 +167,4 @@ class TestSetRunIdEmptyString:
         )
         provider = _make_provider(provider_db, run_id="")
         result = provider.retrieve("test_spec", "test", task_group="2")
-        assert not any("[CONTEXT]" in item for item in result)
+        assert any("[CONTEXT]" in item for item in result)

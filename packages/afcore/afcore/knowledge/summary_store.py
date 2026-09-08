@@ -79,14 +79,24 @@ def query_same_spec_summaries(
     conn: duckdb.DuckDBPyConnection,
     spec_name: str,
     task_group: str,
-    run_id: str,
+    run_id: str | None = None,
     max_items: int = 5,
 ) -> list[SummaryRecord]:
-    """Return summaries from prior task groups in the same spec/run.
+    """Return summaries from prior task groups in the same spec.
 
     Returns summaries from all archetypes (coder, reviewer, verifier).
-    Filters: task_group < current, latest attempt per (task_group, archetype).
+    Latest attempt per (task_group, archetype).
     Sorts by task_group ASC. Caps at max_items.
+
+    When *run_id* is provided, results are scoped to that run and only
+    prior task groups are returned (``task_group < current``).  This is
+    the intra-run retrieval mode used by the spec-driven workflow.
+
+    When *run_id* is ``None``, results span all runs for the spec and
+    use ``task_group <= current`` so that summaries stored with the same
+    task group value (e.g. ``"0"``) in a prior run are reachable.  This
+    is the cross-run retrieval mode used by the nightshift fix pipeline
+    (issue #83).
 
     Uses CAST(task_group AS INTEGER) for numeric comparison to avoid
     lexicographic ordering issues with VARCHAR (e.g. '2' > '10').
@@ -95,28 +105,53 @@ def query_same_spec_summaries(
                   119-REQ-2.6, 120-REQ-3.3
     """
     try:
-        rows = conn.execute(
-            """
-            WITH ranked AS (
-                SELECT *,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY task_group, archetype
-                           ORDER BY attempt DESC
-                       ) AS rn
-                FROM session_summaries
-                WHERE spec_name = ?
-                  AND run_id = ?
-                  AND CAST(task_group AS INTEGER) < CAST(? AS INTEGER)
-            )
-            SELECT id, node_id, run_id, spec_name, task_group,
-                   archetype, attempt, summary, created_at
-            FROM ranked
-            WHERE rn = 1
-            ORDER BY CAST(task_group AS INTEGER) ASC
-            LIMIT ?
-            """,
-            [spec_name, run_id, task_group, max_items],
-        ).fetchall()
+        if run_id is not None:
+            # Intra-run mode: scope to this run, strict < comparison
+            rows = conn.execute(
+                """
+                WITH ranked AS (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY task_group, archetype
+                               ORDER BY attempt DESC
+                           ) AS rn
+                    FROM session_summaries
+                    WHERE spec_name = ?
+                      AND run_id = ?
+                      AND CAST(task_group AS INTEGER) < CAST(? AS INTEGER)
+                )
+                SELECT id, node_id, run_id, spec_name, task_group,
+                       archetype, attempt, summary, created_at
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY CAST(task_group AS INTEGER) ASC
+                LIMIT ?
+                """,
+                [spec_name, run_id, task_group, max_items],
+            ).fetchall()
+        else:
+            # Cross-run mode: no run_id filter, <= comparison (issue #83)
+            rows = conn.execute(
+                """
+                WITH ranked AS (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY task_group, archetype
+                               ORDER BY attempt DESC
+                           ) AS rn
+                    FROM session_summaries
+                    WHERE spec_name = ?
+                      AND CAST(task_group AS INTEGER) <= CAST(? AS INTEGER)
+                )
+                SELECT id, node_id, run_id, spec_name, task_group,
+                       archetype, attempt, summary, created_at
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY CAST(task_group AS INTEGER) ASC
+                LIMIT ?
+                """,
+                [spec_name, task_group, max_items],
+            ).fetchall()
     except duckdb.CatalogException:
         logger.debug("session_summaries table not found; returning empty same-spec list")
         return []

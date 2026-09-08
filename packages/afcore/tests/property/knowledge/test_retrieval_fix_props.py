@@ -76,27 +76,29 @@ def _insert_finding_direct(
 
 
 class TestRunIdGating:
-    """Summary queries return empty iff run_id is not set or empty.
+    """Summary queries always return results via cross-run retrieval.
 
-    Property 1: For any run_id in {None, "", "valid_run_id"}, when run_id
-    is falsy summary queries return empty. When truthy and matching
-    summaries exist, queries return non-empty.
+    Property 1: For any run_id in {None, "", "valid_run_id"}, when
+    matching summaries exist in the database, summary queries return
+    non-empty results.  Cross-run retrieval (issue #83) no longer
+    gates on run_id — summaries are retrieved regardless of whether
+    set_run_id was called.
 
-    Requirements: 120-REQ-1.1, 120-REQ-1.2, 120-REQ-1.E1, 120-REQ-1.E2
+    Requirements: 120-REQ-1.1, 120-REQ-1.2
     """
 
     @given(
         run_id_choice=st.sampled_from([None, "", "valid_run_id"]),
     )
     @settings(max_examples=3)
-    def test_run_id_gating(self, run_id_choice: str | None) -> None:
+    def test_cross_run_retrieval(self, run_id_choice: str | None) -> None:
         conn, db = _fresh_db()
         try:
             provider = FoxKnowledgeProvider(db, KnowledgeProviderConfig())
             if run_id_choice is not None:
                 provider.set_run_id(run_id_choice)
 
-            # Insert a summary matching the "valid" run_id
+            # Insert a summary with a specific run_id
             insert_summary(
                 conn,
                 SummaryRecord(
@@ -115,10 +117,8 @@ class TestRunIdGating:
             result = provider.retrieve("test_spec", "test", task_group="2")
             context_items = [i for i in result if "[CONTEXT]" in i]
 
-            if not run_id_choice:  # None or ""
-                assert context_items == []
-            else:
-                assert len(context_items) > 0
+            # Cross-run retrieval: summaries returned regardless of run_id
+            assert len(context_items) > 0
         finally:
             conn.close()
 

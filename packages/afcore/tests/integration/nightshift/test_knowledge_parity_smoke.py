@@ -220,6 +220,12 @@ class TestSmoke1SuccessfulFixSession:
         assert post_ctx["touched_files"] == ["src/foo.py", "src/bar.py"]
         assert "commit_sha" not in post_ctx
 
+        # Issue #83: post-harvest context must include session_status
+        assert post_ctx.get("session_status") == "completed", (
+            "Post-harvest context must include session_status='completed' "
+            "for FoxKnowledgeProvider.ingest to store summaries"
+        )
+
         # Real extract_session_summary parsed the structured response
         assert post_ctx.get("summary") == "The fix is complete."
         assert post_ctx.get("rejected_approaches") == ["approach A"]

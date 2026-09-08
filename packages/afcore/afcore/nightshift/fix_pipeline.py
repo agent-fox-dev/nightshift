@@ -431,6 +431,7 @@ class FixPipeline:
 
         # Build context dict — no commit_sha (05-REQ-2.2)
         context: dict[str, object] = {
+            "session_status": "completed",
             "touched_files": changed_files,
             "project_root": str(self._repo_root),
             "sink": self._sink,
