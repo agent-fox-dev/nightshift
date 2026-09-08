@@ -76,3 +76,43 @@ class TestAllowlistBlocksNonAllowlisted:
         command = f"{cmd} {args}".strip()
         result = hook(tool_name="Bash", tool_input={"command": command})
         assert result.get("decision") != "block", f"Command '{command}' should be allowed but was blocked"
+
+
+class TestShellSeparatorsBlockedHookProperty:
+    """Property: pre-tool-use hook blocks allowlisted commands joined with shell separators."""
+
+    _separators = st.sampled_from([";", "&&", "||", "|", "&", "\n"])
+
+    @given(
+        cmd=st.sampled_from(sorted(DEFAULT_ALLOWLIST)),
+        sep=_separators,
+        other=st.text(
+            alphabet=st.characters(
+                whitelist_categories=("L", "N"),
+                whitelist_characters=" _-./",
+            ),
+            min_size=1,
+            max_size=25,
+        ),
+        allowlisted_first=st.booleans(),
+        spacing=st.sampled_from(["", " ", "  "]),
+    )
+    @settings(max_examples=60)
+    def test_hook_blocks_chained_commands(
+        self,
+        cmd: str,
+        sep: str,
+        other: str,
+        allowlisted_first: bool,
+        spacing: str,
+    ) -> None:
+        """Pre-tool-use hook blocks allowlisted commands joined with any shell separator."""
+        assume(other.strip())
+        config = AgentFoxConfig()
+        hook = make_pre_tool_use_hook(config.security)
+        if allowlisted_first:
+            command = f"{cmd}{spacing}{sep}{spacing}{other}"
+        else:
+            command = f"{other}{spacing}{sep}{spacing}{cmd}"
+        result = hook(tool_name="Bash", tool_input={"command": command})
+        assert result.get("decision") == "block", f"Command '{command}' should be blocked by hook"

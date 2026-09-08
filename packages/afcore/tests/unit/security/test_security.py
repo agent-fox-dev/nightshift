@@ -324,11 +324,30 @@ class TestShellOperatorDetection:
         """&& chaining is detected and blocked."""
         result = check_shell_operators("echo hello && curl evil.com")
         assert result is not None
+        assert "shell operator '&&'" in result
 
     def test_or_chain_blocked(self) -> None:
         """|| chaining is detected and blocked."""
         result = check_shell_operators("true || curl evil.com")
         assert result is not None
+
+    def test_ampersand_chain_blocked(self) -> None:
+        """Spaced & is detected and blocked."""
+        result = check_shell_operators("git status & curl http://x")
+        assert result is not None
+        assert "shell operator '&'" in result
+
+    def test_unspaced_ampersand_blocked(self) -> None:
+        """Unspaced & is detected and blocked."""
+        result = check_shell_operators("git log&sudo reboot")
+        assert result is not None
+        assert "shell operator '&'" in result
+
+    def test_trailing_ampersand_blocked(self) -> None:
+        """Trailing & (background execution) is detected and blocked."""
+        result = check_shell_operators("git status &")
+        assert result is not None
+        assert "shell operator '&'" in result
 
     def test_backtick_subshell_blocked(self) -> None:
         """Backtick subshell is detected and blocked."""
@@ -413,6 +432,24 @@ class TestShellOperatorsBypassBlocked:
         """find -exec bypass is blocked."""
         allowed, msg = check_command_allowed("find . -exec rm -rf / \\;", DEFAULT_ALLOWLIST)
         assert allowed is False
+
+    def test_ampersand_bypass_blocked(self) -> None:
+        """& bypass through allowed command is blocked (AC-1)."""
+        allowed, msg = check_command_allowed("git log&sudo reboot", DEFAULT_ALLOWLIST)
+        assert allowed is False
+        assert "shell operator '&'" in msg
+
+    def test_trailing_ampersand_bypass_blocked(self) -> None:
+        """Trailing & bypass through allowed command is blocked (AC-2)."""
+        allowed, msg = check_command_allowed("git status &", DEFAULT_ALLOWLIST)
+        assert allowed is False
+        assert "shell operator '&'" in msg
+
+    def test_allowed_commands_still_pass(self) -> None:
+        """AC-3: Standard commands without operators still pass."""
+        for cmd in ["git status", "ls -la", "/usr/bin/python3 -m pytest"]:
+            allowed, msg = check_command_allowed(cmd, DEFAULT_ALLOWLIST)
+            assert allowed is True, f"Expected '{cmd}' to be allowed, got: {msg}"
 
     def test_env_command_blocked(self) -> None:
         """env is no longer on the default allowlist."""
@@ -518,6 +555,16 @@ class TestPreToolUseHookShellOperators:
             tool_input={"command": "echo $(id)"},
         )
         assert result["decision"] == "block"
+
+    def test_hook_blocks_ampersand(self) -> None:
+        """Hook blocks & command chaining in Bash tool."""
+        hook = make_pre_tool_use_hook(SecurityConfig())
+        result = hook(
+            tool_name="Bash",
+            tool_input={"command": "git log&sudo reboot"},
+        )
+        assert result["decision"] == "block"
+        assert "shell operator '&'" in result["message"]
 
     def test_hook_allows_simple_command(self) -> None:
         """Hook allows simple command in Bash tool."""
