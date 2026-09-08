@@ -1,11 +1,15 @@
-"""Unit tests for afcore.io.help — exit_codes decorator.
+"""Unit tests for afcore.io.help — dead-code removal verification.
 
-Test Spec: TS-03-50, TS-03-51, TS-03-52, TS-03-53
-Requirements: 03-REQ-10.1, 03-REQ-10.2, 03-REQ-10.3, 03-REQ-10.4
+Issue #98 removed exit_codes, render_json_help, and the --json --help
+interception block.  These tests verify the symbols are no longer
+importable and the interception block is gone from AgentFoxGroup.invoke.
+
+Requirements: NS-REQ-1, NS-REQ-2, NS-REQ-3
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 
 import click
@@ -13,56 +17,30 @@ import pytest
 from click.testing import CliRunner
 
 
-class TestExitCodesDecorator:
-    """TS-03-50: exit_codes sets command.exit_codes on the Command object."""
+class TestExitCodesRemoved:
+    """Verify exit_codes is no longer importable from the public API."""
 
-    def test_exit_codes_sets_attribute(self) -> None:
-        """03-REQ-10.1: command.exit_codes is set to the provided mapping."""
-        from afcore.io import exit_codes
+    def test_exit_codes_not_importable_from_io(self) -> None:
+        """NS-REQ-2.1: from afcore.io import exit_codes raises ImportError."""
+        with pytest.raises(ImportError):
+            from afcore.io import exit_codes  # noqa: F401
 
-        @exit_codes(**{"0": "completed", "1": "error"})
-        @click.command()
-        def my_cmd() -> None:
-            pass
-
-        assert hasattr(my_cmd, "exit_codes")
-        assert my_cmd.exit_codes == {"0": "completed", "1": "error"}
-        assert isinstance(my_cmd, click.Command)
+    def test_render_json_help_not_importable(self) -> None:
+        """NS-REQ-2.1: from afcore.io.help import render_json_help raises ImportError."""
+        with pytest.raises(ImportError):
+            from afcore.io.help import render_json_help  # noqa: F401
 
 
-class TestExitCodesWrongOrder:
-    """TS-03-51: exit_codes raises TypeError when applied below @click.command."""
+class TestInterceptionBlockRemoved:
+    """Verify the --json --help interception block is removed from invoke."""
 
-    def test_raises_type_error_below_click_command(self) -> None:
-        """03-REQ-10.2: TypeError at decoration time when receiving raw function."""
-        from afcore.io import exit_codes
+    def test_invoke_has_no_interception_symbols(self) -> None:
+        """NS-REQ-3.1: invoke source has no interception variable references."""
+        from afcore.io.cli import AgentFoxGroup
 
-        with pytest.raises(TypeError) as exc_info:
-
-            @click.command()
-            @exit_codes(**{"0": "done"})
-            def my_cmd() -> None:
-                pass
-
-        error_msg = str(exc_info.value).lower()
-        assert "click.command" in error_msg or "plain function" in error_msg or ("command" in error_msg)
-
-
-class TestExitCodesDoubleApplication:
-    """TS-03-52: Second exit_codes application overwrites first with no merge."""
-
-    def test_second_overwrites_first(self) -> None:
-        """03-REQ-10.3: command.exit_codes contains only the second mapping."""
-        from afcore.io import exit_codes
-
-        @exit_codes(**{"0": "second", "2": "stalled"})
-        @exit_codes(**{"0": "first"})
-        @click.command()
-        def my_cmd() -> None:
-            pass
-
-        assert my_cmd.exit_codes == {"0": "second", "2": "stalled"}
-        assert "first" not in str(my_cmd.exit_codes)
+        source = inspect.getsource(AgentFoxGroup.invoke)
+        for sym in ("render_json_help", "_json_in_subcommand_args", "help_in_args", "json_in_args"):
+            assert sym not in source, f"{sym} should not appear in AgentFoxGroup.invoke"
 
 
 class TestHelpOutputUnchanged:
@@ -84,3 +62,13 @@ class TestHelpOutputUnchanged:
         # Must not be valid JSON
         with pytest.raises((json.JSONDecodeError, ValueError)):
             json.loads(result.output)
+
+
+class TestMainHasNoExitCodesAttribute:
+    """NS-REQ-4.1: nightshift main has no exit_codes attribute."""
+
+    def test_main_no_exit_codes(self) -> None:
+        """The @exit_codes decorator is removed from app.py."""
+        from nightshift.app import main
+
+        assert not hasattr(main, "exit_codes"), "main should not have exit_codes attribute"

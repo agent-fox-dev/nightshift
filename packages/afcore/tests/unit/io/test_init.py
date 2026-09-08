@@ -8,6 +8,8 @@ Spec 04 later extended the package with additional symbols
 (format_table, ProgressDisplay) and files (progress.py).
 Issue #99 removed StatusSpinner (dead code with no production
 caller) and its module spinner.py.
+Issue #98 removed exit_codes (dead code — unreachable metadata
+decorator with no subcommands to consume it).
 
 See docs/errata/03_io_package_extended_by_spec_04.md.
 
@@ -21,8 +23,9 @@ import os
 
 import pytest
 
-# The original twelve Spec 03 symbols, minus StatusSpinner which was
-# removed in #99 (dead code — no production caller).
+# The original twelve Spec 03 symbols, minus StatusSpinner (removed
+# in #99, dead code) and exit_codes (removed in #98, unreachable
+# metadata decorator — the CLI has no subcommands to consume it).
 SPEC_03_PUBLIC_SYMBOLS = [
     "OutputManager",
     "get_output_manager",
@@ -34,12 +37,12 @@ SPEC_03_PUBLIC_SYMBOLS = [
     "error_envelope",
     "AgentFoxGroup",
     "common_options",
-    "exit_codes",
 ]
 
 # Symbols removed from the public API (documented removals).
 REMOVED_SYMBOLS = [
     "StatusSpinner",  # removed in #99 — dead code, no production caller
+    "exit_codes",  # removed in #98 — unreachable metadata, no subcommands
 ]
 
 # Additional symbols added by Spec 04, documented in errata.

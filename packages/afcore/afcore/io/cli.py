@@ -1,11 +1,10 @@
 """CLI group and common options for AgentFoxGroup.
 
-Requirements: 03-REQ-3, 03-REQ-9, 03-REQ-15, 04-REQ-5
+Requirements: 03-REQ-3, 03-REQ-9, 03-REQ-15
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
@@ -173,36 +172,6 @@ class AgentFoxGroup(click.Group):
             setup_logging(verbose=flags["verbose"], quiet=flags["quiet"])
         except ImportError:
             pass
-
-        # 04-REQ-5.1, 04-REQ-5.3: intercept --json --help for subcommands.
-        # When both --json and --help appear in the subcommand args,
-        # render a JSON command description instead of Click's standard
-        # text help.
-        _prot = getattr(ctx, "_protected_args", None) or []
-        sub_args = list(ctx.args or [])
-        all_remaining = list(_prot) + sub_args
-        help_in_args = "--help" in all_remaining
-        json_in_args = "--json" in all_remaining
-
-        # Expose to group callbacks so they can suppress the banner
-        # when a subcommand will use --json (json_mode is per-command).
-        ctx.obj["_json_in_subcommand_args"] = json_in_args
-
-        if help_in_args and json_in_args:
-            # Find the subcommand name (first non-option token).
-            cmd_name: str | None = None
-            for tok in all_remaining:
-                if not tok.startswith("-"):
-                    cmd_name = tok
-                    break
-            if cmd_name is not None:
-                cmd = self.get_command(ctx, cmd_name)
-                if cmd is not None:
-                    from afcore.io.help import render_json_help
-
-                    help_data = render_json_help(cmd)
-                    click.echo(json.dumps(help_data, indent=2))
-                    ctx.exit(0)
 
         try:
             super().invoke(ctx)

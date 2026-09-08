@@ -11,7 +11,7 @@ import sys
 import click
 from afcore.core.config import ThemeConfig, load_config
 from afcore.core.logging import setup_logging
-from afcore.io import AgentFoxGroup, OutputManager, common_options, exit_codes
+from afcore.io import AgentFoxGroup, OutputManager, common_options
 from afcore.ui.display import create_theme, render_banner
 from afhub.auth import resolve_hub_pat, resolve_hub_url
 
@@ -20,7 +20,6 @@ from nightshift._carry_patch_startup import startup_helper as _carry_patch_start
 logger = logging.getLogger(__name__)
 
 
-@exit_codes(**{"0": "Success", "1": "Startup or fatal API failure", "130": "Immediate abort"})
 @click.group(cls=AgentFoxGroup, invoke_without_command=True)
 @click.version_option(version=None, package_name="nightshift")
 @click.option("--json/--no-json", "json_flag", default=None, help="Enable/disable JSON output mode")
