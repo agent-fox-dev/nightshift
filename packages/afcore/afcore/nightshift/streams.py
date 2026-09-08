@@ -249,6 +249,7 @@ def build_streams(
             workspace_slug=getattr(carry_patch, "workspace", ""),
             config=config,
             engine=engine,
+            repo_root=getattr(engine, "repo_root", None),
         )
         # Wire the monitor to the engine so _run_carry_patch_monitor()
         # can delegate to it (03-REQ-7.4, 11.2 wiring verification).

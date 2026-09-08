@@ -3,6 +3,7 @@
 Re-exports commonly used symbols from:
 - agent_fox.workspace.git (low-level Git wrappers)
 - agent_fox.workspace.integration (integration branch management)
+- agent_fox.workspace.repo_root (repository root resolution)
 - agent_fox.workspace.worktree (worktree lifecycle)
 
 For less commonly used git helpers (create_branch, delete_branch,
@@ -26,6 +27,7 @@ from afcore.workspace.integration import (  # noqa: F401
     _sync_integration_with_remote,
     ensure_integration_branch,
 )
+from afcore.workspace.repo_root import resolve_repo_root  # noqa: F401
 from afcore.workspace.worktree import (  # noqa: F401
     WorkspaceInfo,
     create_worktree,

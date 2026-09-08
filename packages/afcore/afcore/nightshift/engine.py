@@ -31,6 +31,7 @@ from afcore.nightshift.reference_parser import (
 from afcore.nightshift.staleness import check_staleness
 from afcore.nightshift.triage import run_batch_triage
 from afcore.ui.progress import ActivityCallback, SpinnerCallback, TaskCallback
+from afcore.workspace.repo_root import resolve_repo_root as _resolve_repo_root
 
 if TYPE_CHECKING:
     import duckdb
@@ -146,9 +147,14 @@ class NightShiftEngine:
         knowledge_provider: KnowledgeProvider | None = None,
         hub_client: object | None = None,
         budget: SharedBudget | None = None,
+        repo_root: Path | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
+        # Resolved once at startup by the CLI and threaded down to the
+        # fix pipeline and the carry-patch monitor rather than being
+        # re-derived from the working directory (issue #43).
+        self._repo_root = Path(repo_root) if repo_root is not None else _resolve_repo_root()
         self._activity_callback = activity_callback
         self._task_callback = task_callback
         self._status_callback = status_callback
@@ -182,6 +188,14 @@ class NightShiftEngine:
             from afcore.nightshift.gate import log_ungated_warning
 
             log_ungated_warning()
+
+    @property
+    def repo_root(self) -> Path:
+        """The repository root this engine operates on.
+
+        Requirements: NS-REQ-6 (issue #43)
+        """
+        return self._repo_root
 
     def _check_cost_limit(self) -> bool:
         """Check whether the cost limit has been reached.
@@ -663,6 +677,7 @@ class NightShiftEngine:
             knowledge_provider=self._knowledge_provider,
             hub_client=self._hub_client,
             workspace_slug=_ws_slug,
+            repo_root=self._repo_root,
         )
 
         effective_body = issue_body if issue_body else getattr(issue, "body", "")
@@ -813,6 +828,7 @@ class NightShiftEngine:
             spinner_callback=self._spinner_callback,
             conn=self._conn,
             knowledge_provider=self._knowledge_provider,
+            repo_root=self._repo_root,
         )
 
         for issue in issues:
@@ -839,9 +855,11 @@ class NightShiftEngine:
 
         The workspace is constructed from ``context["repo_root"]`` and
         ``context["branch"]``; the coder runs in the repository checkout
-        (not in an isolated worktree).
+        (not in an isolated worktree).  ``repo_root`` is required — a
+        missing value raises rather than falling back to the process
+        working directory.
 
-        Requirements: 03-REQ-3.3
+        Requirements: 03-REQ-3.3, NS-REQ-6 (issue #43)
         """
         from afcore.core.models import resolve_model
         from afcore.engine.sdk_params import (
@@ -854,7 +872,7 @@ class NightShiftEngine:
         from afcore.workspace.worktree import WorkspaceInfo
 
         # Load the archetype profile template.
-        profile = load_profile(archetype, project_dir=Path.cwd(), mode=mode)
+        profile = load_profile(archetype, project_dir=self._repo_root, mode=mode)
 
         # Render template placeholders with context values.
         patch_description = str(context.get("patch_description", ""))
@@ -870,8 +888,13 @@ class NightShiftEngine:
         system_prompt = system_prompt.replace("{{ upstream_context }}", upstream_context)
         system_prompt = system_prompt.replace("{{ rerere_resolutions }}", rerere_str)
 
-        # Build workspace info for the checked-out branch.
-        repo_root = Path(str(context.get("repo_root", Path.cwd())))
+        # Build workspace info for the checked-out branch.  The caller
+        # owns the repository root; defaulting to the working directory
+        # would silently mask a missing argument (issue #43, AC-3).
+        raw_repo_root = context.get("repo_root")
+        if not raw_repo_root:
+            raise ValueError("_run_coder_session requires 'repo_root' in the session context")
+        repo_root = Path(str(raw_repo_root))
         branch = str(context.get("branch", ""))
         workspace = WorkspaceInfo(
             path=repo_root,

@@ -298,7 +298,23 @@ Night Shift.
 
 ### Startup
 
-On startup, the engine validates that a platform is configured (one of
+On startup, the CLI resolves the repository root once, via
+`git rev-parse --show-toplevel`, and threads it through the engine, the fix
+pipeline and the carry-patch monitor. Every worktree, harvest and checkout
+operation uses that value, so launching the daemon from a subdirectory of the
+repository is equivalent to launching it from the root: worktrees are still
+created under the repository root's `.nightshift/worktrees/`. When the
+invocation directory is not inside a git work tree, the daemon falls back to
+that directory and the platform and prerequisite checks report the problem.
+
+Configuration discovery is deliberately *not* rooted this way: a local
+`.nightshift/config.toml` is still looked for relative to the invocation
+directory, and the global `~/.nightshift/config.toml` is used when none is
+found there. Launching from a subdirectory therefore uses the repository root
+for git operations but the global config unless that subdirectory carries its
+own `.nightshift/config.toml`.
+
+The engine then validates that a platform is configured (one of
 `github`, `gitlab`, or `gitea` is required for issue management), initializes
 the platform client, initializes the knowledge store, cleans up stale merge
 locks and audit files, and writes a PID file to `.nightshift/daemon.pid`. The

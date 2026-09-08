@@ -21,6 +21,7 @@ from afhub.polling import poll_rebuild as _poll_rebuild
 
 from afcore.archetypes import ARCHETYPE_REGISTRY, resolve_effective_config
 from afcore.workspace import git as _workspace_git
+from afcore.workspace.repo_root import resolve_repo_root
 
 if TYPE_CHECKING:
     import duckdb
@@ -133,6 +134,7 @@ class CarryPatchMonitor:
         sink: SinkDispatcher | SessionSink | None = None,
         run_id: str = "",
         conn: duckdb.DuckDBPyConnection | None = None,
+        repo_root: Path | None = None,
     ) -> None:
         # --- Validation (03-REQ-2.E1, 03-REQ-2.E2) ---
         if hub_client is None:
@@ -147,6 +149,10 @@ class CarryPatchMonitor:
         self._sink = sink
         self._run_id = run_id
         self._conn = conn
+        # The repository root is supplied by the caller (streams.py
+        # threads the engine's value through) rather than re-derived
+        # from the working directory at checkout time (issue #43).
+        self._repo_root = Path(repo_root) if repo_root is not None else resolve_repo_root()
 
         # Per-(slug, patch_id) session retry counter.
         # Initialised from persisted DuckDB state so retries survive
@@ -481,7 +487,7 @@ class CarryPatchMonitor:
         """
         slug = self._workspace_slug
         branch = getattr(patch_detail, "branch_name", "")
-        repo_root = Path.cwd()
+        repo_root = self._repo_root
 
         # Step 1: Assemble conflict resolution context (03-REQ-4.1)
         context = await self._build_conflict_context(
