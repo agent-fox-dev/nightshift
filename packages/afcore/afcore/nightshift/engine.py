@@ -21,6 +21,7 @@ from afaudit.events import AuditEventType, generate_run_id
 from afissues.labels import LABEL_FIX, LABEL_FIXED, LABEL_PR
 
 from afcore.core.config import AgentFoxConfig
+from afcore.core.errors import FatalAPIError
 from afcore.nightshift.dep_graph import build_graph, build_parallel_graph, merge_edges
 from afcore.nightshift.fix_pipeline import LABEL_FAILED, FixPipeline
 from afcore.nightshift.pr_feedback import process_pr_issue
@@ -310,6 +311,10 @@ class NightShiftEngine:
                 )
                 all_edges = merge_edges(all_edges, triage.edges)
                 supersession_pairs = triage.supersession_pairs
+            except FatalAPIError:
+                # No credit / rejected credentials — abort the whole run
+                # instead of degrading to explicit refs.
+                raise
             except Exception:
                 logger.warning(
                     "AI triage failed, using explicit refs only",
@@ -498,6 +503,12 @@ class NightShiftEngine:
 
         _fill_pool()
 
+        # Set when a non-recoverable API error (no credit, rejected
+        # credentials) surfaces mid-dispatch.  Dispatch stops, in-flight
+        # fixes are allowed to finish, and the error is re-raised so the
+        # daemon aborts with a clear message.
+        fatal_error: FatalAPIError | None = None
+
         while pool:
             done, pool = await asyncio.wait(pool, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
@@ -560,6 +571,14 @@ class NightShiftEngine:
                                         obsolete_num,
                                         exc_info=True,
                                     )
+                        except FatalAPIError as exc:
+                            logger.error(
+                                "Staleness check after fix #%d hit a non-recoverable API error: %s",
+                                issue_num,
+                                exc,
+                            )
+                            fatal_error = exc
+                            break
                         except Exception:
                             logger.warning(
                                 "Staleness check failed after fix #%d",
@@ -567,8 +586,20 @@ class NightShiftEngine:
                                 exc_info=True,
                             )
 
+            if fatal_error is not None:
+                break
+
             # Fill pool with newly-ready issues
             _fill_pool()
+
+        if fatal_error is not None:
+            if pool:
+                logger.warning(
+                    "Waiting for %d in-flight fix(es) to finish before aborting",
+                    len(pool),
+                )
+                await asyncio.gather(*pool, return_exceptions=True)
+            raise fatal_error
 
     def _exceeds_attempt_ceiling(self, issue_number: int) -> bool:
         """Check whether the issue has exhausted its cross-run attempt ceiling.

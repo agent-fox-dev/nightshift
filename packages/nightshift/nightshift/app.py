@@ -21,7 +21,7 @@ from nightshift._carry_patch_startup import startup_helper as _carry_patch_start
 logger = logging.getLogger(__name__)
 
 
-@exit_codes(**{"0": "Success", "1": "Startup failure", "130": "Immediate abort"})
+@exit_codes(**{"0": "Success", "1": "Startup or fatal API failure", "130": "Immediate abort"})
 @click.group(cls=AgentFoxGroup, invoke_without_command=True)
 @click.version_option(version=None, package_name="nightshift")
 @click.option("--json/--no-json", "json_flag", default=None, help="Enable/disable JSON output mode")
@@ -90,7 +90,7 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     from afcore.workspace.merge_lock import cleanup_stale_merge_lock
     from afissues.errors import IntegrationError
 
-    from nightshift._startup import check_root_permission_mode, init_knowledge, wrap_task_callback
+    from nightshift._startup import check_root_permission_mode, init_knowledge, report_failure, wrap_task_callback
 
     root = Path.cwd()
     check_root_permission_mode(config)  # Pre-flight: root + bypassPermissions (#11)
@@ -189,9 +189,10 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     except SystemExit:
         raise
     except Exception as exc:
-        logger.error("Night-shift daemon failed: %s", exc, exc_info=True)
-        click.echo(f"Error: nightshift daemon failed: {exc}", err=True)
-        sys.exit(1)
+        # Includes FatalAPIError — a non-recoverable API condition (no
+        # credit, rejected credentials) raised by DaemonRunner.run().
+        progress.stop()
+        report_failure(exc)
     finally:
         progress.stop()
         for fn in [

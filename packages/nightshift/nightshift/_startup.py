@@ -5,8 +5,28 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from typing import NoReturn
 
 logger = logging.getLogger(__name__)
+
+
+def report_failure(exc: Exception) -> NoReturn:
+    """Report a daemon failure on stderr and exit with code 1.
+
+    A :class:`~afcore.core.errors.FatalAPIError` already carries an
+    operator-facing explanation — an exhausted credit balance, rejected
+    credentials — so it is shown verbatim and logged without a traceback.
+    Anything else is an unexpected failure and keeps its traceback.
+    """
+    from afcore.core.errors import FatalAPIError
+
+    if isinstance(exc, FatalAPIError):
+        logger.error("Nightshift aborted: %s", exc)
+        print(f"Error: {exc}", file=sys.stderr)
+    else:
+        logger.error("Night-shift daemon failed: %s", exc, exc_info=True)
+        print(f"Error: nightshift daemon failed: {exc}", file=sys.stderr)
+    sys.exit(1)
 
 
 def check_root_permission_mode(config) -> None:

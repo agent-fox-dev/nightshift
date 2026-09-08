@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 from afaudit.emit import emit_audit_event as _emit_audit_event
 from afaudit.events import AuditEventType, generate_run_id
 
+from afcore.core.errors import FatalAPIError
+
 logger = logging.getLogger(__name__)
 
 
@@ -198,6 +200,7 @@ class DaemonRunner:
         self._active_streams: set[str] = set()
         self._shutting_down = False
         self._shutdown_event = asyncio.Event()
+        self._fatal_error: FatalAPIError | None = None
 
         # Log unknown stream names in enabled_streams config (85-REQ-9.2).
         known_stream_names = {
@@ -222,6 +225,11 @@ class DaemonRunner:
     def is_shutting_down(self) -> bool:
         """Whether a graceful shutdown has been requested."""
         return self._shutting_down
+
+    @property
+    def fatal_error(self) -> FatalAPIError | None:
+        """The non-recoverable API error that aborted the run, if any."""
+        return self._fatal_error
 
     def request_shutdown(self) -> None:
         """Request graceful shutdown. Second call raises SystemExit(130).
@@ -284,6 +292,8 @@ class DaemonRunner:
 
         Exceptions in run_once() are caught and logged; the stream
         retries after the normal interval (85-REQ-1.4, 85-REQ-1.E1).
+        The one exception is :class:`~afcore.core.errors.FatalAPIError`,
+        which stops every stream and aborts the daemon.
         """
         last_run: float | None = None
         idle_ticks = 0
@@ -314,6 +324,16 @@ class DaemonRunner:
             self._active_streams.add(stream.name)
             try:
                 await stream.run_once()
+            except FatalAPIError as exc:
+                # Non-recoverable API condition (no credit, rejected or
+                # unauthorised credentials).  Retrying on the next cycle
+                # would fail identically, so abort the whole daemon and
+                # surface the reason to the operator.
+                logger.error("Aborting nightshift — %s", exc)
+                self._fatal_error = exc
+                self._shutting_down = True
+                self._shutdown_event.set()
+                return
             except Exception:  # noqa: BLE001
                 logger.exception(
                     "Stream %r run_once() raised; will retry next cycle",
@@ -360,6 +380,7 @@ class DaemonRunner:
         3. Wait for shutdown signal or budget exhaustion.
         4. Call shutdown() on all registered streams.
         5. Remove PID file, emit stop audit event.
+        6. Re-raise a non-recoverable API error, if one aborted the run.
 
         Requirements: 85-REQ-2.1, 85-REQ-2.4, 85-REQ-2.5,
                       85-REQ-4.1, 85-REQ-4.2
@@ -423,15 +444,23 @@ class DaemonRunner:
         state.total_cost = self._budget.total_cost
 
         # Emit stop audit event (85-REQ-2.4).
+        stop_payload: dict[str, object] = {
+            "phase": "stop",
+            "total_cost": state.total_cost,
+            "uptime_seconds": state.uptime_seconds,
+        }
+        if self._fatal_error is not None:
+            stop_payload["fatal_error"] = str(self._fatal_error)
         _emit_audit_event(
             None,
             _daemon_run_id,
             AuditEventType.NIGHT_SHIFT_STOP,
-            payload={
-                "phase": "stop",
-                "total_cost": state.total_cost,
-                "uptime_seconds": state.uptime_seconds,
-            },
+            payload=stop_payload,
         )
+
+        # Surface a non-recoverable API failure to the caller so the CLI
+        # exits non-zero with the reason instead of reporting a clean stop.
+        if self._fatal_error is not None:
+            raise self._fatal_error
 
         return state

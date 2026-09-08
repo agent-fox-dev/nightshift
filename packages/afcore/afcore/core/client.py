@@ -34,6 +34,7 @@ import anthropic
 from anthropic import APIStatusError, RateLimitError
 
 from afcore.core.config import CachePolicy
+from afcore.core.errors import FatalAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +245,70 @@ def cached_messages_create_sync(
 
 
 # ---------------------------------------------------------------------------
+# Fatal (non-recoverable) API error classification
+# ---------------------------------------------------------------------------
+
+#: Markers that identify a 400 response as a billing problem rather than a
+#: malformed request.  The API reports an exhausted credit balance as an
+#: ``invalid_request_error``, which is otherwise indistinguishable from a
+#: bad payload.
+_BILLING_MARKERS: tuple[str, ...] = (
+    "credit balance",
+    "purchase credits",
+    "plans & billing",
+    "billing",
+)
+
+_BILLING_HINT = (
+    "Anthropic API credit balance is too low — no further model calls can "
+    "succeed. Add credits under Plans & Billing in the Anthropic Console, "
+    "then restart nightshift."
+)
+
+_AUTH_HINT = (
+    "Anthropic API authentication failed — the credentials were rejected. "
+    "Check ANTHROPIC_API_KEY (or the Vertex/Bedrock credentials in use), "
+    "then restart nightshift."
+)
+
+_ACCESS_HINT = (
+    "Anthropic API access denied — the credentials in use are not permitted "
+    "to call this model or endpoint. Check the API key's permissions and the "
+    "configured models, then restart nightshift."
+)
+
+
+def classify_fatal_api_error(exc: BaseException) -> str | None:
+    """Return an operator-facing reason when *exc* is non-recoverable.
+
+    Non-recoverable means retrying the same call with the same credentials
+    cannot succeed: the account is out of credit (400 with a billing
+    message, or 402), the API key was rejected (401), or it lacks access to
+    the endpoint (403).
+
+    Returns ``None`` for every other error — transient failures, ordinary
+    malformed-request errors — so existing retry and fallback paths are
+    unaffected.
+    """
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int):
+        return None
+
+    message = str(getattr(exc, "message", "") or exc)
+    detail = f" API said: {message}" if message else ""
+
+    if status == 402:
+        return f"{_BILLING_HINT}{detail}"
+    if status == 400 and any(marker in message.lower() for marker in _BILLING_MARKERS):
+        return f"{_BILLING_HINT}{detail}"
+    if status == 401:
+        return f"{_AUTH_HINT}{detail}"
+    if status == 403:
+        return f"{_ACCESS_HINT}{detail}"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Retry helpers (formerly core/retry)
 # ---------------------------------------------------------------------------
 
@@ -268,13 +333,19 @@ async def retry_api_call_async[T](
     """Execute *fn* with retry on transient Anthropic errors.
 
     Returns the result of *fn* on success.
-    Raises the original exception after all retries are exhausted.
+    Raises the original exception after all retries are exhausted, or
+    :class:`~afcore.core.errors.FatalAPIError` immediately — without
+    retrying — when the API reports a non-recoverable condition such as an
+    exhausted credit balance or rejected credentials.
     """
     max_attempts = len(_RETRY_DELAYS) + 1
     for attempt in range(max_attempts):
         try:
             return await fn()
         except (RateLimitError, APIStatusError, OSError) as exc:
+            fatal_reason = classify_fatal_api_error(exc)
+            if fatal_reason is not None:
+                raise FatalAPIError(fatal_reason, call_context=context) from exc
             if not _is_retryable(exc) or attempt == max_attempts - 1:
                 raise
             delay = _RETRY_DELAYS[attempt]
@@ -301,6 +372,9 @@ def retry_api_call[T](
         try:
             return fn()
         except (RateLimitError, APIStatusError, OSError) as exc:
+            fatal_reason = classify_fatal_api_error(exc)
+            if fatal_reason is not None:
+                raise FatalAPIError(fatal_reason, call_context=context) from exc
             if not _is_retryable(exc) or attempt == max_attempts - 1:
                 raise
             delay = _RETRY_DELAYS[attempt]

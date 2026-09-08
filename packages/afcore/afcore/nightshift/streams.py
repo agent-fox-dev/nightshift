@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from afcore.core.errors import FatalAPIError
+
 if TYPE_CHECKING:
     from afcore.nightshift.daemon import SharedBudget
 
@@ -132,10 +134,18 @@ class EngineWorkStream:
         increments and the interval is doubled (capped at
         ``_MAX_BACKOFF_MULTIPLIER × base``), then the exception is
         re-raised so ``_run_stream_loop`` can log it at ERROR level.
+
+        :class:`~afcore.core.errors.FatalAPIError` bypasses the backoff
+        bookkeeping entirely: it aborts the daemon rather than being
+        retried on a later cycle.
         """
         method = getattr(self._engine, self._method_name)
         try:
             await method()
+        except FatalAPIError:
+            # Non-recoverable API condition — backing off would only delay
+            # the abort, so propagate immediately.
+            raise
         except Exception:
             self._consecutive_failures += 1
             multiplier = min(

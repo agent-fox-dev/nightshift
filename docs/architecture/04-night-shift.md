@@ -274,6 +274,10 @@ verification to confirm the issue is still open. Issues identified as stale
 are closed with a comment noting which fix resolved them and assigned the
 `af:fixed` label.
 
+If the AI evaluation fails, staleness falls back to platform verification
+alone — except for non-recoverable API failures, which abort the run (see
+[Fatal API Failures](#fatal-api-failures)).
+
 ---
 
 ## Labels
@@ -328,6 +332,30 @@ margin.
 
 Session limits are also enforced. Both limits trigger graceful shutdown:
 the engine finishes any in-flight work, emits final statistics, and exits.
+
+### Fatal API Failures
+
+Some model-API rejections cannot be fixed by retrying or by degrading to a
+non-AI code path: an exhausted credit balance (HTTP 400 with a billing
+message, or 402), rejected credentials (401), or credentials without access
+to the configured model (403). Every subsequent AI call would fail
+identically, so Night Shift aborts instead of continuing with a silently
+degraded pipeline.
+
+Such responses are raised as `FatalAPIError` by the API retry helpers —
+without consuming the retry schedule — and are never absorbed by the
+fallbacks in batch triage or staleness detection. The daemon stops
+dispatching new work, lets in-flight fixes finish, shuts its streams down,
+and exits with code 1 and a message naming the cause, for example:
+
+```
+Error: Anthropic API credit balance is too low — no further model calls can
+succeed. Add credits under Plans & Billing in the Anthropic Console, then
+restart nightshift. API said: ...
+```
+
+The reason is also recorded on the `night_shift.stop` audit event as
+`fatal_error`.
 
 ### Graceful Shutdown
 
