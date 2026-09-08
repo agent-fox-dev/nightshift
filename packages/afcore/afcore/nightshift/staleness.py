@@ -108,7 +108,7 @@ async def _run_ai_staleness(
 
     Requirements: 71-REQ-5.1
     """
-    from afcore.nightshift.cost_helpers import nightshift_ai_call
+    from afcore.nightshift.cost_helpers import AUX_CALL_MAX_TOKENS, nightshift_ai_call
 
     # Resolve tier via archetype identity rather than hardcoding a tier.
     # This makes staleness honour [archetypes.overrides.maintainer] the
@@ -124,7 +124,7 @@ async def _run_ai_staleness(
 
     response_text, _response = await nightshift_ai_call(
         model_tier=tier,
-        max_tokens=4096,
+        max_tokens=AUX_CALL_MAX_TOKENS,
         messages=[{"role": "user", "content": prompt}],
         context="staleness check",
         cost_label="staleness_check",
