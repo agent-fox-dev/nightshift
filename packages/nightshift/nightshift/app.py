@@ -7,7 +7,6 @@ import logging
 import os
 import signal
 import sys
-from pathlib import Path
 
 import click
 from afcore.core.config import ThemeConfig, load_config
@@ -88,11 +87,15 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     from afcore.nightshift.streams import build_streams
     from afcore.ui.progress import ProgressDisplay
     from afcore.workspace.merge_lock import cleanup_stale_merge_lock
+    from afcore.workspace.repo_root import resolve_repo_root
     from afissues.errors import IntegrationError
 
     from nightshift._startup import check_root_permission_mode, init_knowledge, report_failure, wrap_task_callback
 
-    root = Path.cwd()
+    # Resolve the repository root once, here, and thread it through the
+    # engine.  Launching from a subdirectory resolves to the work-tree
+    # root rather than the invocation directory (issue #43).
+    root = resolve_repo_root()
     check_root_permission_mode(config)  # Pre-flight: root + bypassPermissions (#11)
     validate_night_shift_prerequisites(config)
 
@@ -161,6 +164,7 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
         knowledge_provider=kprov,
         hub_client=hub_client,
         budget=budget,
+        repo_root=root,
     )
     runner = DaemonRunner(
         config=config,

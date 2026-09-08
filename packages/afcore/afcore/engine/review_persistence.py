@@ -354,24 +354,29 @@ def _persist_auditor_findings(
     task_group: str,
     knowledge_db_conn: Any,
     specs_dir: Path | None,
+    project_root: Path | None = None,
 ) -> None:
     """Persist converged audit-review results.
+
+    *project_root* is the repository root.  It defaults to the working
+    directory only when the caller does not supply one (issue #43).
 
     Requirements: 98-REQ-5.1, 98-REQ-5.2
     """
     from afcore.session.auditor_output import persist_auditor_results
 
+    root = Path(project_root) if project_root is not None else Path.cwd()
     if specs_dir is not None:
         spec_dir = specs_dir / spec_name
     else:
         from afcore.core.config import AgentFoxConfig, resolve_spec_root
 
-        spec_dir = resolve_spec_root(AgentFoxConfig(), Path.cwd()) / spec_name
+        spec_dir = resolve_spec_root(AgentFoxConfig(), root) / spec_name
     persist_auditor_results(
         spec_dir,
         audit_result,
         attempt=attempt,
-        project_root=Path.cwd(),
+        project_root=root,
         conn=knowledge_db_conn,
         task_group=task_group,
     )
@@ -391,11 +396,16 @@ def persist_review_findings(
     session_handle: Any = None,
     mode: str | None = None,
     specs_dir: Path | None = None,
+    project_root: Path | None = None,
 ) -> None:
     """Parse and persist structured findings from review archetypes.
 
     Routes to the correct handler based on archetype and mode.
     Non-review archetypes (coder, etc.) are silently skipped.
+
+    *project_root* is the repository root used for spec-root resolution
+    when *specs_dir* is not given.  It falls back to the working
+    directory only when the caller supplies neither (issue #43).
 
     Requirements: 53-REQ-1.1, 53-REQ-2.1, 53-REQ-3.1,
                   74-REQ-3.1, 74-REQ-3.2, 74-REQ-3.3, 74-REQ-3.4,
@@ -479,6 +489,7 @@ def persist_review_findings(
                 tg,
                 knowledge_db_conn,
                 specs_dir,
+                project_root,
             )
     except Exception:
         logger.warning(

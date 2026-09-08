@@ -40,6 +40,7 @@ from afcore.session.context import render_inmemory_spec_sections
 from afcore.ui.progress import ActivityCallback, SpinnerCallback, TaskCallback, TaskEvent
 from afcore.workspace import WorkspaceInfo
 from afcore.workspace import git as _workspace_git
+from afcore.workspace.repo_root import resolve_repo_root as _resolve_repo_root
 
 if TYPE_CHECKING:
     import duckdb
@@ -251,9 +252,15 @@ class FixPipeline:
         knowledge_provider: KnowledgeProvider | None = None,
         hub_client: HubClient | None = None,
         workspace_slug: str = "",
+        repo_root: Path | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
+        # Resolved once here rather than re-derived from the working
+        # directory at each git call site (issue #43).  Callers that
+        # already know the root (NightShiftEngine) pass it in; the
+        # fallback resolves the work-tree root of the current directory.
+        self._repo_root = Path(repo_root) if repo_root is not None else _resolve_repo_root()
         self._activity_callback = activity_callback
         self._task_callback = task_callback
         self._sink = sink_dispatcher
@@ -265,6 +272,14 @@ class FixPipeline:
         self._run_id: str = ""
         self._pr_number: int | None = None
         self._pr_url: str | None = None
+
+    @property
+    def repo_root(self) -> Path:
+        """The repository root this pipeline operates on.
+
+        Requirements: NS-REQ-6 (issue #43)
+        """
+        return self._repo_root
 
     async def _post_comment(self, issue_number: int, message: str) -> None:
         """Post a comment on an issue, logging failures without raising."""
@@ -342,7 +357,7 @@ class FixPipeline:
             "session_status": session_status,
             "touched_files": [],
             "commit_sha": "",
-            "project_root": str(Path.cwd()),
+            "project_root": str(self._repo_root),
             "sink": self._sink,
             "run_id": self._run_id,
             "archetype": archetype,
@@ -389,7 +404,7 @@ class FixPipeline:
         # Build context dict — no commit_sha (05-REQ-2.2)
         context: dict[str, object] = {
             "touched_files": changed_files,
-            "project_root": str(Path.cwd()),
+            "project_root": str(self._repo_root),
             "sink": self._sink,
             "run_id": self._run_id,
             "archetype": "coder",
@@ -472,7 +487,7 @@ class FixPipeline:
                 context=spec.system_context,
                 archetype=archetype,
                 mode=mode,
-                project_dir=Path.cwd(),
+                project_dir=self._repo_root,
             )
 
         effective_task = task_prompt if task_prompt else spec.task_prompt
@@ -522,7 +537,7 @@ class FixPipeline:
         """
         from afcore.workspace import create_worktree, ensure_integration_branch
 
-        repo_root = Path.cwd()
+        repo_root = self._repo_root
 
         # Fetch latest code from origin before branching (NS-REQ-1).
         integration_branch = self._config.workspace.integration_branch
@@ -540,7 +555,7 @@ class FixPipeline:
         """Destroy the worktree created for the fix session."""
         from afcore.workspace import destroy_worktree
 
-        repo_root = Path.cwd()
+        repo_root = self._repo_root
         try:
             await destroy_worktree(repo_root, workspace)
         except Exception:
@@ -951,7 +966,7 @@ class FixPipeline:
             context=context,
             archetype="coder",
             mode="fix",
-            project_dir=Path.cwd(),
+            project_dir=self._repo_root,
         )
 
         # Build task prompt — include subtask list reference only when the
@@ -1002,7 +1017,7 @@ class FixPipeline:
                 context=reviewer_context,
                 archetype="reviewer",
                 mode="fix-review",
-                project_dir=Path.cwd(),
+                project_dir=self._repo_root,
             )
             task_prompt = (
                 f"Review the fix for issue #{spec.issue_number}: {spec.title}\n\n"
@@ -1017,7 +1032,7 @@ class FixPipeline:
             context=context,
             archetype="reviewer",
             mode="fix-review",
-            project_dir=Path.cwd(),
+            project_dir=self._repo_root,
         )
 
         task_prompt = (
@@ -2007,7 +2022,7 @@ class FixPipeline:
         from afcore.workspace.harvest import harvest, post_harvest_integrate
 
         branch = self._config.workspace.integration_branch
-        repo_root = Path.cwd()
+        repo_root = self._repo_root
         changed_files = await harvest(repo_root, workspace, dev_branch=branch)
         if not changed_files:
             logger.warning(
