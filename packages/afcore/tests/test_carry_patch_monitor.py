@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -151,6 +152,52 @@ def _make_monitor(
         workspace_slug=workspace_slug,
         config=config or _make_config(),
         engine=engine or _make_engine(),
+    )
+
+
+def _mock_worktree_path() -> Path:
+    """Return a fake worktree path under .nightshift/worktrees/."""
+    import tempfile
+
+    return Path(tempfile.gettempdir()) / ".nightshift" / "worktrees" / "carry-patch" / "0"
+
+
+def _resolve_conflict_patches():
+    """Return context managers that mock the worktree lifecycle for conflict resolution.
+
+    After issue #32, _resolve_conflict uses create_worktree/destroy_worktree
+    instead of checkout_branch. This helper provides the standard set of mocks.
+
+    Returns a tuple of context managers for:
+    (fetch_remote, create_worktree, destroy_worktree, push_to_remote, MergeLock)
+    """
+    from afcore.workspace.worktree import WorkspaceInfo
+
+    wt_path = _mock_worktree_path()
+    mock_workspace = WorkspaceInfo(
+        path=wt_path,
+        branch="fix/p1",
+        spec_name="carry-patch",
+        task_group=0,
+    )
+    return (
+        patch("afcore.workspace.git.fetch_remote", AsyncMock()),
+        patch(
+            "afcore.nightshift.carry_patch_monitor.create_worktree",
+            AsyncMock(return_value=mock_workspace),
+        ),
+        patch(
+            "afcore.nightshift.carry_patch_monitor.destroy_worktree",
+            AsyncMock(),
+        ),
+        patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+        patch(
+            "afcore.nightshift.carry_patch_monitor.MergeLock",
+            return_value=MagicMock(
+                __aenter__=AsyncMock(return_value=None),
+                __aexit__=AsyncMock(return_value=None),
+            ),
+        ),
     )
 
 
@@ -504,11 +551,8 @@ class TestMaxResolveRetriesExceeded:
         # Retry count below max — patch should proceed to resolution attempt.
         monitor._retry_counter[("ws-1", "p1")] = 2
 
-        with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
-        ):
+        p1, p2, p3, p4, p5 = _resolve_conflict_patches()
+        with p1, p2, p3, p4, p5:
             await monitor.run_cycle()
 
         # After implementation, coder session must be invoked:
@@ -527,14 +571,16 @@ class TestSuccessfulConflictResolution:
     Test ID: TS-03-13
     """
 
-    async def test_successful_resolution_calls_fetch_checkout_coder_push_rebuild(
+    async def test_successful_resolution_calls_fetch_worktree_coder_push_rebuild(
         self,
     ) -> None:
         """Full resolution sequence is executed on a conflict patch.
 
-        Requirements: 03-REQ-3.3 (steps b–d)
+        After issue #32, the sequence is: fetch → create_worktree →
+        coder session → push → destroy_worktree → rebuild.
+
+        Requirements: 03-REQ-3.3 (steps b–d), NS-REQ-1
         Test ID: TS-03-13
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [
             _PatchDetail(
@@ -553,19 +599,22 @@ class TestSuccessfulConflictResolution:
         engine = _make_engine(coder_session_returns=None)  # success: returns None
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()) as mock_fetch,
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()) as mock_checkout,
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()) as mock_push,
+            p_fetch as mock_fetch,
+            p_create as mock_create,
+            p_destroy as mock_destroy,
+            p_push as mock_push,
+            p_lock,
         ):
-            # FAILS: run_cycle raises NotImplementedError
             result = await monitor.run_cycle()
 
-        # After implementation, all steps must be invoked:
+        # All steps must be invoked:
         mock_fetch.assert_called()
-        mock_checkout.assert_called()
+        mock_create.assert_called_once()
         engine._run_coder_session.assert_called_once()
         mock_push.assert_called()
+        mock_destroy.assert_called_once()
         hub_client.submit_rebuild.assert_called()
 
         assert result.conflicts_detected == 1
@@ -580,7 +629,6 @@ class TestSuccessfulConflictResolution:
 
         Requirements: 03-REQ-3.3 step c
         Test ID: TS-03-13
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
@@ -588,12 +636,8 @@ class TestSuccessfulConflictResolution:
         engine = _make_engine()
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
-        with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
-        ):
-            # FAILS: run_cycle raises NotImplementedError
+        p1, p2, p3, p4, p5 = _resolve_conflict_patches()
+        with p1, p2, p3, p4, p5:
             await monitor.run_cycle()
 
         # After implementation, coder session must have been called with the
@@ -630,16 +674,17 @@ class TestSuccessfulConflictResolution:
         def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_types.append(str(event_type))
 
+        p1, p2, p3, p4, p5 = _resolve_conflict_patches()
         with (
             patch("afaudit.emit.emit_audit_event", side_effect=capture_emit),
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p1,
+            p2,
+            p3,
+            p4,
+            p5,
         ):
-            # FAILS: run_cycle raises NotImplementedError
             await monitor.run_cycle()
 
-        # After implementation:
         from afaudit.events import AuditEventType  # noqa: PLC0415
 
         assert str(AuditEventType.CARRY_PATCH_CONFLICT_RESOLVED) in emitted_types, (
@@ -664,7 +709,6 @@ class TestFailedConflictResolution:
 
         Requirements: 03-REQ-3.6
         Test ID: TS-03-14
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
@@ -675,14 +719,10 @@ class TestFailedConflictResolution:
         initial_count = monitor._retry_counter.get(("ws-1", "p1"), 0)
         assert initial_count == 0
 
-        with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-        ):
-            # FAILS: run_cycle raises NotImplementedError
+        p1, p2, p3, p4, p5 = _resolve_conflict_patches()
+        with p1, p2, p3, p4, p5:
             result = await monitor.run_cycle()
 
-        # After implementation:
         new_count = monitor._retry_counter.get(("ws-1", "p1"), 0)
         assert new_count == initial_count + 1, "retry counter must be incremented by 1 on coder session failure"
         assert result.conflicts_failed == 1
@@ -695,7 +735,6 @@ class TestFailedConflictResolution:
 
         Requirements: 03-REQ-3.6, 03-REQ-8
         Test ID: TS-03-14
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
@@ -708,15 +747,17 @@ class TestFailedConflictResolution:
         def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_types.append(str(event_type))
 
+        p1, p2, p3, p4, p5 = _resolve_conflict_patches()
         with (
             patch("afaudit.emit.emit_audit_event", side_effect=capture_emit),
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
+            p1,
+            p2,
+            p3,
+            p4,
+            p5,
         ):
-            # FAILS: run_cycle raises NotImplementedError
             await monitor.run_cycle()
 
-        # After implementation:
         from afaudit.events import AuditEventType  # noqa: PLC0415
 
         assert str(AuditEventType.CARRY_PATCH_CONFLICT_FAILED) in emitted_types, (
@@ -728,7 +769,6 @@ class TestFailedConflictResolution:
 
         Requirements: 03-REQ-3.6 (continue to next patch)
         Test ID: TS-03-14
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [
             _PatchDetail(id="p1", status="conflict", branch_name="fix/p1"),
@@ -739,13 +779,8 @@ class TestFailedConflictResolution:
         engine = _make_engine(coder_session_raises=RuntimeError("coder failed"))
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
-        with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-        ):
-            # FAILS: run_cycle raises NotImplementedError rather than returning.
-            # After implementation, the RuntimeError from coder must be caught
-            # and the second conflict patch must also be attempted.
+        p1, p2, p3, p4, p5 = _resolve_conflict_patches()
+        with p1, p2, p3, p4, p5:
             result = await monitor.run_cycle()
 
         # Both patches attempted (neither resolution succeeded):
@@ -758,7 +793,6 @@ class TestFailedConflictResolution:
 
         Requirements: 03-REQ-3.6
         Test ID: TS-03-14
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
@@ -769,14 +803,10 @@ class TestFailedConflictResolution:
         # Retry counter starts empty for this patch.
         assert ("ws-1", "p1") not in monitor._retry_counter
 
-        with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-        ):
-            # FAILS: run_cycle raises NotImplementedError
+        p1, p2, p3, p4, p5 = _resolve_conflict_patches()
+        with p1, p2, p3, p4, p5:
             await monitor.run_cycle()
 
-        # After implementation, counter must be 1:
         assert monitor._retry_counter.get(("ws-1", "p1"), 0) == 1, (
             "retry counter for ('ws-1', 'p1') must be 1 after first failure"
         )
@@ -800,7 +830,6 @@ class TestConflictResolutionContext:
 
         Requirements: 03-REQ-4.1
         Test ID: TS-03-15
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [
             _PatchDetail(
@@ -819,16 +848,18 @@ class TestConflictResolutionContext:
         engine = _make_engine()
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
             patch(
                 "afcore.workspace.git.run_git",
                 AsyncMock(return_value=(0, "diff --git a/auth.py ...", "")),
             ),
         ):
-            # FAILS: run_cycle raises NotImplementedError
             await monitor.run_cycle()
 
         # After implementation, coder session must receive the context dict:
@@ -854,7 +885,6 @@ class TestConflictResolutionContext:
 
         Requirements: 03-REQ-4.1
         Test ID: TS-03-15
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [
             _PatchDetail(
@@ -874,16 +904,18 @@ class TestConflictResolutionContext:
         engine = _make_engine()
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
             patch(
                 "afcore.workspace.git.run_git",
                 AsyncMock(return_value=(0, "", "")),
             ),
         ):
-            # FAILS: run_cycle raises NotImplementedError
             await monitor.run_cycle()
 
         engine._run_coder_session.assert_called_once()
@@ -903,7 +935,6 @@ class TestConflictResolutionContext:
 
         Requirements: 03-REQ-4.E3
         Test ID: TS-03-15
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [
             _PatchDetail(
@@ -921,16 +952,18 @@ class TestConflictResolutionContext:
         engine = _make_engine()
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
             patch(
                 "afcore.workspace.git.run_git",
                 AsyncMock(return_value=(0, "", "")),
             ),
         ):
-            # FAILS: run_cycle raises NotImplementedError
             await monitor.run_cycle()
 
         engine._run_coder_session.assert_called_once()
@@ -944,7 +977,6 @@ class TestConflictResolutionContext:
 
         Requirements: 03-REQ-4.E1
         Test ID: TS-03-15
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [
             _PatchDetail(
@@ -961,17 +993,19 @@ class TestConflictResolutionContext:
         engine = _make_engine()
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
             caplog.at_level(logging.WARNING),
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
             patch(
                 "afcore.workspace.git.run_git",
                 AsyncMock(return_value=(0, "some diff", "")),
             ),
         ):
-            # FAILS: run_cycle raises NotImplementedError
             await monitor.run_cycle()
 
         # Coder session must still be invoked (not aborted)
@@ -991,7 +1025,6 @@ class TestConflictResolutionContext:
 
         Requirements: 03-REQ-4.E2
         Test ID: TS-03-15
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [
             _PatchDetail(
@@ -1010,17 +1043,19 @@ class TestConflictResolutionContext:
         engine = _make_engine()
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
             caplog.at_level(logging.WARNING),
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
             patch(
                 "afcore.workspace.git.run_git",
                 AsyncMock(return_value=(1, "", "fatal: bad ref")),
             ),
         ):
-            # FAILS: run_cycle raises NotImplementedError
             await monitor.run_cycle()
 
         engine._run_coder_session.assert_called_once()
@@ -1067,16 +1102,18 @@ class TestRerereReadOnly:
         engine = _make_engine()
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
             patch(
                 "afcore.workspace.git.run_git",
                 AsyncMock(return_value=(0, "", "")),
             ),
         ):
-            # FAILS: run_cycle raises NotImplementedError
             await monitor.run_cycle()
 
         # list_rerere must be called (read-only)
@@ -1105,7 +1142,6 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
 
         Requirements: 03-REQ-8.2
         Test ID: TS-03-24
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
@@ -1118,17 +1154,19 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
         def capture_emit(sink: object, run_id: str, event_type: object, **kwargs: object) -> None:
             emitted_types.append(str(event_type))
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
             patch("afaudit.emit.emit_audit_event", side_effect=capture_emit),
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
             patch(
                 "afcore.workspace.git.run_git",
                 AsyncMock(return_value=(0, "", "")),
             ),
         ):
-            # FAILS: run_cycle raises NotImplementedError
             await monitor.run_cycle()
 
         from afaudit.events import AuditEventType  # noqa: PLC0415
@@ -1171,7 +1209,6 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
 
         Requirements: 03-REQ-8.E1
         Test ID: TS-03-24
-        Fails: run_cycle raises NotImplementedError (groups 5–7 pending)
         """
         patches = [_PatchDetail(id="p1", status="conflict", branch_name="fix/p1")]
         hub_client = _make_hub_client(patches=patches)
@@ -1179,22 +1216,22 @@ class TestConflictDetectedAndMergedDetectedAuditEvents:
         engine = _make_engine()
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
             patch(
                 "afaudit.emit.emit_audit_event",
                 side_effect=RuntimeError("audit sink down"),
             ),
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
             patch(
                 "afcore.workspace.git.run_git",
                 AsyncMock(return_value=(0, "", "")),
             ),
         ):
-            # FAILS: run_cycle raises NotImplementedError
-            # After implementation, this must return normally even though
-            # emit_audit_event raises.
             result = await monitor.run_cycle()
 
         assert isinstance(result, MonitorCycleResult), (
@@ -1483,10 +1520,13 @@ class TestFullCycleResolution:
         engine = _make_engine(coder_session_returns=None)
         monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
 
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
         with (
-            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
-            patch("afcore.workspace.git.checkout_branch", AsyncMock()),
-            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
             patch(
                 "afcore.workspace.git.run_git",
                 AsyncMock(return_value=(0, "diff output", "")),
@@ -1496,3 +1536,379 @@ class TestFullCycleResolution:
 
         assert result.conflicts_resolved == 1, "conflicts_resolved must be 1 after successful resolution"
         assert result.conflicts_failed == 0, "conflicts_failed must be 0 after successful resolution"
+
+
+# ---------------------------------------------------------------------------
+# Issue #32: Worktree isolation and locking tests
+# ---------------------------------------------------------------------------
+
+
+class TestCarryPatchWorktreeIsolation:
+    """Issue #32: Conflict resolution uses an isolated worktree, not the primary checkout.
+
+    Requirements: NS-REQ-1, AC-1
+    """
+
+    async def test_no_checkout_branch_on_repo_root(self) -> None:
+        """_resolve_conflict never calls checkout_branch on the repo root.
+
+        After issue #32, the carry-patch path creates an isolated worktree
+        instead of checking out in the primary working tree.
+
+        Requirements: NS-REQ-1, AC-1
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                description="Fix bug",
+                conflict_files=["file.py"],
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
+        with (
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock,
+            patch("afcore.workspace.git.checkout_branch", AsyncMock()) as mock_checkout,
+        ):
+            await monitor.run_cycle()
+
+        # checkout_branch must NOT be called — the worktree path is used instead
+        mock_checkout.assert_not_called()
+
+    async def test_coder_session_receives_worktree_path_not_repo_root(self) -> None:
+        """WorkspaceInfo.path passed to the coder session is under .nightshift/worktrees/.
+
+        Requirements: NS-REQ-1.1, AC-1
+        """
+        from afcore.workspace.worktree import WorkspaceInfo
+
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+                description="Fix bug",
+                conflict_files=["file.py"],
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        wt_path = _mock_worktree_path()
+        mock_workspace = WorkspaceInfo(
+            path=wt_path,
+            branch="fix/p1",
+            spec_name="carry-patch",
+            task_group=0,
+        )
+
+        with (
+            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
+            patch(
+                "afcore.nightshift.carry_patch_monitor.create_worktree",
+                AsyncMock(return_value=mock_workspace),
+            ),
+            patch("afcore.nightshift.carry_patch_monitor.destroy_worktree", AsyncMock()),
+            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "afcore.nightshift.carry_patch_monitor.MergeLock",
+                return_value=MagicMock(
+                    __aenter__=AsyncMock(return_value=None),
+                    __aexit__=AsyncMock(return_value=None),
+                ),
+            ),
+        ):
+            await monitor.run_cycle()
+
+        # Verify the coder session received the worktree path, not repo_root
+        engine._run_coder_session.assert_called_once()
+        call_kwargs = engine._run_coder_session.call_args
+        all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
+        ctx = next(v for v in all_values if isinstance(v, dict))
+        assert ctx["repo_root"] == str(wt_path), (
+            f"coder session must receive worktree path, not repo root; got {ctx['repo_root']}"
+        )
+        assert ".nightshift/worktrees" in ctx["repo_root"], (
+            "coder session repo_root must be under .nightshift/worktrees/"
+        )
+
+    async def test_create_worktree_called_with_patch_branch(self) -> None:
+        """create_worktree is called with the patch branch name.
+
+        Requirements: NS-REQ-1
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
+        with (
+            p_fetch,
+            p_create as mock_create,
+            p_destroy,
+            p_push,
+            p_lock,
+        ):
+            await monitor.run_cycle()
+
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args
+        assert call_kwargs.kwargs.get("branch_name") == "fix/p1" or (
+            len(call_kwargs.args) > 0 and "fix/p1" in str(call_kwargs)
+        ), "create_worktree must be called with branch_name='fix/p1'"
+
+
+class TestCarryPatchWorktreeCleanup:
+    """Issue #32: Worktree is destroyed on all exit paths including exceptions.
+
+    Requirements: NS-REQ-4, AC-3
+    """
+
+    async def test_worktree_destroyed_on_coder_session_exception(self) -> None:
+        """destroy_worktree is called even when the coder session raises.
+
+        Requirements: NS-REQ-4, AC-3
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine(coder_session_raises=RuntimeError("coder boom"))
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
+        with (
+            p_fetch,
+            p_create,
+            p_destroy as mock_destroy,
+            p_push,
+            p_lock,
+        ):
+            result = await monitor.run_cycle()
+
+        # Worktree must be destroyed even though the coder session failed
+        mock_destroy.assert_called_once()
+        assert result.conflicts_failed == 1
+
+    async def test_worktree_destroyed_on_success(self) -> None:
+        """destroy_worktree is called after successful resolution.
+
+        Requirements: NS-REQ-4, AC-3
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine(coder_session_returns=None)
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
+        with (
+            p_fetch,
+            p_create,
+            p_destroy as mock_destroy,
+            p_push,
+            p_lock,
+        ):
+            result = await monitor.run_cycle()
+
+        mock_destroy.assert_called_once()
+        assert result.conflicts_resolved == 1
+
+    async def test_destroy_worktree_failure_does_not_mask_coder_exception(self) -> None:
+        """If destroy_worktree also raises, the coder session exception is still handled.
+
+        Requirements: NS-REQ-4
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True, max_resolve_retries=3)
+        engine = _make_engine(coder_session_raises=RuntimeError("coder failed"))
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        from afcore.workspace.worktree import WorkspaceInfo
+
+        wt_path = _mock_worktree_path()
+        mock_workspace = WorkspaceInfo(
+            path=wt_path,
+            branch="fix/p1",
+            spec_name="carry-patch",
+            task_group=0,
+        )
+
+        with (
+            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
+            patch(
+                "afcore.nightshift.carry_patch_monitor.create_worktree",
+                AsyncMock(return_value=mock_workspace),
+            ),
+            patch(
+                "afcore.nightshift.carry_patch_monitor.destroy_worktree",
+                AsyncMock(side_effect=OSError("cleanup failed")),
+            ),
+            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "afcore.nightshift.carry_patch_monitor.MergeLock",
+                return_value=MagicMock(
+                    __aenter__=AsyncMock(return_value=None),
+                    __aexit__=AsyncMock(return_value=None),
+                ),
+            ),
+        ):
+            # Must not raise — both exceptions should be caught
+            result = await monitor.run_cycle()
+
+        assert result.conflicts_failed == 1
+        assert result.conflicts_resolved == 0
+
+
+class TestCarryPatchMergeLock:
+    """Issue #32: MergeLock is acquired for direct git operations on repo root.
+
+    Requirements: NS-REQ-2, AC-2
+    """
+
+    async def test_merge_lock_is_used(self) -> None:
+        """MergeLock is instantiated and used during conflict resolution.
+
+        Requirements: NS-REQ-2
+        """
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        p_fetch, p_create, p_destroy, p_push, p_lock = _resolve_conflict_patches()
+        with (
+            p_fetch,
+            p_create,
+            p_destroy,
+            p_push,
+            p_lock as mock_lock_cls,
+        ):
+            await monitor.run_cycle()
+
+        # MergeLock must be instantiated
+        mock_lock_cls.assert_called()
+
+    async def test_coder_session_runs_outside_lock(self) -> None:
+        """The coder session runs without holding the merge lock.
+
+        The lock should be released before the coder session runs so
+        that harvest is not starved.
+
+        Requirements: NS-REQ-2.1
+        """
+        # This is verified structurally: the code acquires MergeLock for
+        # fetch and push, but the coder session call is between them,
+        # outside any lock scope. We verify by checking the call order.
+        patches = [
+            _PatchDetail(
+                id="p1",
+                status="conflict",
+                branch_name="fix/p1",
+            )
+        ]
+        hub_client = _make_hub_client(patches=patches)
+        config = _make_config(auto_resolve=True)
+        engine = _make_engine()
+        monitor = _make_monitor(hub_client=hub_client, config=config, engine=engine)
+
+        lock_enter_count = 0
+        lock_exit_count = 0
+        coder_called_with_lock_released = False
+
+        async def track_enter(*args: object) -> None:
+            nonlocal lock_enter_count
+            lock_enter_count += 1
+
+        async def track_exit(*args: object) -> None:
+            nonlocal lock_exit_count
+            lock_exit_count += 1
+
+        original_coder = engine._run_coder_session
+
+        async def coder_spy(**kwargs: object) -> object:
+            nonlocal coder_called_with_lock_released
+            # Lock should have been acquired once (for fetch) and released
+            # before the coder session runs.
+            if lock_exit_count >= 1:
+                coder_called_with_lock_released = True
+            return await original_coder(**kwargs)
+
+        engine._run_coder_session = AsyncMock(side_effect=coder_spy)
+
+        from afcore.workspace.worktree import WorkspaceInfo
+
+        wt_path = _mock_worktree_path()
+        mock_workspace = WorkspaceInfo(
+            path=wt_path,
+            branch="fix/p1",
+            spec_name="carry-patch",
+            task_group=0,
+        )
+
+        with (
+            patch("afcore.workspace.git.fetch_remote", AsyncMock()),
+            patch(
+                "afcore.nightshift.carry_patch_monitor.create_worktree",
+                AsyncMock(return_value=mock_workspace),
+            ),
+            patch("afcore.nightshift.carry_patch_monitor.destroy_worktree", AsyncMock()),
+            patch("afcore.workspace.git.push_to_remote", AsyncMock()),
+            patch(
+                "afcore.nightshift.carry_patch_monitor.MergeLock",
+                return_value=MagicMock(
+                    __aenter__=AsyncMock(side_effect=track_enter),
+                    __aexit__=AsyncMock(side_effect=track_exit),
+                ),
+            ),
+        ):
+            await monitor.run_cycle()
+
+        assert coder_called_with_lock_released, (
+            "coder session must run after the merge lock is released (not while held)"
+        )

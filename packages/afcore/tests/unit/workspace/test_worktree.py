@@ -691,3 +691,70 @@ class TestCreateWorktreeDeleteRemote:
         assert ws.path.is_dir()
         new_tip = get_branch_tip(tmp_worktree_repo, branch_name)
         assert new_tip == develop_tip
+
+
+class TestWorktreeRegistrySerialization:
+    """Issue #32, NS-REQ-5: Concurrent create/destroy calls are serialized.
+
+    Verifies that the worktree lock prevents interleaved registry mutations.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_create_worktree_both_succeed(
+        self,
+        tmp_worktree_repo: Path,
+    ) -> None:
+        """Two concurrent create_worktree calls on different specs both succeed.
+
+        Requirements: NS-REQ-5.1, AC-4
+        """
+        import asyncio
+
+        ws1_coro = create_worktree(tmp_worktree_repo, "spec-a", 1, base_branch="develop")
+        ws2_coro = create_worktree(tmp_worktree_repo, "spec-b", 1, base_branch="develop")
+
+        results = await asyncio.gather(ws1_coro, ws2_coro)
+
+        ws1, ws2 = results
+        assert ws1.path.is_dir()
+        assert ws2.path.is_dir()
+        assert ws1.path != ws2.path
+        assert ws1.branch != ws2.branch
+
+    @pytest.mark.asyncio
+    async def test_worktree_lock_exists_for_repo(
+        self,
+        tmp_worktree_repo: Path,
+    ) -> None:
+        """The worktree module exposes a per-repo lock via _get_worktree_lock.
+
+        Requirements: NS-REQ-5
+        """
+        from afcore.workspace.worktree import _get_worktree_lock
+
+        lock1 = _get_worktree_lock(tmp_worktree_repo)
+        lock2 = _get_worktree_lock(tmp_worktree_repo)
+        assert lock1 is lock2, "Same repo must return the same lock instance"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_create_and_destroy_no_error(
+        self,
+        tmp_worktree_repo: Path,
+    ) -> None:
+        """Concurrent create on one spec and destroy on another does not error.
+
+        Requirements: NS-REQ-5.1
+        """
+        import asyncio
+
+        # Create a worktree first, then concurrently destroy it and create another
+        ws1 = await create_worktree(tmp_worktree_repo, "spec-x", 1, base_branch="develop")
+
+        destroy_coro = destroy_worktree(tmp_worktree_repo, ws1)
+        create_coro = create_worktree(tmp_worktree_repo, "spec-y", 1, base_branch="develop")
+
+        results = await asyncio.gather(destroy_coro, create_coro, return_exceptions=True)
+
+        # Neither should have raised
+        for r in results:
+            assert not isinstance(r, Exception), f"Unexpected exception: {r}"

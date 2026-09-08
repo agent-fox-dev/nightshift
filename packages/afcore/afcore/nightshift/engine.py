@@ -1055,12 +1055,13 @@ class NightShiftEngine:
         mode, and delegates to :func:`run_session`.
 
         The workspace is constructed from ``context["repo_root"]`` and
-        ``context["branch"]``; the coder runs in the repository checkout
-        (not in an isolated worktree).  ``repo_root`` is required — a
-        missing value raises rather than falling back to the process
-        working directory.
+        ``context["branch"]``.  ``repo_root`` typically points to an
+        isolated worktree path (not the repository root) so that the
+        coder edits files in its own checkout.  ``repo_root`` is
+        required — a missing value raises rather than falling back to
+        the process working directory.
 
-        Requirements: 03-REQ-3.3, NS-REQ-6 (issue #43)
+        Requirements: 03-REQ-3.3, NS-REQ-6 (issue #43), NS-REQ-1 (issue #32)
         """
         from afcore.core.models import resolve_model
         from afcore.engine.sdk_params import (

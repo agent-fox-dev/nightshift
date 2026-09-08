@@ -21,7 +21,9 @@ from afhub.polling import poll_rebuild as _poll_rebuild
 
 from afcore.archetypes import ARCHETYPE_REGISTRY, resolve_effective_config
 from afcore.workspace import git as _workspace_git
+from afcore.workspace.merge_lock import MergeLock
 from afcore.workspace.repo_root import resolve_repo_root
+from afcore.workspace.worktree import create_worktree, destroy_worktree
 
 if TYPE_CHECKING:
     import duckdb
@@ -474,48 +476,92 @@ class CarryPatchMonitor:
         patch_detail: object,
         result: MonitorCycleResult,
     ) -> None:
-        """Resolve a single conflicting patch.
+        """Resolve a single conflicting patch in an isolated worktree.
 
-        Sequence: build context → fetch → checkout → coder session →
-        push → submit_rebuild → poll_rebuild.
+        Sequence: fetch → create worktree → build context → coder
+        session → push → destroy worktree → submit_rebuild →
+        poll_rebuild.
 
-        Any exception during fetch/checkout or the coder session
-        propagates to ``run_cycle()`` which handles it as a failure
-        (retry counter + ``conflicts_failed``).
+        The worktree is created under ``.nightshift/worktrees/`` so the
+        coder session edits an isolated checkout rather than the primary
+        working tree.  ``MergeLock`` is acquired for git operations on
+        the shared repo (fetch, worktree add/remove, push) but released
+        before the coder session runs so the harvest path is not starved.
 
-        Requirements: 03-REQ-3.3, 03-REQ-4
+        The worktree is destroyed on all exit paths including exceptions
+        (NS-REQ-4, AC-3).
+
+        Any exception during the coder session propagates to
+        ``run_cycle()`` which handles it as a failure (retry counter +
+        ``conflicts_failed``).
+
+        Requirements: 03-REQ-3.3, 03-REQ-4,
+                      NS-REQ-1, NS-REQ-2, NS-REQ-4
         """
         slug = self._workspace_slug
         branch = getattr(patch_detail, "branch_name", "")
         repo_root = self._repo_root
 
-        # Step 1: Assemble conflict resolution context (03-REQ-4.1)
-        context = await self._build_conflict_context(
-            patch_detail,
-            slug,
+        # Step 1: Fetch the patch branch under the merge lock so it
+        # does not interleave with harvest's checkout/merge (NS-REQ-2).
+        lock = MergeLock(repo_root)
+        async with lock:
+            await _workspace_git.fetch_remote(repo_root, branch=branch)
+
+        # Step 2: Create an isolated worktree for the patch branch.
+        # create_worktree serializes its own registry mutations via an
+        # internal lock (NS-REQ-5).
+        workspace = await create_worktree(
             repo_root,
+            spec_name="carry-patch",
+            task_group=0,
+            base_branch=branch,
+            branch_name=branch,
         )
+        worktree_path = workspace.path
 
-        # Step 2: Fetch and checkout the patch branch (03-REQ-3.3)
-        await _workspace_git.fetch_remote(repo_root, branch=branch)
-        await _workspace_git.checkout_branch(repo_root, branch)
+        try:
+            # Step 3: Assemble conflict resolution context (03-REQ-4.1).
+            # Use the worktree path for git diff so it reads the correct
+            # branch state.
+            context = await self._build_conflict_context(
+                patch_detail,
+                slug,
+                worktree_path,
+            )
 
-        # Step 3: Run coder session in carry-patch mode (03-REQ-3.3)
-        context["branch"] = branch
-        context["repo_root"] = str(repo_root)
-        await self._engine._run_coder_session(
-            archetype="coder",
-            mode="carry-patch",
-            context=context,
-        )
+            # Step 4: Run coder session in the isolated worktree
+            # (NS-REQ-1).  No lock is held here so harvest can proceed
+            # concurrently.
+            context["branch"] = branch
+            context["repo_root"] = str(worktree_path)
+            await self._engine._run_coder_session(
+                archetype="coder",
+                mode="carry-patch",
+                context=context,
+            )
 
-        # Step 4: Push resolved branch (03-REQ-3.3)
-        await _workspace_git.push_to_remote(repo_root, branch)
+            # Step 5: Push resolved branch under the merge lock
+            # (NS-REQ-2).
+            async with lock:
+                await _workspace_git.push_to_remote(worktree_path, branch)
+        finally:
+            # Step 6: Destroy worktree on all exit paths (NS-REQ-4,
+            # AC-3).  destroy_worktree serializes its own registry
+            # mutations.
+            try:
+                await destroy_worktree(repo_root, workspace)
+            except Exception:
+                logger.warning(
+                    "Failed to destroy carry-patch worktree at %s",
+                    worktree_path,
+                    exc_info=True,
+                )
 
-        # Step 5: Submit and poll rebuild (03-REQ-3.3, 03-REQ-3.E5)
+        # Step 6: Submit and poll rebuild (03-REQ-3.3, 03-REQ-3.E5)
         await self._submit_and_poll_rebuild(slug)
 
-        # Step 6: Record success
+        # Step 7: Record success
         result.conflicts_resolved += 1
         result.rebuild_triggered = True
         _safe_emit(

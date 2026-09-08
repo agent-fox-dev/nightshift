@@ -250,7 +250,13 @@ class TestCarryPatchMonitorRepoRoot:
         assert monitor._repo_root == repo
 
     async def test_conflict_resolution_uses_the_given_root(self, tmp_path: Path) -> None:
-        """Fetch, checkout, push and the coder context all use the root."""
+        """Fetch uses the repo root; the coder context uses the worktree path.
+
+        After issue #32, conflict resolution creates an isolated worktree
+        instead of checking out in the primary tree. The fetch still
+        operates on the repo root, but the coder session receives the
+        worktree path as its working directory.
+        """
         repo = _init_repo(tmp_path / "repo")
         engine = MagicMock(spec=NightShiftEngine)
         engine._run_coder_session = AsyncMock()
@@ -269,21 +275,45 @@ class TestCarryPatchMonitorRepoRoot:
         patch_detail.id = "p1"
         result = MagicMock()
 
+        wt_path = repo / ".nightshift" / "worktrees" / "carry-patch" / "0"
+        mock_workspace = WorkspaceInfo(
+            path=wt_path,
+            branch="patch/1",
+            spec_name="carry-patch",
+            task_group=0,
+        )
+
         with (
             patch.object(monitor, "_build_conflict_context", new=AsyncMock(return_value={})) as build_ctx,
             patch.object(monitor, "_submit_and_poll_rebuild", new=AsyncMock()),
             patch("afcore.nightshift.carry_patch_monitor._workspace_git") as git,
+            patch(
+                "afcore.nightshift.carry_patch_monitor.create_worktree",
+                new=AsyncMock(return_value=mock_workspace),
+            ) as mock_create,
+            patch("afcore.nightshift.carry_patch_monitor.destroy_worktree", new=AsyncMock()) as mock_destroy,
+            patch(
+                "afcore.nightshift.carry_patch_monitor.MergeLock",
+                return_value=MagicMock(
+                    __aenter__=AsyncMock(return_value=None),
+                    __aexit__=AsyncMock(return_value=None),
+                ),
+            ),
         ):
             git.fetch_remote = AsyncMock()
-            git.checkout_branch = AsyncMock()
             git.push_to_remote = AsyncMock()
             await monitor._resolve_conflict(patch_detail, result)
 
-        assert build_ctx.await_args.args[2] == repo
+        # Fetch uses the repo root
         assert git.fetch_remote.await_args.args[0] == repo
-        assert git.checkout_branch.await_args.args[0] == repo
-        assert git.push_to_remote.await_args.args[0] == repo
-        assert engine._run_coder_session.await_args.kwargs["context"]["repo_root"] == str(repo)
+        # create_worktree uses the repo root
+        assert mock_create.await_args.args[0] == repo
+        # destroy_worktree uses the repo root
+        assert mock_destroy.await_args.args[0] == repo
+        # The coder context uses the worktree path, NOT repo root (issue #32)
+        assert engine._run_coder_session.await_args.kwargs["context"]["repo_root"] == str(wt_path)
+        # build_conflict_context receives the worktree path
+        assert build_ctx.await_args.args[2] == wt_path
 
 
 # ---------------------------------------------------------------------------

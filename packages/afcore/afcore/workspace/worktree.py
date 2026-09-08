@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -18,6 +20,26 @@ from afcore.workspace.git import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Per-repo asyncio lock for worktree registry serialization (issue #32,
+# NS-REQ-5).  Prevents concurrent create_worktree / destroy_worktree calls
+# from interleaving their prune/add/remove sequences.
+# ---------------------------------------------------------------------------
+
+_worktree_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_worktree_lock(repo_root: Path) -> asyncio.Lock:
+    """Return a shared asyncio.Lock for worktree operations on *repo_root*.
+
+    All create/destroy calls on the same repo share one lock so that
+    concurrent worktree registry mutations are serialized.
+    """
+    key = os.path.realpath(str(repo_root))
+    if key not in _worktree_locks:
+        _worktree_locks[key] = asyncio.Lock()
+    return _worktree_locks[key]
 
 
 def _safe_rmtree(path: Path) -> None:
@@ -181,6 +203,10 @@ async def create_worktree(
     origin --delete``; defaults to False so remote refs (such as branches
     backing open pull requests) are preserved.
 
+    All worktree registry mutations (prune, add, remove, branch delete)
+    are serialized under a per-repo asyncio lock so that concurrent
+    calls do not interleave (issue #32, NS-REQ-5).
+
     Requirements: 80-REQ-1.2, 80-REQ-3.2, 09-REQ-1, 09-REQ-2, 09-REQ-5
 
     Raises:
@@ -218,96 +244,99 @@ async def create_worktree(
         worktree_path = worktrees_root / spec_name / str(task_group) / effective_role / effective_mode
         branch_name = branch_name or (f"feature/{spec_name}/{task_group}--{effective_role}--{effective_mode}")
 
-    # Clean up orphaned empty sibling directories under the spec directory.
-    # These are left over from prior crashed or partial cleanup runs.
-    spec_dir = worktrees_root / spec_name
-    if spec_dir.exists():
-        for child in list(spec_dir.iterdir()):
-            if child.is_dir() and not any(child.iterdir()):
-                try:
-                    child.rmdir()
-                    logger.debug("Removed orphaned empty directory: %s", child)
-                except OSError as exc:
-                    logger.warning("Could not remove orphaned directory %s: %s", child, exc)
+    # Serialize worktree registry mutations (issue #32, NS-REQ-5).
+    lock = _get_worktree_lock(repo_root)
+    async with lock:
+        # Clean up orphaned empty sibling directories under the spec directory.
+        # These are left over from prior crashed or partial cleanup runs.
+        spec_dir = worktrees_root / spec_name
+        if spec_dir.exists():
+            for child in list(spec_dir.iterdir()):
+                if child.is_dir() and not any(child.iterdir()):
+                    try:
+                        child.rmdir()
+                        logger.debug("Removed orphaned empty directory: %s", child)
+                    except OSError as exc:
+                        logger.warning("Could not remove orphaned directory %s: %s", child, exc)
 
-    # Clean up stale worktree if it exists (03-REQ-1.E1)
-    if worktree_path.exists():
-        logger.info("Removing stale worktree at %s", worktree_path)
-        await run_git(
-            ["worktree", "remove", "--force", str(worktree_path)],
-            cwd=repo_root,
-            check=False,
-        )
-        # If git worktree remove didn't fully clean up, remove manually
+        # Clean up stale worktree if it exists (03-REQ-1.E1)
         if worktree_path.exists():
-            _safe_rmtree(worktree_path)
-
-        # Clean up empty ancestor directories from the stale removal (80-REQ-3.2)
-        _cleanup_empty_ancestors(worktree_path, worktrees_root)
-
-    # Prune worktree registry to clean up any stale entries
-    await run_git(["worktree", "prune"], cwd=repo_root, check=False)
-
-    # Post-prune verification: ensure the branch is no longer referenced (80-REQ-1.2)
-    still_referenced = await branch_used_by_worktree(repo_root, branch_name)
-    if still_referenced:
-        # Second prune attempt (80-REQ-1.E1)
-        await run_git(["worktree", "prune"], cwd=repo_root, check=False)
-        still_referenced = await branch_used_by_worktree(repo_root, branch_name)
-
-    if still_referenced:
-        # Last resort: force-remove the stale .git/worktrees/ entry (#638)
-        removed = await _force_remove_stale_worktree_entry(repo_root, branch_name)
-        if removed:
-            await run_git(["worktree", "prune"], cwd=repo_root, check=False)
-            still_referenced = await branch_used_by_worktree(repo_root, branch_name)
-
-    if still_referenced:
-        logger.warning(
-            "Branch '%s' is still referenced by a worktree after force cleanup; skipping stale branch deletion",
-            branch_name,
-        )
-    else:
-        # Clean up stale feature branch if it exists (03-REQ-1.E2)
-        await delete_branch(repo_root, branch_name, force=True)
-
-        # Also delete the remote tracking branch if explicitly requested.
-        if delete_remote:
+            logger.info("Removing stale worktree at %s", worktree_path)
             await run_git(
-                ["push", "origin", "--delete", branch_name],
+                ["worktree", "remove", "--force", str(worktree_path)],
                 cwd=repo_root,
                 check=False,
             )
+            # If git worktree remove didn't fully clean up, remove manually
+            if worktree_path.exists():
+                _safe_rmtree(worktree_path)
 
-    # Defence-in-depth: delete any prefix ref that would cause a git D/F
-    # conflict.  The 2-level ref ``feature/{spec}/{group}`` left by a prior
-    # coder pass is a file under ``.git/refs/heads/``; creating the new
-    # ``feature/{spec}/{group}--...`` branch is safe (sibling), but the old
-    # slash-separated 4-level scheme ``feature/{spec}/{group}/...`` required
-    # ``{group}`` to be a *directory*.  Clean up the prefix ref so stale
-    # branches from either naming scheme cannot block branch creation.  (#745)
-    prefix_branch = f"feature/{spec_name}/{task_group}"
-    if branch_name != prefix_branch:
-        prefix_in_use = await branch_used_by_worktree(repo_root, prefix_branch)
-        if not prefix_in_use and await local_branch_exists(repo_root, prefix_branch):
-            logger.info(
-                "Deleting conflicting prefix ref '%s' before creating '%s'",
-                prefix_branch,
+            # Clean up empty ancestor directories from the stale removal (80-REQ-3.2)
+            _cleanup_empty_ancestors(worktree_path, worktrees_root)
+
+        # Prune worktree registry to clean up any stale entries
+        await run_git(["worktree", "prune"], cwd=repo_root, check=False)
+
+        # Post-prune verification: ensure the branch is no longer referenced (80-REQ-1.2)
+        still_referenced = await branch_used_by_worktree(repo_root, branch_name)
+        if still_referenced:
+            # Second prune attempt (80-REQ-1.E1)
+            await run_git(["worktree", "prune"], cwd=repo_root, check=False)
+            still_referenced = await branch_used_by_worktree(repo_root, branch_name)
+
+        if still_referenced:
+            # Last resort: force-remove the stale .git/worktrees/ entry (#638)
+            removed = await _force_remove_stale_worktree_entry(repo_root, branch_name)
+            if removed:
+                await run_git(["worktree", "prune"], cwd=repo_root, check=False)
+                still_referenced = await branch_used_by_worktree(repo_root, branch_name)
+
+        if still_referenced:
+            logger.warning(
+                "Branch '%s' is still referenced by a worktree after force cleanup; skipping stale branch deletion",
                 branch_name,
             )
-            await delete_branch(repo_root, prefix_branch, force=True)
+        else:
+            # Clean up stale feature branch if it exists (03-REQ-1.E2)
+            await delete_branch(repo_root, branch_name, force=True)
 
-    # Create the feature branch from the base branch tip
-    await create_branch(repo_root, branch_name, base_branch)
+            # Also delete the remote tracking branch if explicitly requested.
+            if delete_remote:
+                await run_git(
+                    ["push", "origin", "--delete", branch_name],
+                    cwd=repo_root,
+                    check=False,
+                )
 
-    # Ensure parent directory exists
-    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        # Defence-in-depth: delete any prefix ref that would cause a git D/F
+        # conflict.  The 2-level ref ``feature/{spec}/{group}`` left by a prior
+        # coder pass is a file under ``.git/refs/heads/``; creating the new
+        # ``feature/{spec}/{group}--...`` branch is safe (sibling), but the old
+        # slash-separated 4-level scheme ``feature/{spec}/{group}/...`` required
+        # ``{group}`` to be a *directory*.  Clean up the prefix ref so stale
+        # branches from either naming scheme cannot block branch creation.  (#745)
+        prefix_branch = f"feature/{spec_name}/{task_group}"
+        if branch_name != prefix_branch:
+            prefix_in_use = await branch_used_by_worktree(repo_root, prefix_branch)
+            if not prefix_in_use and await local_branch_exists(repo_root, prefix_branch):
+                logger.info(
+                    "Deleting conflicting prefix ref '%s' before creating '%s'",
+                    prefix_branch,
+                    branch_name,
+                )
+                await delete_branch(repo_root, prefix_branch, force=True)
 
-    # Create the worktree with the feature branch checked out
-    await run_git(
-        ["worktree", "add", str(worktree_path), branch_name],
-        cwd=repo_root,
-    )
+        # Create the feature branch from the base branch tip
+        await create_branch(repo_root, branch_name, base_branch)
+
+        # Ensure parent directory exists
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create the worktree with the feature branch checked out
+        await run_git(
+            ["worktree", "add", str(worktree_path), branch_name],
+            cwd=repo_root,
+        )
 
     return WorkspaceInfo(
         path=worktree_path,
@@ -345,58 +374,64 @@ async def destroy_worktree(
     making this function transparent to both 2-level and 4-level
     worktree path structures (09-REQ-6.1).
 
+    All worktree registry mutations are serialized under a per-repo
+    asyncio lock (issue #32, NS-REQ-5).
+
     Requirements: 80-REQ-1.1, 80-REQ-1.E1, 80-REQ-3.1, 09-REQ-6.1
     """
     worktrees_root = repo_root / ".nightshift" / "worktrees"
 
-    # 03-REQ-2.E1: If worktree path does not exist, treat removal as no-op
-    if workspace.path.exists():
-        # Remove the worktree via git
-        await run_git(
-            ["worktree", "remove", "--force", str(workspace.path)],
-            cwd=repo_root,
-            check=False,
-        )
-        # If git worktree remove didn't fully clean up, remove manually
+    # Serialize worktree registry mutations (issue #32, NS-REQ-5).
+    lock = _get_worktree_lock(repo_root)
+    async with lock:
+        # 03-REQ-2.E1: If worktree path does not exist, treat removal as no-op
         if workspace.path.exists():
-            _safe_rmtree(workspace.path)
-
-    # Prune worktree registry
-    await run_git(["worktree", "prune"], cwd=repo_root, check=False)
-
-    # Post-prune verification: check if branch is still referenced (80-REQ-1.1)
-    still_referenced = await branch_used_by_worktree(repo_root, workspace.branch)
-    if still_referenced:
-        # Second prune attempt (80-REQ-1.E1)
-        await run_git(["worktree", "prune"], cwd=repo_root, check=False)
-        still_referenced = await branch_used_by_worktree(repo_root, workspace.branch)
-
-    if still_referenced:
-        logger.warning(
-            "Branch '%s' is still referenced by a worktree after two prune attempts; skipping branch deletion",
-            workspace.branch,
-        )
-    elif keep_branch:
-        logger.info("Retaining feature branch '%s' for manual review", workspace.branch)
-    elif preserve_branch:
-        # AC-3: Rename instead of deleting so committed coder work is recoverable.
-        stalled_name = f"stalled/{workspace.branch}"
-        rc, _, _ = await run_git(
-            ["branch", "-m", workspace.branch, stalled_name],
-            cwd=repo_root,
-            check=False,
-        )
-        if rc == 0:
-            logger.warning(
-                "Harvest failed: preserved feature branch as '%s' for recovery",
-                stalled_name,
+            # Remove the worktree via git
+            await run_git(
+                ["worktree", "remove", "--force", str(workspace.path)],
+                cwd=repo_root,
+                check=False,
             )
-        else:
-            # Rename failed (branch may not exist) — fall back to delete
-            await delete_branch(repo_root, workspace.branch, force=True)
-    else:
-        # Delete the feature branch (03-REQ-2.E2: log warning if not found)
-        await delete_branch(repo_root, workspace.branch, force=True)
+            # If git worktree remove didn't fully clean up, remove manually
+            if workspace.path.exists():
+                _safe_rmtree(workspace.path)
 
-    # Clean up empty ancestor directories (80-REQ-3.1)
-    _cleanup_empty_ancestors(workspace.path, worktrees_root)
+        # Prune worktree registry
+        await run_git(["worktree", "prune"], cwd=repo_root, check=False)
+
+        # Post-prune verification: check if branch is still referenced (80-REQ-1.1)
+        still_referenced = await branch_used_by_worktree(repo_root, workspace.branch)
+        if still_referenced:
+            # Second prune attempt (80-REQ-1.E1)
+            await run_git(["worktree", "prune"], cwd=repo_root, check=False)
+            still_referenced = await branch_used_by_worktree(repo_root, workspace.branch)
+
+        if still_referenced:
+            logger.warning(
+                "Branch '%s' is still referenced by a worktree after two prune attempts; skipping branch deletion",
+                workspace.branch,
+            )
+        elif keep_branch:
+            logger.info("Retaining feature branch '%s' for manual review", workspace.branch)
+        elif preserve_branch:
+            # AC-3: Rename instead of deleting so committed coder work is recoverable.
+            stalled_name = f"stalled/{workspace.branch}"
+            rc, _, _ = await run_git(
+                ["branch", "-m", workspace.branch, stalled_name],
+                cwd=repo_root,
+                check=False,
+            )
+            if rc == 0:
+                logger.warning(
+                    "Harvest failed: preserved feature branch as '%s' for recovery",
+                    stalled_name,
+                )
+            else:
+                # Rename failed (branch may not exist) — fall back to delete
+                await delete_branch(repo_root, workspace.branch, force=True)
+        else:
+            # Delete the feature branch (03-REQ-2.E2: log warning if not found)
+            await delete_branch(repo_root, workspace.branch, force=True)
+
+        # Clean up empty ancestor directories (80-REQ-3.1)
+        _cleanup_empty_ancestors(workspace.path, worktrees_root)
