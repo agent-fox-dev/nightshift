@@ -340,11 +340,21 @@ available, monitors carry-patch workspaces for conflicts).
 
 ### Cost and Session Limits
 
-Night-shift enforces its own cost ceiling, set conservatively at 50% of the
-configured maximum. This headroom accounts for the unpredictability of
-autonomous operation — a large backlog of issues could trigger a cascade of
-fix pipelines, each consuming tokens. The 50% threshold provides a safety
-margin.
+Night-shift enforces `orchestrator.max_cost` as a hard ceiling: dispatch
+stops once cumulative cost reaches the full configured value, the same
+comparison `SharedBudget.exceeded` uses at the daemon level (issue #33 —
+earlier versions stopped at 50% of the configured maximum, silently halving
+throughput per run).
+
+Headroom against the unpredictability of autonomous operation — a large
+backlog of issues could trigger a cascade of fix pipelines, each consuming
+tokens — comes from a per-issue reservation instead of a flat percentage.
+Before dispatching an issue, the engine estimates its worst-case cost (one
+triage session plus `max_retries + 1` coder+reviewer rounds, each at its
+resolved `max_budget_usd`) and skips the issue if that estimate would not
+fit in what remains of `max_cost`. The reservation is released once the
+issue completes, whatever the outcome, so it never leaks or double-counts
+against concurrently in-flight issues.
 
 Session limits are also enforced. Both limits trigger graceful shutdown:
 the engine finishes any in-flight work, emits final statistics, and exits.

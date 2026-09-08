@@ -180,6 +180,12 @@ class NightShiftEngine:
         # carry-patch is enabled (see streams.py).
         # Requirements: 03-REQ-7.4
         self._carry_patch_monitor: object | None = None
+        # Sum of estimated worst-case costs reserved for issues currently
+        # dispatched but not yet complete.  Mutated only from the
+        # synchronous dispatch loop in _process_issues_parallel and from
+        # _run_one's finally block, both on the event-loop thread with no
+        # await between read and write, so no lock is needed (issue #33).
+        self._reserved_cost: float = 0.0
 
         # AC-4 (issue #35): log once at startup when no gate command is
         # configured so the operator knows the daemon is running ungated.
@@ -201,18 +207,93 @@ class NightShiftEngine:
     def _check_cost_limit(self) -> bool:
         """Check whether the cost limit has been reached.
 
-        Returns True when the remaining budget is less than 50% of
-        max_cost.  This conservative threshold prevents overspending
-        when individual operations may cost a significant fraction of
-        the total budget.
+        Returns True once ``total_cost`` reaches the full configured
+        ``max_cost`` -- the same comparison ``SharedBudget.exceeded`` uses
+        in daemon.py.  Previously this tripped at 50% of ``max_cost``,
+        silently halving the daemon's configured throughput (issue #33).
+        Not starting an issue whose own estimated cost would not fit in
+        what remains is handled separately, before dispatch, by
+        ``_reserve_budget_for_issue()``.
 
-        Requirements: 61-REQ-1.E2, 61-REQ-9.3
+        Requirements: 61-REQ-1.E2, 61-REQ-9.3, NS-REQ-33 (issue #33)
         """
         max_cost = getattr(getattr(self._config, "orchestrator", None), "max_cost", None)
-        if max_cost is None:
+        if not isinstance(max_cost, (int, float)):
             return False
-        remaining = max_cost - self.state.total_cost
-        return remaining < max_cost * 0.5
+        return self.state.total_cost >= max_cost
+
+    def _estimate_issue_cost(self) -> float:
+        """Return a conservative worst-case cost ceiling for one issue.
+
+        Sums the per-archetype ``max_budget_usd`` ceilings for every
+        session a single issue's fix pipeline can run: one triage session
+        (the ``maintainer`` archetype in ``fix-triage`` mode) plus, for
+        each of ``1 + orchestrator.max_retries`` coder-reviewer rounds, one
+        coder and one reviewer session.
+
+        Returns 0.0 -- "no usable ceiling" -- when any of those archetypes
+        has an unlimited budget (``max_budget_usd = 0``), since no useful
+        worst case can be computed in that case.
+
+        Requirements: NS-REQ-33 (issue #33, AC-4)
+        """
+        from afcore.engine.sdk_params import resolve_max_budget
+
+        config = self._config
+        triage_budget = resolve_max_budget(config, "maintainer", mode="fix-triage")
+        coder_budget = resolve_max_budget(config, "coder", mode="fix")
+        reviewer_budget = resolve_max_budget(config, "reviewer", mode="fix-review")
+        budgets = (triage_budget, coder_budget, reviewer_budget)
+        # Also guards against non-numeric config stand-ins (e.g. a bare
+        # MagicMock in tests) resolving to a mock object rather than a
+        # real float or None -- treated the same as "unbounded".
+        if any(not isinstance(b, (int, float)) for b in budgets):
+            return 0.0
+        max_retries = getattr(self._config.orchestrator, "max_retries", 0)
+        if not isinstance(max_retries, (int, float)):
+            max_retries = 0
+        rounds = 1 + max_retries
+        return triage_budget + rounds * (coder_budget + reviewer_budget)
+
+    def _reserve_budget_for_issue(self) -> bool:
+        """Reserve the estimated worst-case cost of one issue before dispatch.
+
+        Returns False -- reserving nothing -- when the estimate would not
+        fit in what remains of ``max_cost`` after already-committed spend
+        and already-reserved (in-flight) estimates.  Returns True (a no-op)
+        when ``max_cost`` is unset or the estimate cannot be computed, since
+        neither bounds the run.
+
+        The reservation is released by ``_release_reserved_cost()`` once the
+        issue completes, regardless of outcome (issue #33, AC-4).
+        """
+        max_cost = getattr(getattr(self._config, "orchestrator", None), "max_cost", None)
+        if not isinstance(max_cost, (int, float)):
+            return True
+        estimate = self._estimate_issue_cost()
+        if estimate <= 0:
+            return True
+        remaining = max_cost - self.state.total_cost - self._reserved_cost
+        if remaining < estimate:
+            return False
+        self._reserved_cost += estimate
+        return True
+
+    def _release_reserved_cost(self) -> None:
+        """Release one issue's reservation after it completes.
+
+        Recomputes the same estimate ``_reserve_budget_for_issue()`` used —
+        config does not change mid-run, so this returns the identical value
+        without needing to track per-issue reservations.  A no-op when
+        nothing was reserved (unset ``max_cost`` or an unbounded estimate).
+        """
+        max_cost = getattr(getattr(self._config, "orchestrator", None), "max_cost", None)
+        if not isinstance(max_cost, (int, float)):
+            return
+        estimate = self._estimate_issue_cost()
+        if estimate <= 0:
+            return
+        self._reserved_cost = max(0.0, self._reserved_cost - estimate)
 
     def _check_session_limit(self) -> bool:
         """Check whether the session limit has been reached.
@@ -429,60 +510,63 @@ class NightShiftEngine:
 
         async def _run_one(issue_num: int) -> tuple[int, bool]:
             """Process a single issue and return (issue_num, succeeded)."""
-            # Re-check issue freshness before starting work (NS-REQ-2).
-            # Between the poll that discovered this issue and now, someone
-            # may have closed the issue or removed its af:fix label.
             try:
-                fresh = await self._platform.get_issue(issue_num)  # type: ignore[attr-defined]
-                # Check closed state (forward-compatible with IssueResult
-                # gaining a ``state`` field in the future).
-                if getattr(fresh, "state", "open") == "closed":
-                    logger.info(
-                        "Issue #%d was closed between poll and dispatch, skipping",
-                        issue_num,
-                    )
-                    return (issue_num, False)
-                # Check that af:fix label is still present.
-                fresh_labels = getattr(fresh, "labels", None)
-                if isinstance(fresh_labels, (tuple, list)) and LABEL_FIX not in fresh_labels:
-                    logger.info(
-                        "Issue #%d no longer has af:fix label, skipping",
-                        issue_num,
-                    )
-                    return (issue_num, False)
-            except Exception:
-                logger.warning(
-                    "Failed to re-check issue #%d freshness, continuing with processing",
-                    issue_num,
-                    exc_info=True,
-                )
-
-            issue = issue_map[issue_num]
-            fix_succeeded = False
-            try:
-                async with self._in_flight_lock:
-                    self._in_flight.add(issue_num)
+                # Re-check issue freshness before starting work (NS-REQ-2).
+                # Between the poll that discovered this issue and now, someone
+                # may have closed the issue or removed its af:fix label.
                 try:
-                    await self._process_fix(issue)
-                    fix_succeeded = True
+                    fresh = await self._platform.get_issue(issue_num)  # type: ignore[attr-defined]
+                    # Check closed state (forward-compatible with IssueResult
+                    # gaining a ``state`` field in the future).
+                    if getattr(fresh, "state", "open") == "closed":
+                        logger.info(
+                            "Issue #%d was closed between poll and dispatch, skipping",
+                            issue_num,
+                        )
+                        return (issue_num, False)
+                    # Check that af:fix label is still present.
+                    fresh_labels = getattr(fresh, "labels", None)
+                    if isinstance(fresh_labels, (tuple, list)) and LABEL_FIX not in fresh_labels:
+                        logger.info(
+                            "Issue #%d no longer has af:fix label, skipping",
+                            issue_num,
+                        )
+                        return (issue_num, False)
                 except Exception:
                     logger.warning(
-                        "Fix failed for issue #%d, continuing to next",
+                        "Failed to re-check issue #%d freshness, continuing with processing",
                         issue_num,
                         exc_info=True,
                     )
-                finally:
+
+                issue = issue_map[issue_num]
+                fix_succeeded = False
+                try:
                     async with self._in_flight_lock:
-                        self._in_flight.discard(issue_num)
-                    async with self._processed_issues_lock:
-                        self._processed_issues.add(issue_num)
-            except Exception:
-                logger.warning(
-                    "Unexpected error processing issue #%d",
-                    issue_num,
-                    exc_info=True,
-                )
-            return (issue_num, fix_succeeded)
+                        self._in_flight.add(issue_num)
+                    try:
+                        await self._process_fix(issue)
+                        fix_succeeded = True
+                    except Exception:
+                        logger.warning(
+                            "Fix failed for issue #%d, continuing to next",
+                            issue_num,
+                            exc_info=True,
+                        )
+                    finally:
+                        async with self._in_flight_lock:
+                            self._in_flight.discard(issue_num)
+                        async with self._processed_issues_lock:
+                            self._processed_issues.add(issue_num)
+                except Exception:
+                    logger.warning(
+                        "Unexpected error processing issue #%d",
+                        issue_num,
+                        exc_info=True,
+                    )
+                return (issue_num, fix_succeeded)
+            finally:
+                self._release_reserved_cost()
 
         def _fill_pool() -> None:
             """Add ready issues to the pool up to max_parallel."""
@@ -502,9 +586,20 @@ class NightShiftEngine:
                 if self._check_session_limit():
                     logger.info("Session limit reached, stopping issue dispatch")
                     return
+                # Issue #33 (AC-4): don't start work that cannot be paid for.
+                # Reserves a worst-case estimate against the remaining
+                # budget; released in _run_one's finally once the issue
+                # completes (success, failure, or exception).
+                if not self._reserve_budget_for_issue():
+                    logger.info(
+                        "Estimated cost of issue #%d exceeds remaining budget, stopping issue dispatch",
+                        issue_num,
+                    )
+                    return
                 # Issue #37 (NS-REQ-1): check cross-run attempt ceiling
                 # before dispatching.  Fail-open when DuckDB is unavailable.
                 if self._exceeds_attempt_ceiling(issue_num):
+                    self._release_reserved_cost()
                     closed.add(issue_num)
                     graph.complete(issue_num)
                     continue
