@@ -569,7 +569,6 @@ class FixPipeline:
             task_group=0,
             base_branch=integration_branch,
             branch_name=spec.branch_name,
-            delete_remote=False,
         )
 
     async def _cleanup_workspace(
@@ -1443,9 +1442,16 @@ class FixPipeline:
 
             # 02-REQ-4.2 / 02-REQ-10.1: PR mode — push branch and create PR
             # Sequence: push → get_changed_files → build_pr_body → create_pr
+            #
+            # force=True (--force-with-lease): create_worktree no longer
+            # deletes the remote branch (issue #34), so a remote fix/N left
+            # by an earlier attempt would otherwise reject this push as a
+            # non-fast-forward.  The lease still refuses to overwrite
+            # commits the fetched tracking ref does not know about.
             await _workspace_git.push_to_remote(
                 workspace.path,
                 workspace.branch,
+                force=True,
             )
             changed_files = await _workspace_git.get_changed_files(
                 workspace.path,
@@ -1529,10 +1535,14 @@ class FixPipeline:
         carry_patch_cfg = self._config.carry_patch
 
         # Step 1: Push fix branch to the hub git server (03-REQ-1.1).
+        # force=True (--force-with-lease) updates a patch branch left by an
+        # earlier attempt in place now that create_worktree no longer
+        # deletes remote refs (issue #34).
         try:
             await _workspace_git.push_to_remote(
                 workspace.path,
                 workspace.branch,
+                force=True,
             )
         except Exception:
             # 03-REQ-1.E1: mark for retry and re-raise.

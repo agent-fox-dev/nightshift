@@ -219,7 +219,13 @@ After the coder-reviewer loop completes successfully:
    reviewer sessions are staged and committed automatically to prevent
    silent data loss.
 2. **Optional push.** If `config.night_shift.push_fix_branch` is enabled,
-   the fix branch is force-pushed to the remote.
+   the fix branch is force-pushed to the remote. Under `merge_strategy =
+   "pr"` and in carry-patch mode the push is likewise a leased force-push
+   (`--force-with-lease`): worktree creation never deletes a remote fix
+   branch (issue #34 — it used to, which closed any open pull request whose
+   head it was), so a `fix/N` ref left by an earlier attempt is updated in
+   place rather than rejected as a non-fast-forward. Only the stale *local*
+   branch is force-deleted before the worktree is recreated.
 3. **Squash merge.** The fix branch is harvested into the integration
    branch using the same squash-merge strategy as the spec pipeline. If
    merge conflicts arise, a merge agent resolves them.
