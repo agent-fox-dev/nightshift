@@ -183,6 +183,7 @@ class FixMetrics:
 _OUTCOME_BY_HARVEST_RESULT: dict[str, str] = {
     "merged": "fixed",
     "no_changes": "no_changes",
+    "branch_only": "branch_only",
     "pr_created": "pr_created",
 }
 
@@ -570,13 +571,18 @@ class FixPipeline:
             branch_name=spec.branch_name,
         )
 
-    async def _cleanup_workspace(self, workspace: WorkspaceInfo) -> None:
+    async def _cleanup_workspace(
+        self,
+        workspace: WorkspaceInfo,
+        *,
+        keep_branch: bool = False,
+    ) -> None:
         """Destroy the worktree created for the fix session."""
         from afcore.workspace import destroy_worktree
 
         repo_root = self._repo_root
         try:
-            await destroy_worktree(repo_root, workspace)
+            await destroy_worktree(repo_root, workspace, keep_branch=keep_branch)
         except Exception:
             logger.warning(
                 "Failed to clean up worktree for %s",
@@ -1357,8 +1363,9 @@ class FixPipeline:
         """Auto-commit, optionally push, and harvest the fix branch.
 
         Returns ``(status, changed_files)`` where *status* is ``"merged"``,
-        ``"no_changes"``, or ``"error"`` and *changed_files* is the list of
-        file paths changed by the harvest (empty on error or no changes).
+        ``"branch_only"``, ``"no_changes"``, or ``"error"`` and
+        *changed_files* is the list of file paths changed by the harvest
+        (empty on error or no changes).
 
         Requirements: NS-REQ-4, NS-REQ-5, 93-REQ-3.1, 65-REQ-3.2,
                       02-REQ-2.2, 02-REQ-3.2, 02-REQ-4.2
@@ -1392,8 +1399,8 @@ class FixPipeline:
                 f"Merge strategy is set to `branch` "
                 f"— please review and merge manually."
             )
-            await self._platform.add_issue_comment(issue.number, comment)
-            return "merged", changed_files
+            await self._post_comment(issue.number, comment)
+            return "branch_only", changed_files
 
         if merge_strategy == "pr":
             # 02-REQ-4.3 / 02-REQ-4.4: Validate platform lazily at PR
@@ -1416,8 +1423,8 @@ class FixPipeline:
                     f"Merge strategy is set to `branch` "
                     f"— please review and merge manually."
                 )
-                await self._platform.add_issue_comment(issue.number, comment)
-                return "merged", changed_files
+                await self._post_comment(issue.number, comment)
+                return "branch_only", changed_files
 
             # 02-REQ-4.2 / 02-REQ-10.1: PR mode — push branch and create PR
             # Sequence: push → get_changed_files → build_pr_body → create_pr
@@ -1664,7 +1671,7 @@ class FixPipeline:
         spec: InMemorySpec,
         harvest_result: str,
     ) -> None:
-        """Handle post-harvest outcome: error, no_changes, pr_created, or merged.
+        """Handle post-harvest outcome: error, no_changes, branch_only, pr_created, or merged.
 
         Updates the GitHub issue with the appropriate comment and labels,
         and marks the run as completed.
@@ -1708,6 +1715,15 @@ class FixPipeline:
                     issue.number,
                     exc,
                 )
+            self._try_complete_run("completed")
+            return
+
+        if harvest_result == "branch_only":
+            logger.info(
+                "Fix branch %s is awaiting manual review for issue #%d",
+                spec.branch_name,
+                issue.number,
+            )
             self._try_complete_run("completed")
             return
 
@@ -1870,6 +1886,7 @@ class FixPipeline:
             f"Starting fix session on branch `{spec.branch_name}`... (run: `{self._run_id}`)",
         )
 
+        harvest_result = "error"
         try:
             # 82-REQ-7.1: run triage first
             triage_node_id = f"fix-issue-{spec.issue_number}:0:triage"
@@ -1963,7 +1980,10 @@ class FixPipeline:
             metrics.outcome = "failed"
             return metrics
         finally:
-            await self._cleanup_workspace(workspace)
+            await self._cleanup_workspace(
+                workspace,
+                keep_branch=harvest_result == "branch_only",
+            )
 
         metrics.outcome = _OUTCOME_BY_HARVEST_RESULT.get(harvest_result, "failed")
         await self._handle_result(issue, spec, harvest_result)

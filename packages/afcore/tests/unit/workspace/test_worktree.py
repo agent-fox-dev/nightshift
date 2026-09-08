@@ -468,3 +468,18 @@ class TestPreserveBranchOnHarvestFailure:
         branches = list_branches(tmp_worktree_repo)
         assert ws.branch not in branches
         assert f"stalled/{ws.branch}" not in branches
+
+    @pytest.mark.asyncio
+    async def test_keep_branch_retains_original_name(
+        self,
+        tmp_worktree_repo: Path,
+    ) -> None:
+        """Manual-review cleanup retains the original branch name."""
+        ws = await create_worktree(tmp_worktree_repo, "fix-issue-65", 0, base_branch="develop")
+        add_commit_to_branch(ws.path, "work.py", "completed work\n")
+
+        await destroy_worktree(tmp_worktree_repo, ws, keep_branch=True)
+
+        branches = list_branches(tmp_worktree_repo)
+        assert ws.branch in branches
+        assert f"stalled/{ws.branch}" not in branches

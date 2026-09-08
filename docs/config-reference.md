@@ -420,12 +420,17 @@ Branch integration configuration.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `integration_branch` | str | `"main"` | Git branch used as the integration target for merges |
-| `merge_strategy` | str | `"direct"` | `"direct"` (squash-merge), `"branch"` (keep locally), or `"pr"` (open PR) |
+| `merge_strategy` | str | `"direct"` | `"direct"` (squash-merge), `"branch"` (keep the local branch for manual review), or `"pr"` (open PR) |
 
 When `merge_strategy = "pr"`, Night Shift opens pull requests instead of
 merging directly and activates the **PR feedback loop** — an autonomous work
 stream that monitors those PRs for CI failures and reviewer-requested changes.
 See [Architecture § 8](architecture.md#8-pr-feedback-loop) for details.
+
+When `merge_strategy = "branch"`, Night Shift removes the worktree but retains
+the original local `fix/...` branch for manual review and merge. It does not
+push the branch, close the issue, or apply `af:fixed`; retained branches
+accumulate until an operator merges or deletes them.
 
 ```toml
 [workspace]
