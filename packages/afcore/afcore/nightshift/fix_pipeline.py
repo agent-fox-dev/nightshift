@@ -1378,12 +1378,26 @@ class FixPipeline:
         # 03-REQ-1.1 / 03-REQ-1.E5: Carry-patch mode — register patch on
         # the hub and poll a rebuild instead of running a local harvest.
         carry_patch_cfg = getattr(self._config, "carry_patch", None)
-        if carry_patch_cfg and carry_patch_cfg.enabled and self._hub_client is not None:
-            return await self._carry_patch_register_and_rebuild(
-                issue,
-                spec,
-                workspace,
+        if carry_patch_cfg and carry_patch_cfg.enabled is True:
+            if self._hub_client is not None:
+                return await self._carry_patch_register_and_rebuild(
+                    issue,
+                    spec,
+                    workspace,
+                )
+            # Issue #41 (AC-3): carry-patch is enabled in config but no
+            # hub_client was supplied — this is a wiring bug, not a
+            # deliberate fallback.  Log an error naming the missing
+            # parameter so the misconfiguration is visible rather than
+            # silently selecting a different integration strategy.
+            logger.error(
+                "carry_patch.enabled is True but hub_client is None — "
+                "cannot register patch on hub.  This is a pipeline "
+                "wiring error; the fix will NOT be integrated via the "
+                "carry-patch path.  Ensure hub_client is passed to "
+                "FixPipeline when carry_patch is enabled."
             )
+            return "error", []
 
         # 02-REQ-2.2 / 02-REQ-3.2 / 02-REQ-4.2: Branch on merge strategy
         merge_strategy = self._config.workspace.merge_strategy

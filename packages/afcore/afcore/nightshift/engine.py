@@ -204,6 +204,33 @@ class NightShiftEngine:
         """
         return self._repo_root
 
+    def _build_pipeline(self) -> FixPipeline:
+        """Build a fully-wired ``FixPipeline`` instance.
+
+        Centralises the construction so that ``_process_fix`` and
+        ``_check_open_prs`` always supply identical wiring — including
+        the ``hub_client`` and ``workspace_slug`` required by the
+        carry-patch integration path.
+
+        Requirements: NS-REQ-41 (issue #41, AC-1, AC-4)
+        """
+        _cp_cfg = getattr(self._config, "carry_patch", None)
+        _ws_slug = getattr(_cp_cfg, "workspace", "") if _cp_cfg else ""
+
+        return FixPipeline(
+            config=self._config,
+            platform=self._platform,
+            activity_callback=self._activity_callback,
+            task_callback=self._task_callback,
+            sink_dispatcher=self._sink,
+            spinner_callback=self._spinner_callback,
+            conn=self._conn,
+            knowledge_provider=self._knowledge_provider,
+            hub_client=self._hub_client,
+            workspace_slug=_ws_slug,
+            repo_root=self._repo_root,
+        )
+
     def _check_cost_limit(self) -> bool:
         """Check whether the cost limit has been reached.
 
@@ -847,24 +874,7 @@ class NightShiftEngine:
             payload={"issue_number": issue.number, "title": issue.title},
         )
 
-        # Derive workspace_slug from config for carry-patch wiring
-        # (03-REQ-1.1, 11.1 wiring verification).
-        _cp_cfg = getattr(self._config, "carry_patch", None)
-        _ws_slug = getattr(_cp_cfg, "workspace", "") if _cp_cfg else ""
-
-        pipeline = FixPipeline(
-            config=self._config,
-            platform=self._platform,
-            activity_callback=self._activity_callback,
-            task_callback=self._task_callback,
-            sink_dispatcher=self._sink,
-            spinner_callback=self._spinner_callback,
-            conn=self._conn,
-            knowledge_provider=self._knowledge_provider,
-            hub_client=self._hub_client,
-            workspace_slug=_ws_slug,
-            repo_root=self._repo_root,
-        )
+        pipeline = self._build_pipeline()
 
         effective_body = issue_body if issue_body else getattr(issue, "body", "")
         succeeded = False
@@ -1020,17 +1030,7 @@ class NightShiftEngine:
         if not issues:
             return
 
-        pipeline = FixPipeline(
-            config=self._config,
-            platform=self._platform,
-            activity_callback=self._activity_callback,
-            task_callback=self._task_callback,
-            sink_dispatcher=self._sink,
-            spinner_callback=self._spinner_callback,
-            conn=self._conn,
-            knowledge_provider=self._knowledge_provider,
-            repo_root=self._repo_root,
-        )
+        pipeline = self._build_pipeline()
 
         for issue in issues:
             await process_pr_issue(
