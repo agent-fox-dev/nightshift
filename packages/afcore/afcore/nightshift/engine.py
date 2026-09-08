@@ -507,6 +507,7 @@ class NightShiftEngine:
 
         pool: set[asyncio.Task[tuple[int, bool]]] = set()
         dispatched: set[int] = set()
+        ceiling_exceeded: list[int] = []
 
         async def _run_one(issue_num: int) -> tuple[int, bool]:
             """Process a single issue and return (issue_num, succeeded)."""
@@ -601,10 +602,15 @@ class NightShiftEngine:
                     return
                 # Issue #37 (NS-REQ-1): check cross-run attempt ceiling
                 # before dispatching.  Fail-open when DuckDB is unavailable.
+                # Issue #90: also add to ``seen`` so the drain loop excludes
+                # this issue on re-poll, and collect for deferred af:failed
+                # labelling (async, handled after _fill_pool returns).
                 if self._exceeds_attempt_ceiling(issue_num):
                     self._release_reserved_cost()
                     closed.add(issue_num)
+                    seen.add(issue_num)
                     graph.complete(issue_num)
+                    ceiling_exceeded.append(issue_num)
                     continue
                 dispatched.add(issue_num)
                 task = asyncio.create_task(
@@ -613,7 +619,41 @@ class NightShiftEngine:
                 )
                 pool.add(task)
 
+        async def _label_ceiling_exceeded() -> None:
+            """Apply af:failed label to ceiling-exceeded issues (issue #90).
+
+            Deferred from _fill_pool (sync) because label application
+            requires async platform calls.  Best-effort: failures are
+            logged but do not propagate.
+            """
+            while ceiling_exceeded:
+                num = ceiling_exceeded.pop()
+                try:
+                    await self._platform.assign_label(num, LABEL_FAILED)  # type: ignore[attr-defined]
+                except Exception:
+                    logger.warning(
+                        "Failed to assign af:failed label to ceiling-exceeded issue #%d",
+                        num,
+                        exc_info=True,
+                    )
+                try:
+                    await self._platform.add_issue_comment(  # type: ignore[attr-defined]
+                        num,
+                        "Issue has reached the cross-run attempt ceiling and will not be "
+                        "retried automatically. Labelled `af:failed`.\n\n"
+                        f"(run: `{issue_check_run_id}`)",
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to post ceiling comment on issue #%d",
+                        num,
+                        exc_info=True,
+                    )
+                async with self._processed_issues_lock:
+                    self._processed_issues.add(num)
+
         _fill_pool()
+        await _label_ceiling_exceeded()
 
         # Set when a non-recoverable API error (no credit, rejected
         # credentials) surfaces mid-dispatch.  Dispatch stops, in-flight
@@ -712,6 +752,7 @@ class NightShiftEngine:
 
             # Fill pool with newly-ready issues
             _fill_pool()
+            await _label_ceiling_exceeded()
 
         if fatal_error is not None:
             if pool:
@@ -918,6 +959,7 @@ class NightShiftEngine:
                 logger.info("Session limit reached during issue drain")
                 return False
 
+            seen_before = len(seen)
             await self._run_issue_check(seen)
 
             # Re-poll to see if any af:fix issues remain.
@@ -948,6 +990,16 @@ class NightShiftEngine:
             ]
             if not remaining:
                 return True
+
+            # Issue #90: if this iteration made no progress (nothing was
+            # dispatched, completed, or ceiling-skipped) yet issues remain,
+            # further iterations will spin without effect.  Break early.
+            if len(seen) == seen_before:
+                logger.warning(
+                    "Drain made no progress: %d issue(s) remain but none were dispatched",
+                    len(remaining),
+                )
+                return False
 
         logger.warning("Issue drain safety valve reached after %d iterations", self._MAX_DRAIN_ITERATIONS)
         return False
