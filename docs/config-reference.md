@@ -100,6 +100,17 @@ session_timeout = 45
 max_retries = 3
 ```
 
+`max_cost` is spent in full: the daemon keeps dispatching new issues until
+`total_cost` reaches `max_cost`, not until half of it (issue #33 — earlier
+versions stopped at 50% of the configured value). Before dispatching an
+issue, the engine reserves a worst-case estimate for it — the sum of the
+resolved per-archetype `max_budget_usd` for one triage session plus
+`max_retries + 1` coder+reviewer rounds — and skips the issue if the
+reservation would not fit in what remains of `max_cost`; the reservation is
+released once the issue completes, whatever the outcome. This is distinct
+from `max_budget_usd`, which caps a single *session's* spend, not the
+run's total.
+
 ---
 
 ## security

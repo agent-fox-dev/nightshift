@@ -156,7 +156,30 @@ class TestCostLimitReached:
     """Verify engine stops on cost limit."""
 
     def test_check_cost_limit_true(self) -> None:
-        """_check_cost_limit returns True when cost exceeds max."""
+        """_check_cost_limit returns True once cost reaches the full max.
+
+        Issue #33: the check used to trip at 50% of max_cost; it now
+        matches SharedBudget.exceeded's total_cost >= max_cost.
+        """
+        from unittest.mock import MagicMock
+
+        from afcore.nightshift.engine import NightShiftEngine
+
+        config = MagicMock()
+        config.orchestrator.max_cost = 10.0
+        config.orchestrator.max_sessions = None
+        platform = MagicMock()
+
+        engine = NightShiftEngine(config=config, platform=platform)
+        engine.state.total_cost = 10.0
+        assert engine._check_cost_limit() is True
+
+    def test_check_cost_limit_false_at_60_percent(self) -> None:
+        """_check_cost_limit returns False well past the old 50% threshold.
+
+        Issue #33: at 9.5/10.0 (95%) spent, the daemon must still be able
+        to dispatch further work -- the old code stopped at 5.0/10.0.
+        """
         from unittest.mock import MagicMock
 
         from afcore.nightshift.engine import NightShiftEngine
@@ -168,7 +191,7 @@ class TestCostLimitReached:
 
         engine = NightShiftEngine(config=config, platform=platform)
         engine.state.total_cost = 9.5
-        assert engine._check_cost_limit() is True
+        assert engine._check_cost_limit() is False
 
     def test_check_cost_limit_false(self) -> None:
         """_check_cost_limit returns False when cost is under max."""
