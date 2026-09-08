@@ -508,8 +508,9 @@ class TestStaleness:
 
         processed: list[int] = []
 
-        async def track_fix(issue: IssueResult) -> None:
+        async def track_fix(issue: IssueResult) -> bool:
             processed.append(issue.number)
+            return True  # genuinely fixed -- the staleness sweep this test exercises requires it
 
         engine._process_fix = track_fix  # type: ignore[assignment]
 

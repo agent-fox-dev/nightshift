@@ -117,6 +117,7 @@ class TestPhaseLineFixComplete:
             output_tokens=50,
             cache_read_input_tokens=0,
             cache_creation_input_tokens=0,
+            outcome="fixed",
         )
 
         with patch("afcore.nightshift.engine.FixPipeline") as MockPipeline:

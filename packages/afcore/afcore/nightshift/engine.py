@@ -545,8 +545,11 @@ class NightShiftEngine:
                     async with self._in_flight_lock:
                         self._in_flight.add(issue_num)
                     try:
-                        await self._process_fix(issue)
-                        fix_succeeded = True
+                        # issue #50: use the pipeline's real outcome, not
+                        # "the call did not raise" -- a fix that exhausted
+                        # its retries or produced no changes returns
+                        # normally without landing.
+                        fix_succeeded = await self._process_fix(issue)
                     except Exception:
                         logger.warning(
                             "Fix failed for issue #%d, continuing to next",
@@ -626,9 +629,18 @@ class NightShiftEngine:
                 # Update graph: mark complete and find newly-ready issues
                 graph.complete(issue_num)
 
-                # Post-fix staleness check (71-REQ-5.1, 71-REQ-5.E3)
+                # Dedup against re-processing this session regardless of
+                # outcome (issue #465) -- independent of whether the fix
+                # actually landed (issue #50): a failed fix must not be
+                # retried within the same drain loop just because the
+                # platform still returns it.
+                seen.add(issue_num)
+
+                # Post-fix staleness check only for a genuinely integrated
+                # fix -- a failed, skipped, or not-yet-merged issue has no
+                # diff to justify closing anything else (71-REQ-5.1,
+                # 71-REQ-5.E3; issue #50 AC-1, AC-4).
                 if fix_succeeded:
-                    seen.add(issue_num)
                     remaining = [
                         issue_map[n]
                         for n in processing_order
@@ -759,20 +771,27 @@ class NightShiftEngine:
         """
         return getattr(metrics, "cost_usd", 0.0)
 
-    async def _process_fix(self, issue: object, issue_body: str = "") -> None:
+    async def _process_fix(self, issue: object, issue_body: str = "") -> bool:
         """Process a single af:fix issue through the fix pipeline.
 
         Builds an in-memory spec from the issue, runs the full archetype
         pipeline, harvests the branch, and updates the engine state
         including cost and session counters.
 
+        Returns whether the issue was genuinely fixed -- the branch was
+        actually merged into the integration branch -- per
+        ``FixMetrics.outcome``.  A pipeline that returns without merging
+        (retries exhausted, no changes, an empty issue body, an internal
+        exception) or that raises is reported as not fixed, so callers no
+        longer have to infer success from "did not raise" (issue #50).
+
         Requirements: 61-REQ-6.1, 61-REQ-6.2, 61-REQ-6.3, 61-REQ-6.4,
-                      61-REQ-9.3
+                      61-REQ-9.3, NS-REQ-50 (issue #50)
         """
         from afissues.protocol import IssueResult
 
         if not isinstance(issue, IssueResult):
-            return
+            return False
 
         import time
 
@@ -818,7 +837,10 @@ class NightShiftEngine:
             sessions_run = getattr(metrics, "sessions_run", 0)
             input_tokens = getattr(metrics, "input_tokens", 0)
             output_tokens = getattr(metrics, "output_tokens", 0)
-            succeeded = True
+            # Only a genuinely merged fix counts as succeeded (issue #50) --
+            # "the pipeline call returned without raising" is not evidence
+            # the fix landed.
+            succeeded = getattr(metrics, "outcome", "failed") == "fixed"
         except Exception:
             logger.warning(
                 "Fix pipeline raised unexpectedly for issue #%d",
@@ -865,6 +887,7 @@ class NightShiftEngine:
             AuditEventType.FIX_COMPLETE if succeeded else AuditEventType.FIX_FAILED,
             payload={"issue_number": issue.number},
         )
+        return succeeded
 
     async def _drain_issues(self) -> bool:
         """Run issue checks until no open af:fix issues remain.

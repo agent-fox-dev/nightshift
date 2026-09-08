@@ -158,7 +158,15 @@ class FixReviewResult:
 
 @dataclass
 class FixMetrics:
-    """Aggregated token metrics from all sessions in a fix pipeline run."""
+    """Aggregated token metrics and terminal outcome from a fix pipeline run.
+
+    ``outcome`` defaults to ``"failed"`` so a return path that forgets to
+    set it explicitly fails safe rather than being mistaken for a genuine
+    fix (issue #50).  ``process_issue()`` sets it on every terminal path;
+    only ``"fixed"`` -- the branch was actually merged into the
+    integration branch -- should gate ``NightShiftEngine.state.issues_fixed``
+    and the post-fix staleness sweep.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
@@ -166,6 +174,17 @@ class FixMetrics:
     cache_creation_input_tokens: int = 0
     sessions_run: int = 0
     cost_usd: float = 0.0
+    outcome: str = "failed"
+
+
+# Maps FixPipeline._integrate_fix()'s harvest_result to the FixMetrics
+# outcome recorded for it.  "error" is intentionally absent -- it falls
+# through the .get() default to "failed" (issue #50).
+_OUTCOME_BY_HARVEST_RESULT: dict[str, str] = {
+    "merged": "fixed",
+    "no_changes": "no_changes",
+    "pr_created": "pr_created",
+}
 
 
 def build_pr_body(
@@ -1836,6 +1855,7 @@ class FixPipeline:
                 f"(run: `{self._run_id}`)",
             )
             self._try_complete_run("completed")
+            metrics.outcome = "skipped"
             return metrics
 
         spec = build_in_memory_spec(issue, issue_body)
@@ -1895,6 +1915,7 @@ class FixPipeline:
                 # Requirements: NS-REQ-2 (issue #37)
                 await self._mark_issue_failed(issue, spec)
                 self._try_complete_run("completed")
+                metrics.outcome = "failed"
                 return metrics
 
             # Pre-harvest ingestion: record coder-reviewer loop completion
@@ -1939,10 +1960,12 @@ class FixPipeline:
                 exc,
             )
             self._try_complete_run("interrupted")
+            metrics.outcome = "failed"
             return metrics
         finally:
             await self._cleanup_workspace(workspace)
 
+        metrics.outcome = _OUTCOME_BY_HARVEST_RESULT.get(harvest_result, "failed")
         await self._handle_result(issue, spec, harvest_result)
         return metrics
 
