@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from afissues.labels import LABEL_FIX
 from afissues.protocol import IssueResult
 
+from afcore.core.errors import FatalAPIError
 from afcore.core.json_extraction import extract_json_object
 
 if TYPE_CHECKING:
@@ -164,6 +165,10 @@ async def check_staleness(
     - If AI fails: verify via GitHub API only (71-REQ-5.E1)
     - If GitHub fails: log warning, return empty (71-REQ-5.E2)
 
+    :class:`~afcore.core.errors.FatalAPIError` is never absorbed by the AI
+    fallback — a rejected or unfunded API key is propagated so the daemon
+    aborts with a clear message.
+
     Requirements: 71-REQ-5.1, 71-REQ-5.2, 71-REQ-5.E1, 71-REQ-5.E2
     """
     # Exclude in-flight issues from staleness evaluation
@@ -180,6 +185,11 @@ async def check_staleness(
     try:
         ai_result = await _run_ai_staleness(fixed_issue, remaining_issues, fix_diff, config, sink=sink, run_id=run_id)
         ai_rationale = ai_result.rationale
+    except FatalAPIError:
+        # Non-recoverable API condition (no credit, rejected credentials).
+        # Every later AI call would fail the same way, so propagate instead
+        # of degrading to the GitHub-only fallback.
+        raise
     except Exception:
         ai_failed = True
         logger.warning(

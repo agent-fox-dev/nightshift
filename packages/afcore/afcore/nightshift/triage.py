@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from afissues.protocol import IssueResult
 
-from afcore.core.errors import AgentFoxError
+from afcore.core.errors import AgentFoxError, FatalAPIError
 from afcore.core.json_extraction import extract_json_object
 from afcore.core.prompt_safety import sanitize_prompt_content
 from afcore.engine.sdk_params import resolve_model_tier, resolve_security_config
@@ -208,6 +208,10 @@ async def run_batch_triage(
     try:
         return await _run_ai_triage(issues, explicit_edges, config, sink=sink, run_id=run_id)
     except TriageError:
+        raise
+    except FatalAPIError:
+        # Non-recoverable API condition — propagate so the daemon aborts
+        # rather than falling back to explicit refs.
         raise
     except Exception as exc:
         raise TriageError(f"AI triage failed: {exc}") from exc

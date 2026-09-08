@@ -63,3 +63,17 @@ class SecurityError(AgentFoxError): ...
 
 
 class KnowledgeStoreError(AgentFoxError): ...
+
+
+class FatalAPIError(AgentFoxError):
+    """Non-recoverable model-API error (billing, authentication, access).
+
+    Raised when the Anthropic API rejects a call for a reason that
+    retrying — or falling back to a degraded code path — cannot fix:
+    the account is out of credit, the API key is invalid, or the
+    credentials are not permitted to use the endpoint.
+
+    Callers must let this propagate so the daemon aborts with a clear
+    message instead of silently continuing with every subsequent AI call
+    failing the same way.
+    """
