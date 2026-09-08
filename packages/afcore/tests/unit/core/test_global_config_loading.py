@@ -333,6 +333,123 @@ class TestLocalShadowingIsAnnounced:
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
+class TestGlobalModelsCarryForward:
+    """The global ``[models]`` table can be read back for carry-forward.
+
+    A generated local config shadows the global one, so the model
+    overrides have to travel into it.
+    """
+
+    def test_reads_models_table(self, fake_home, global_config_dir, clean_af_env):
+        """The raw table is returned exactly as written."""
+        from afcore.core.config import read_global_models_section
+
+        (global_config_dir / "config.toml").write_text(
+            textwrap.dedent("""\
+            [models.registry.claude-sonnet-5]
+            tier = "SIMPLE"
+
+            [models.tier_defaults]
+            SIMPLE = "claude-sonnet-5"
+        """)
+        )
+
+        assert read_global_models_section() == {
+            "registry": {"claude-sonnet-5": {"tier": "SIMPLE"}},
+            "tier_defaults": {"SIMPLE": "claude-sonnet-5"},
+        }
+
+    def test_empty_when_no_models_table(self, fake_home, global_config_dir, clean_af_env):
+        """A global config without [models] yields an empty dict."""
+        from afcore.core.config import read_global_models_section
+
+        (global_config_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 3\n")
+
+        assert read_global_models_section() == {}
+
+    def test_empty_when_no_global_config(self, fake_home, clean_af_env):
+        """No global config at all yields an empty dict."""
+        from afcore.core.config import read_global_models_section
+
+        assert read_global_models_section() == {}
+
+    def test_empty_when_global_unparseable(self, fake_home, global_config_dir, clean_af_env):
+        """Malformed TOML is swallowed — carry-forward is best-effort."""
+        from afcore.core.config import read_global_models_section
+
+        (global_config_dir / "config.toml").write_text("[models\nbroken")
+
+        assert read_global_models_section() == {}
+
+    def test_rendered_toml_round_trips(self, fake_home, global_config_dir, clean_af_env):
+        """The rendered text parses back to the same table."""
+        import tomllib
+
+        from afcore.core.config_gen import render_global_models_toml
+
+        (global_config_dir / "config.toml").write_text(
+            textwrap.dedent("""\
+            [models.registry.claude-opus-5]
+            tier = "ADVANCED"
+
+            [models.tier_defaults]
+            SIMPLE = "claude-sonnet-5"
+            ADVANCED = "claude-opus-5"
+        """)
+        )
+
+        rendered = render_global_models_toml()
+
+        assert tomllib.loads(rendered)["models"] == {
+            "registry": {"claude-opus-5": {"tier": "ADVANCED"}},
+            "tier_defaults": {"SIMPLE": "claude-sonnet-5", "ADVANCED": "claude-opus-5"},
+        }
+
+    def test_renders_empty_string_without_models(self, fake_home, global_config_dir, clean_af_env):
+        """Nothing to carry renders as the empty string, safe to append."""
+        from afcore.core.config_gen import render_global_models_toml
+
+        (global_config_dir / "config.toml").write_text("[orchestrator]\nmax_retries = 3\n")
+
+        assert render_global_models_toml() == ""
+
+
+class TestShadowWarningWordsModelsPrecisely:
+    """The warning must not claim [models] is lost when it is not."""
+
+    def _warn(self, tmp_path, monkeypatch, caplog, local_body):
+        repo = tmp_path / "repo"
+        local_dir = repo / ".nightshift"
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / "config.toml").write_text(local_body)
+        monkeypatch.chdir(repo)
+        with caplog.at_level(logging.WARNING):
+            load_config()
+        return [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING][0]
+
+    def test_mentions_models_when_local_lacks_it(
+        self, fake_home, global_config, tmp_path, monkeypatch, caplog, clean_af_env
+    ):
+        """Without a local [models] the overrides really are gone — say so."""
+        message = self._warn(tmp_path, monkeypatch, caplog, "[orchestrator]\nmax_retries = 5\n")
+
+        assert "[models]" in message
+
+    def test_omits_models_claim_when_carried_forward(
+        self, fake_home, global_config, tmp_path, monkeypatch, caplog, clean_af_env
+    ):
+        """With a local [models] nothing was lost — do not claim otherwise."""
+        message = self._warn(
+            tmp_path,
+            monkeypatch,
+            caplog,
+            '[models.tier_defaults]\nSIMPLE = "claude-sonnet-4-6"\n',
+        )
+
+        assert "[models]" not in message
+        assert "ignored entirely" in message
+
+
 class TestConfigSourcePath:
     """AgentFoxConfig records which file is actually in effect."""
 

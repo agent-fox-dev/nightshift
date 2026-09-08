@@ -404,6 +404,29 @@ def _render_section(section: SectionSpec, lines: list[str]) -> None:
         _render_section(sub, lines)
 
 
+def render_global_models_toml() -> str:
+    """Render the global config's ``[models]`` table as TOML text.
+
+    Returns ``""`` when the global config has no ``[models]`` table, so
+    callers can append the result unconditionally.
+
+    Used when generating a local ``.nightshift/config.toml``: the local
+    file becomes the sole config source, so a user's global tier defaults
+    and registry entries have to travel with it or they stop applying.
+    """
+    from afcore.core.config import read_global_models_section
+
+    models = read_global_models_section()
+    if not models:
+        return ""
+
+    try:
+        return tomlkit.dumps({"models": models})
+    except Exception:  # pragma: no cover - defensive; tomlkit handles TOML types
+        logger.warning("Could not render global [models] section; omitting it")
+        return ""
+
+
 def generate_default_config() -> str:
     """Generate a complete commented config.toml from AgentFoxConfig.
 
