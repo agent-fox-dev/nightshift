@@ -1,13 +1,15 @@
 """Unit tests for the afcore.io package public API.
 
-Verifies that the package re-exports exactly the twelve curated public
-symbols specified by Spec 03, that internal symbols are not exposed,
-and that the package structure contains the required seven files.
+Verifies that the package re-exports the curated public symbols
+specified by Spec 03, that internal symbols are not exposed,
+and that the package structure contains the required files.
 
 Spec 04 later extended the package with additional symbols
 (format_table, ProgressDisplay) and files (progress.py).
-These tests validate the original Spec 03 contract while acknowledging
-documented extensions.  See docs/errata/03_io_package_extended_by_spec_04.md.
+Issue #99 removed StatusSpinner (dead code with no production
+caller) and its module spinner.py.
+
+See docs/errata/03_io_package_extended_by_spec_04.md.
 
 Test Spec: TS-03-1, TS-03-2, TS-03-3, TS-03-E1
 Requirements: 03-REQ-1.1, 03-REQ-1.2, 03-REQ-1.3, 03-REQ-1.E1
@@ -19,10 +21,10 @@ import os
 
 import pytest
 
-# The twelve curated public symbols specified by Spec 03 (03-REQ-1.1).
+# The original twelve Spec 03 symbols, minus StatusSpinner which was
+# removed in #99 (dead code — no production caller).
 SPEC_03_PUBLIC_SYMBOLS = [
     "OutputManager",
-    "StatusSpinner",
     "get_output_manager",
     "emit",
     "emit_ok",
@@ -35,6 +37,11 @@ SPEC_03_PUBLIC_SYMBOLS = [
     "exit_codes",
 ]
 
+# Symbols removed from the public API (documented removals).
+REMOVED_SYMBOLS = [
+    "StatusSpinner",  # removed in #99 — dead code, no production caller
+]
+
 # Additional symbols added by Spec 04, documented in errata.
 SPEC_04_EXTRA_SYMBOLS = [
     "ProgressDisplay",
@@ -43,21 +50,28 @@ SPEC_04_EXTRA_SYMBOLS = [
 
 
 class TestPublicAPI:
-    """TS-03-1: Verify all twelve Spec 03 public symbols are importable from afcore.io."""
+    """TS-03-1: Verify all Spec 03 public symbols are importable from afcore.io."""
 
-    def test_all_twelve_spec03_symbols_importable(self) -> None:
-        """03-REQ-1.1: All twelve Spec 03 symbols are importable from afcore.io."""
+    def test_all_spec03_symbols_importable(self) -> None:
+        """03-REQ-1.1: All surviving Spec 03 symbols are importable from afcore.io."""
         import afcore.io
 
         for sym in SPEC_03_PUBLIC_SYMBOLS:
             assert hasattr(afcore.io, sym), f"{sym} not found in afcore.io"
 
-    def test_exactly_twelve_spec03_symbols(self) -> None:
-        """03-REQ-1.1: Validate the original Spec 03 contract of exactly twelve symbols.
+    def test_removed_symbols_absent(self) -> None:
+        """Symbols removed in #99 are no longer in the public API."""
+        import afcore.io
+
+        for sym in REMOVED_SYMBOLS:
+            assert sym not in afcore.io.__all__, f"{sym} should have been removed from afcore.io"
+
+    def test_spec03_symbols_present(self) -> None:
+        """03-REQ-1.1: Validate that all surviving Spec 03 symbols are present.
 
         The package may contain additional symbols added by later specs
-        (documented in errata), but the original twelve must all be present
-        and any extras must be from the known Spec 04 extension set.
+        (documented in errata), but the surviving symbols must all be present
+        and any extras must be from the known extension sets.
         """
         import afcore.io
 
@@ -65,7 +79,7 @@ class TestPublicAPI:
         spec_03_expected = set(SPEC_03_PUBLIC_SYMBOLS)
         spec_04_known = set(SPEC_04_EXTRA_SYMBOLS)
 
-        # All twelve original symbols must be present.
+        # All surviving symbols must be present.
         missing = spec_03_expected - actual_public
         assert missing == set(), f"Missing Spec 03 symbols: {missing}"
 
@@ -73,7 +87,7 @@ class TestPublicAPI:
         extras = actual_public - spec_03_expected
         undocumented = extras - spec_04_known
         assert undocumented == set(), (
-            f"Undocumented extra symbols beyond Spec 03 twelve and Spec 04 extensions: {undocumented}"
+            f"Undocumented extra symbols beyond Spec 03 and Spec 04 extensions: {undocumented}"
         )
 
     def test_handle_cli_errors_not_in_public_api(self) -> None:
@@ -99,25 +113,23 @@ class TestHandleCliErrorsExclusion:
 
 
 class TestPackageStructure:
-    """TS-03-3: Verify the afcore/io/ directory contains the seven Spec 03 required files."""
+    """TS-03-3: Verify the afcore/io/ directory contains the required files."""
 
-    def test_exactly_seven_spec03_files_exist(self) -> None:
-        """03-REQ-1.3: All seven Spec 03 files exist in afcore/io/.
+    def test_spec03_files_exist(self) -> None:
+        """03-REQ-1.3: Required Spec 03 files exist in afcore/io/.
 
-        Spec 04 later added progress.py; any extra .py files beyond the
-        original seven must be from the documented extension set.
+        spinner.py was removed in #99 (dead code). Spec 04 added progress.py.
         """
         import afcore.io
 
         io_dir = os.path.dirname(afcore.io.__file__)
         files = set(os.listdir(io_dir))
 
-        # The seven files specified by Spec 03.
+        # The surviving Spec 03 files (spinner.py removed in #99).
         spec_03_files = {
             "__init__.py",
             "output.py",
             "json.py",
-            "spinner.py",
             "errors.py",
             "cli.py",
             "help.py",
@@ -128,17 +140,18 @@ class TestPackageStructure:
             "progress.py",
         }
 
-        # All seven original files must be present.
+        # All surviving files must be present.
         missing = spec_03_files - files
-        assert missing == set(), f"Missing Spec 03 files: {missing}"
+        assert missing == set(), f"Missing required files: {missing}"
 
-        # Any extra .py files must be from the documented Spec 04 set.
+        # spinner.py should be gone.
+        assert "spinner.py" not in files, "spinner.py should have been removed in #99"
+
+        # Any extra .py files must be from the documented extension set.
         all_py_files = {f for f in files if f.endswith(".py")}
         extras = all_py_files - spec_03_files
         undocumented = extras - spec_04_extra_files
-        assert undocumented == set(), (
-            f"Undocumented extra .py files beyond Spec 03 seven and Spec 04 extensions: {undocumented}"
-        )
+        assert undocumented == set(), f"Undocumented extra .py files beyond expected set: {undocumented}"
 
 
 class TestSubmoduleInternalSymbol:

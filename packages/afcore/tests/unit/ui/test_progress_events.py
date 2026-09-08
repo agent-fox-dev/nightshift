@@ -1,8 +1,7 @@
-"""Tests for progress display improvements: truncation, archetypes, retry.
+"""Tests for progress display improvements: truncation, archetypes.
 
 Test Spec: TS-59-20 through TS-59-28
-Requirements: 59-REQ-6.1, 59-REQ-6.2, 59-REQ-7.1 through 59-REQ-7.E1,
-              59-REQ-8.1 through 59-REQ-8.E1
+Requirements: 59-REQ-6.1, 59-REQ-6.2, 59-REQ-7.1 through 59-REQ-7.E1
 """
 
 from __future__ import annotations
@@ -129,28 +128,6 @@ class TestTaskLineArchetypeFailure:
         assert "failed" in text, f"Expected 'failed' in: {text!r}"
 
 
-class TestTaskLineArchetypeBlocked:
-    """TS-59-24 (part): Blocked task line includes [archetype].
-
-    Requirement: 59-REQ-7.3
-    """
-
-    def test_blocked_line_includes_archetype(self) -> None:
-        """Blocked task event line contains [archetype] and 'blocked'."""
-        theme, _buf = _make_theme()
-        display = ProgressDisplay(theme, quiet=False)
-        event = TaskEvent(
-            node_id="spec:1",
-            status="blocked",
-            duration_s=0,
-            archetype="coder",
-        )
-        line = display._format_task_line(event)
-        text = str(line)
-        assert "[coder]" in text, f"Expected [coder] in: {text!r}"
-        assert "blocked" in text, f"Expected 'blocked' in: {text!r}"
-
-
 class TestTaskLineArchetypeNone:
     """TS-59-24: When archetype is None, bracket label is omitted.
 
@@ -176,62 +153,13 @@ class TestTaskLineArchetypeNone:
 
 
 # ---------------------------------------------------------------------------
-# TS-59-25 through TS-59-28: Disagreement, retry, escalation lines
+# TS-59-27/28: TaskEvent has no removed fields
 # ---------------------------------------------------------------------------
 
 
-class TestDisagreementLine:
-    """TS-59-25: Reviewer disagreement produces correct permanent line.
-
-    Requirement: 59-REQ-8.1
-    """
-
-    def test_disagreement_line_format(self) -> None:
-        """Disagreement event contains ✗, [skeptic], disagrees, and predecessor."""
-        theme, _buf = _make_theme()
-        display = ProgressDisplay(theme, quiet=False)
-        event = TaskEvent(
-            node_id="spec:0",
-            status="disagreed",
-            duration_s=0,
-            archetype="reviewer",
-            predecessor_node="spec:1",
-        )
-        line = display._format_task_line(event)
-        text = str(line)
-        assert "[reviewer]" in text, f"Expected [reviewer] in: {text!r}"
-        assert "disagrees" in text, f"Expected 'disagrees' in: {text!r}"
-        assert "spec:1" in text, f"Expected predecessor 'spec:1' in: {text!r}"
-
-
-class TestRetryLine:
-    """TS-59-26: Retry event produces correct permanent line.
-
-    Requirement: 59-REQ-8.2
-    """
-
-    def test_retry_line_format(self) -> None:
-        """Retry event contains ⟳, [coder], retry #2."""
-        theme, _buf = _make_theme()
-        display = ProgressDisplay(theme, quiet=False)
-        event = TaskEvent(
-            node_id="spec:1",
-            status="retry",
-            duration_s=0,
-            archetype="coder",
-            attempt=2,
-        )
-        line = display._format_task_line(event)
-        text = str(line)
-        assert "retry #2" in text, f"Expected 'retry #2' in: {text!r}"
-        assert "[coder]" in text, f"Expected [coder] in: {text!r}"
-
-
-class TestRetryNoEscalationFields:
-    """TS-59-27/28: TaskEvent has no escalated_from/escalated_to fields.
-
-    Escalation fields were removed in #22 — retry lines never include
-    escalation text.
+class TestTaskEventRemovedFields:
+    """TS-59-27/28: TaskEvent has no escalated_from/escalated_to fields,
+    and no attempt/predecessor_node fields (removed in #99).
     """
 
     def test_task_event_has_no_escalation_fields(self) -> None:
@@ -242,18 +170,10 @@ class TestRetryNoEscalationFields:
         assert "escalated_from" not in field_names
         assert "escalated_to" not in field_names
 
-    def test_retry_line_omits_escalation(self) -> None:
-        """Retry event line does not contain 'escalated'."""
-        theme, _buf = _make_theme()
-        display = ProgressDisplay(theme, quiet=False)
-        event = TaskEvent(
-            node_id="spec:1",
-            status="retry",
-            duration_s=0,
-            archetype="coder",
-            attempt=2,
-        )
-        line = display._format_task_line(event)
-        text = str(line)
-        assert "retry #2" in text, f"Expected 'retry #2' in: {text!r}"
-        assert "escalated" not in text, f"Expected 'escalated' not in: {text!r}"
+    def test_task_event_has_no_phantom_fields(self) -> None:
+        """TaskEvent dataclass has no attempt or predecessor_node fields (#99)."""
+        import dataclasses
+
+        field_names = {f.name for f in dataclasses.fields(TaskEvent)}
+        assert "attempt" not in field_names, "attempt field should have been removed in #99"
+        assert "predecessor_node" not in field_names, "predecessor_node field should have been removed in #99"

@@ -93,7 +93,7 @@ class TestQuietNoOutput:
     @given(
         node_ids=st.lists(st.text(min_size=1, max_size=20), min_size=1, max_size=20),
         statuses=st.lists(
-            st.sampled_from(["completed", "failed", "blocked"]),
+            st.sampled_from(["completed", "failed"]),
             min_size=0,
             max_size=5,
         ),
@@ -158,7 +158,7 @@ class TestPermanentLinesContainNodeId:
             min_size=1,
             max_size=50,
         ),
-        status=st.sampled_from(["completed", "failed", "blocked"]),
+        status=st.sampled_from(["completed", "failed"]),
     )
     @settings(max_examples=50)
     def test_permanent_line_contains_node_id(self, node_id: str, status: str) -> None:

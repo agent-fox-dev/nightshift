@@ -18,7 +18,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Literal
 
 from rich.console import Console
 from rich.live import Live
@@ -26,6 +26,9 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from afcore.ui.display import AppTheme
+
+#: The two task statuses actually emitted by production code.
+TaskStatus = Literal["completed", "failed"]
 
 
 def format_tokens(count: int | None) -> str:
@@ -37,9 +40,6 @@ def format_tokens(count: int | None) -> str:
         return f"{count / 1000:.1f}k"
     return str(count)
 
-
-if TYPE_CHECKING:
-    from afcore.io.spinner import StatusSpinner
 
 # ---------------------------------------------------------------------------
 # Event types and formatting helpers (formerly ui/events.py)
@@ -63,12 +63,10 @@ class TaskEvent:
     """Orchestrator task state change."""
 
     node_id: str
-    status: str  # "completed" | "failed" | "blocked" | "retry" | "disagreed"
+    status: TaskStatus  # "completed" | "failed"
     duration_s: float  # wall-clock seconds for the task
     error_message: str | None = None
     archetype: str | None = None  # e.g. "coder", "reviewer", "verifier"
-    attempt: int | None = None  # retry attempt number
-    predecessor_node: str | None = None  # for disagreement lines
     input_tokens: int = 0  # cumulative input tokens for this phase
     output_tokens: int = 0  # cumulative output tokens for this phase
 
@@ -198,9 +196,8 @@ def format_duration(seconds: float) -> str:
 logger = logging.getLogger(__name__)
 
 # Icons for permanent lines
-_CHECK = "\u2714"  # ✔
-_CROSS = "\u2718"  # ✘
-_RETRY = "\u27f3"  # ⟳
+_CHECK = "✔"  # checkmark
+_CROSS = "✘"  # cross
 
 
 class ProgressDisplay:
@@ -212,14 +209,12 @@ class ProgressDisplay:
     """
 
     def __init__(self, theme: AppTheme, *, quiet: bool = False) -> None:
-        self._theme = theme
         self._quiet = quiet
         self._console = theme.console
         self._is_tty = self._console.is_terminal
         self._lock = threading.Lock()
         self._live: Live | None = None
         self._spinner_text = ""
-        self._started = False
 
     def start(self) -> None:
         """Start the spinner. No-op if quiet or non-TTY."""
@@ -236,7 +231,6 @@ class ProgressDisplay:
             # Route log messages through the Live console so they
             # appear above the spinner instead of corrupting it.
             self._register_live_console(self._live.console)
-        self._started = True
 
     def stop(self) -> None:
         """Stop the spinner and clear the line."""
@@ -247,7 +241,6 @@ class ProgressDisplay:
             except Exception:
                 pass
             self._live = None
-        self._started = False
 
     def on_activity(self, event: ActivityEvent) -> None:
         """Update the spinner line with new activity. Serialized via lock.
@@ -272,7 +265,7 @@ class ProgressDisplay:
             summary = f"{prefix}[{event.node_id}]{arch_label} {verb}…"
 
             if event.argument:
-                detail = f"  \u23bf  {event.argument}"
+                detail = f"  ⎿  {event.argument}"
                 # Truncate each line independently
                 if len(summary) > width:
                     summary = summary[: width - 3] + "..."
@@ -384,59 +377,8 @@ class ProgressDisplay:
         elif event.status == "failed":
             text = f"{_CROSS} {event.node_id}{arch_label} failed{token_suffix}"
             return Text(text, style="bold red")
-        elif event.status == "blocked":
-            text = f"{_CROSS} {event.node_id}{arch_label} blocked"
-            return Text(text, style="bold red")
-        elif event.status == "disagreed":
-            pred = event.predecessor_node or ""
-            text = f"{_CROSS} {event.node_id}{arch_label} disagrees → retry {pred}"
-            return Text(text, style="bold yellow")
-        elif event.status == "retry":
-            attempt = event.attempt or 1
-            base = f"{_RETRY} {event.node_id}{arch_label} retry #{attempt}"
-            return Text(base, style="bold yellow")
         else:
+            # Defensive fallback for any future status value.
+            logger.warning("Unexpected TaskEvent status: %r", event.status)
             text = f"{_CROSS} {event.node_id}{arch_label} {event.status}"
             return Text(text, style="bold red")
-
-
-class PlanSpinner:
-    """Spinner on stderr for plan initialization.
-
-    Delegates to ``StatusSpinner`` from ``afcore.io.spinner`` for all
-    animation logic. Provides a ``start()``/``stop()`` lifecycle API
-    for callers that cannot use a context manager.
-
-    One-shot: once stopped, ``start()`` is a no-op.
-    """
-
-    def __init__(self, message: str = "Planning...") -> None:
-        self._message = message
-        self._started = False
-        self._stopped = False
-        # Lazily imported StatusSpinner — see start()
-        self._spinner: StatusSpinner | None = None
-
-    def start(self) -> None:
-        """Start the spinner. No-op if already started or non-TTY."""
-        if self._started:
-            return
-        self._started = True
-        from afcore.io.spinner import StatusSpinner
-
-        self._spinner = StatusSpinner(self._message, quiet=False)
-        self._spinner.__enter__()
-
-    def stop(self) -> None:
-        """Stop the spinner and clear the line."""
-        if not self._started or self._stopped:
-            return
-        self._stopped = True
-        if self._spinner is not None:
-            self._spinner.__exit__(None, None, None)
-            self._spinner = None
-
-    @property
-    def is_running(self) -> bool:
-        """True while the spinner is active."""
-        return self._started and not self._stopped

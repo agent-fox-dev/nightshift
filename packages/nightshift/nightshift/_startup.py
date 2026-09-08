@@ -198,6 +198,7 @@ def wrap_task_callback(progress, om):
                 duration_s=dur,
             )
         else:
+            logger.warning("Unexpected task status %r for node %s", status, nid)
             _ensure_started(nid)
 
     return _cb

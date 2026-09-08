@@ -132,7 +132,7 @@ class TestUiCallbackInvokedOnce:
 
     def test_other_status_calls_ui_once(self) -> None:
         cb, _, ui_cb = _make_callback()
-        ev = _FakeTaskEvent(node_id="n", status="blocked")
+        ev = _FakeTaskEvent(node_id="n", status="unknown")
         cb(ev)
         assert ui_cb.call_count == 1
 
@@ -198,9 +198,9 @@ class TestStartedEmittedOncePerNode:
     """Ensure task_started is emitted only once per node_id, not duplicated."""
 
     def test_completed_after_other_status(self) -> None:
-        """A node seen first via 'blocked', then 'completed', gets one task_started."""
+        """A node seen first via unexpected status, then 'completed', gets one task_started."""
         cb, om, _ = _make_callback()
-        cb(_FakeTaskEvent(node_id="n", status="blocked"))
+        cb(_FakeTaskEvent(node_id="n", status="unknown"))
         cb(_FakeTaskEvent(node_id="n", status="completed", duration_s=5.0))
 
         events = _emitted_events(om)

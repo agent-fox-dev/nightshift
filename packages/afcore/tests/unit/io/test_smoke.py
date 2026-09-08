@@ -20,9 +20,7 @@ from afcore.core.errors import AgentFoxError
 from click.testing import CliRunner
 
 from tests.unit.io.conftest import (
-    capture_stderr,
     capture_stdout,
-    mock_non_tty,
     mock_stdin,
 )
 
@@ -164,27 +162,8 @@ class TestSmoke3HumanError:
 
 
 # ---------------------------------------------------------------------------
-# TS-03-SMOKE-4: StatusSpinner in non-TTY CI environment
-# PATH-4: non-TTY -> plain text stderr -> update() + log()
+# TS-03-SMOKE-4: StatusSpinner was removed in #99 (dead code).
 # ---------------------------------------------------------------------------
-
-
-class TestSmoke4SpinnerNonTTY:
-    """TS-03-SMOKE-4: StatusSpinner in non-TTY prints plain text to stderr."""
-
-    def test_non_tty_spinner(self) -> None:
-        """PATH-4: update() and log() produce plain text lines on stderr."""
-        from afcore.io import StatusSpinner
-
-        with mock_non_tty():
-            with capture_stderr() as err:
-                with StatusSpinner("Processing...", quiet=False, theme=None) as s:
-                    s.update("Step 1 complete")
-                    s.log("Detail logged")
-
-        output = err.getvalue()
-        assert "Step 1 complete" in output
-        assert "Detail logged" in output
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +309,6 @@ class TestStubAudit:
             # Verify callable symbols are actually callable
             if sym_name not in (
                 "OutputManager",
-                "StatusSpinner",
                 "AgentFoxGroup",
                 "ProgressDisplay",
             ):

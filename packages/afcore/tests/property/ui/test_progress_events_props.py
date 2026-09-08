@@ -1,9 +1,8 @@
 """Property tests for progress display improvements.
 
-Test Spec: TS-59-P1, TS-59-P2, TS-59-P3
-Properties: 1-3 from design.md
-Requirements: 59-REQ-6.1, 59-REQ-6.2, 59-REQ-7.1 through 59-REQ-7.3,
-              59-REQ-8.2, 59-REQ-8.3, 59-REQ-8.E1
+Test Spec: TS-59-P1, TS-59-P2
+Properties: 1-2 from design.md
+Requirements: 59-REQ-6.1, 59-REQ-6.2, 59-REQ-7.1 through 59-REQ-7.3
 """
 
 from __future__ import annotations
@@ -61,12 +60,12 @@ class TestArchetypeLabelPresence:
     """TS-59-P2: TaskEvent with archetype always produces [archetype] in line.
 
     Property 2: For any archetype in known set and status in
-    {completed, failed, blocked}, the formatted line contains [archetype].
+    {completed, failed}, the formatted line contains [archetype].
     """
 
     @given(
         archetype=st.sampled_from(_ARCHETYPES),
-        status=st.sampled_from(["completed", "failed", "blocked"]),
+        status=st.sampled_from(["completed", "failed"]),
     )
     @settings(max_examples=50)
     def test_archetype_in_formatted_line(self, archetype: str, status: str) -> None:
@@ -82,31 +81,3 @@ class TestArchetypeLabelPresence:
         line = display._format_task_line(event)
         text = str(line)
         assert f"[{archetype}]" in text, f"Expected [{archetype}] in formatted line: {text!r}"
-
-
-class TestEventLineFormatCorrectness:
-    """TS-59-P3: Retry events include attempt; no escalation fields.
-
-    Property 3: For any attempt 1-10, retry #{attempt} is always present
-    and no escalation text appears (escalation fields removed in #22).
-    """
-
-    @given(
-        attempt=st.integers(min_value=1, max_value=10),
-    )
-    @settings(max_examples=50)
-    def test_retry_format_correctness(self, attempt: int) -> None:
-        """Retry lines always have attempt; never escalation text."""
-        theme, _buf = _make_theme()
-        display = ProgressDisplay(theme, quiet=False)
-        event = TaskEvent(
-            node_id="s:1",
-            status="retry",
-            duration_s=0,
-            archetype="coder",
-            attempt=attempt,
-        )
-        line = display._format_task_line(event)
-        text = str(line)
-        assert f"retry #{attempt}" in text, f"Expected 'retry #{attempt}' in: {text!r}"
-        assert "escalated:" not in text, f"Unexpected escalation text in: {text!r}"
