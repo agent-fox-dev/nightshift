@@ -164,7 +164,7 @@ class TestCliCreatesSinkDispatcher:
         from click.testing import CliRunner
         from nightshift.app import main as night_shift_cmd
 
-        mock_state = DaemonState(total_cost=0.0, issues_fixed=0)
+        mock_state = DaemonState(total_cost=0.0)
 
         with (
             patch("afcore.nightshift.engine.validate_night_shift_prerequisites"),
@@ -679,7 +679,7 @@ class TestCliDuckDBUnavailable:
         from click.testing import CliRunner
         from nightshift.app import main as night_shift_cmd
 
-        mock_state = DaemonState(total_cost=0.0, issues_fixed=0)
+        mock_state = DaemonState(total_cost=0.0)
 
         with (
             patch("afcore.nightshift.engine.validate_night_shift_prerequisites"),

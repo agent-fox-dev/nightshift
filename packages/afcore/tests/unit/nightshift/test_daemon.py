@@ -6,8 +6,7 @@ Test Spec: TS-85-2, TS-85-3, TS-85-4, TS-85-7, TS-85-8, TS-85-9,
 Requirements: 85-REQ-1.2, 85-REQ-1.3, 85-REQ-1.4, 85-REQ-1.E2,
               85-REQ-2.2, 85-REQ-2.3, 85-REQ-2.4, 85-REQ-2.5,
               85-REQ-4.2, 85-REQ-4.3, 85-REQ-4.E1,
-              85-REQ-5.1, 85-REQ-5.2, 85-REQ-5.E1,
-              85-REQ-9.2
+              85-REQ-5.1, 85-REQ-5.2, 85-REQ-5.E1
 """
 
 from __future__ import annotations
@@ -39,13 +38,10 @@ def _make_mock_stream(
     return stream
 
 
-def _make_config(
-    enabled_streams: list[str] | None = None,
-) -> MagicMock:
+def _make_config() -> MagicMock:
     """Create a mock config for DaemonRunner."""
     config = MagicMock()
     ns = MagicMock()
-    ns.enabled_streams = enabled_streams or ["specs", "fixes", "hunts"]
     config.night_shift = ns
     return config
 
@@ -107,18 +103,18 @@ class TestDaemonStreamRegistration:
         from afcore.nightshift.daemon import DaemonRunner, SharedBudget
 
         streams = [
-            _make_mock_stream(name="spec-executor"),
             _make_mock_stream(name="fix-pipeline"),
-            _make_mock_stream(name="hunt-scan"),
+            _make_mock_stream(name="pr-feedback"),
+            _make_mock_stream(name="carry-patch"),
         ]
         budget = SharedBudget(max_cost=None)
         config = _make_config()
         runner = DaemonRunner(config, None, streams, budget)  # type: ignore[arg-type]
         assert len(runner.streams) == 3
         assert [s.name for s in runner.streams] == [
-            "spec-executor",
             "fix-pipeline",
-            "hunt-scan",
+            "pr-feedback",
+            "carry-patch",
         ]
 
 
@@ -261,7 +257,7 @@ class TestStreamPriorityOrder:
     """Verify streams launch in priority order."""
 
     async def test_launch_order(self, tmp_path: Path) -> None:
-        """Spec executor launched first, fix pipeline second, then rest."""
+        """Fix pipeline launched first, pr-feedback second, then rest."""
         from afcore.nightshift.daemon import DaemonRunner, SharedBudget
 
         launch_order: list[str] = []
@@ -276,8 +272,8 @@ class TestStreamPriorityOrder:
             return stream
 
         streams = [
-            make_recording_stream("spec-executor"),
             make_recording_stream("fix-pipeline"),
+            make_recording_stream("pr-feedback"),
             make_recording_stream("hunt-scan"),
         ]
 
@@ -295,8 +291,8 @@ class TestStreamPriorityOrder:
 
         # First 3 entries should be in priority order
         assert launch_order[:3] == [
-            "spec-executor",
             "fix-pipeline",
+            "pr-feedback",
             "hunt-scan",
         ]
 
@@ -326,8 +322,8 @@ class TestSimultaneousWakePriority:
             return stream
 
         streams = [
-            make_recording_stream("spec-executor"),
             make_recording_stream("fix-pipeline"),
+            make_recording_stream("pr-feedback"),
             make_recording_stream("hunt-scan"),
         ]
 
@@ -344,31 +340,10 @@ class TestSimultaneousWakePriority:
         await task
 
         assert execution_order[:3] == [
-            "spec-executor",
             "fix-pipeline",
+            "pr-feedback",
             "hunt-scan",
         ]
-
-
-# ---------------------------------------------------------------------------
-# TS-85-27: Unknown stream name in enabled_streams
-# Requirement: 85-REQ-9.2
-# ---------------------------------------------------------------------------
-
-
-class TestUnknownStreamName:
-    """Verify unknown stream names are warned and ignored."""
-
-    def test_unknown_stream_ignored(self) -> None:
-        """Unknown stream in enabled_streams does not cause error."""
-        from afcore.nightshift.daemon import DaemonRunner, SharedBudget
-
-        streams = [_make_mock_stream(name="spec-executor")]
-        config = _make_config(enabled_streams=["specs", "unknown_stream"])
-        budget = SharedBudget(max_cost=None)
-        # Should not raise
-        runner = DaemonRunner(config, None, streams, budget)  # type: ignore[arg-type]
-        assert len(runner.streams) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -400,18 +375,18 @@ class TestAllStreamsDisabled:
 # ---------------------------------------------------------------------------
 
 
-class TestDisabledSpecExecutorNoPriorityDelay:
-    """Verify disabling spec executor doesn't delay other streams."""
+class TestDisabledHighPriorityNoPriorityDelay:
+    """Verify disabling a high-priority stream doesn't delay other streams."""
 
-    async def test_fix_pipeline_launches_immediately(self, tmp_path: Path) -> None:
-        """Fix pipeline launches without waiting for disabled spec executor."""
+    async def test_lower_priority_launches_immediately(self, tmp_path: Path) -> None:
+        """Lower-priority stream launches without waiting for disabled higher-priority one."""
         from afcore.nightshift.daemon import DaemonRunner, SharedBudget
 
-        spec = _make_mock_stream(name="spec-executor", enabled=False)
-        fix = _make_mock_stream(name="fix-pipeline", enabled=True)
+        high = _make_mock_stream(name="fix-pipeline", enabled=False)
+        low = _make_mock_stream(name="pr-feedback", enabled=True)
         budget = SharedBudget(max_cost=None)
         config = _make_config()
-        runner = DaemonRunner(config, None, [spec, fix], budget, pid_path=tmp_path / "d.pid")
+        runner = DaemonRunner(config, None, [high, low], budget, pid_path=tmp_path / "d.pid")
 
         async def shutdown_after_delay() -> None:
             await asyncio.sleep(0.2)
@@ -420,7 +395,7 @@ class TestDisabledSpecExecutorNoPriorityDelay:
         task = asyncio.create_task(shutdown_after_delay())
         await runner.run()
         await task
-        assert fix.run_once.call_count >= 1
+        assert low.run_once.call_count >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -444,12 +419,12 @@ class TestFormatIdleText:
     def test_hours_and_minutes(self) -> None:
         from afcore.nightshift.daemon import _format_idle_text
 
-        assert _format_idle_text("spec-executor", 14400) == "Idle \u2014 next spec check in 4h"
+        assert _format_idle_text("pr-feedback", 14400) == "Idle \u2014 next PR check in 4h"
 
     def test_hours_with_remainder(self) -> None:
         from afcore.nightshift.daemon import _format_idle_text
 
-        assert _format_idle_text("spec-executor", 5400) == "Idle \u2014 next spec check in 1h 30m"
+        assert _format_idle_text("pr-feedback", 5400) == "Idle \u2014 next PR check in 1h 30m"
 
     def test_unknown_stream_name_passthrough(self) -> None:
         from afcore.nightshift.daemon import _format_idle_text
@@ -486,15 +461,15 @@ class TestFormatWait:
 class TestFormatActiveText:
     """Verify _format_active_text produces human-readable active messages."""
 
-    def test_single_spec_stream(self) -> None:
-        """Active spec-executor shows 'spec sessions' label."""
+    def test_single_active_stream(self) -> None:
+        """Active fix-pipeline shows 'fix pipeline' label."""
         import time as _time
 
         from afcore.nightshift.daemon import _format_active_text
 
-        next_run = {"fix-pipeline": _time.monotonic() + 900}
-        result = _format_active_text({"spec-executor"}, next_run)
-        assert result.startswith("Running spec sessions")
+        next_run = {"pr-feedback": _time.monotonic() + 900}
+        result = _format_active_text({"fix-pipeline"}, next_run)
+        assert result.startswith("Running fix pipeline")
         assert "Idle" not in result
 
     def test_countdown_included(self) -> None:
@@ -503,9 +478,9 @@ class TestFormatActiveText:
 
         from afcore.nightshift.daemon import _format_active_text
 
-        next_run = {"fix-pipeline": _time.monotonic() + 900}
-        result = _format_active_text({"spec-executor"}, next_run)
-        assert "next fix check" in result
+        next_run = {"pr-feedback": _time.monotonic() + 900}
+        result = _format_active_text({"fix-pipeline"}, next_run)
+        assert "next PR check" in result
         assert "\u2014" in result  # em dash separator
 
     def test_multiple_active_streams(self) -> None:
@@ -515,18 +490,18 @@ class TestFormatActiveText:
         from afcore.nightshift.daemon import _format_active_text
 
         next_run = {"hunt-scan": _time.monotonic() + 14400}
-        result = _format_active_text({"spec-executor", "fix-pipeline"}, next_run)
-        assert "spec sessions" in result
+        result = _format_active_text({"fix-pipeline", "pr-feedback"}, next_run)
         assert "fix pipeline" in result
-        # spec-executor appears before fix-pipeline (priority order)
-        assert result.index("spec sessions") < result.index("fix pipeline")
+        assert "PR feedback" in result
+        # fix-pipeline appears before pr-feedback (priority order)
+        assert result.index("fix pipeline") < result.index("PR feedback")
 
     def test_no_next_run_times(self) -> None:
         """Empty next_run_times yields simple 'Running ...' with no countdown."""
         from afcore.nightshift.daemon import _format_active_text
 
-        result = _format_active_text({"spec-executor"}, {})
-        assert result == "Running spec sessions"
+        result = _format_active_text({"fix-pipeline"}, {})
+        assert result == "Running fix pipeline"
         assert "\u2014" not in result
 
     def test_unknown_stream_falls_back_to_name(self) -> None:
@@ -551,12 +526,12 @@ class TestActiveStreamDisplay:
         config = _make_config()
         runner = DaemonRunner(config, None, [], budget, idle_callback=captured.append)
 
-        runner._active_streams.add("spec-executor")
-        runner._update_idle_display("fix-pipeline", _time.monotonic() + 900)
+        runner._active_streams.add("fix-pipeline")
+        runner._update_idle_display("pr-feedback", _time.monotonic() + 900)
 
         assert len(captured) == 1
         assert "Running" in captured[0]
-        assert "spec sessions" in captured[0]
+        assert "fix pipeline" in captured[0]
         assert "Idle" not in captured[0]
 
     def test_idle_text_when_no_active_streams(self) -> None:
@@ -588,7 +563,7 @@ class TestActiveStreamDisplay:
             active_snapshot.append(set(runner._active_streams))
             await _asyncio.sleep(0)
 
-        stream = _make_mock_stream(name="spec-executor", interval=999, enabled=True)
+        stream = _make_mock_stream(name="fix-pipeline", interval=999, enabled=True)
         stream.run_once = AsyncMock(side_effect=recording_run)
         budget = SharedBudget(max_cost=None)
         config = _make_config()
@@ -603,13 +578,13 @@ class TestActiveStreamDisplay:
         await task
 
         assert len(active_snapshot) >= 1
-        assert "spec-executor" in active_snapshot[0]
+        assert "fix-pipeline" in active_snapshot[0]
 
     async def test_stream_removed_from_active_after_run_once(self, tmp_path: Path) -> None:
         """Stream removed from _active_streams after run_once() completes."""
         from afcore.nightshift.daemon import DaemonRunner, SharedBudget
 
-        stream = _make_mock_stream(name="spec-executor", interval=999, enabled=True)
+        stream = _make_mock_stream(name="fix-pipeline", interval=999, enabled=True)
         budget = SharedBudget(max_cost=None)
         config = _make_config()
         runner = DaemonRunner(config, None, [stream], budget, pid_path=tmp_path / "d.pid")
@@ -626,14 +601,14 @@ class TestActiveStreamDisplay:
         await runner.run()
         await task
 
-        assert "spec-executor" not in runner._active_streams
+        assert "fix-pipeline" not in runner._active_streams
 
-    async def test_idle_callback_shows_idle_after_spec_run_completes(self, tmp_path: Path) -> None:
-        """After spec-executor run_once() completes, idle_callback shows Idle text."""
+    async def test_idle_callback_shows_idle_after_stream_run_completes(self, tmp_path: Path) -> None:
+        """After stream run_once() completes, idle_callback shows Idle text."""
         from afcore.nightshift.daemon import DaemonRunner, SharedBudget
 
         captured: list[str] = []
-        stream = _make_mock_stream(name="spec-executor", interval=999, enabled=True)
+        stream = _make_mock_stream(name="fix-pipeline", interval=999, enabled=True)
         budget = SharedBudget(max_cost=None)
         config = _make_config()
         runner = DaemonRunner(

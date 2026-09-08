@@ -56,7 +56,7 @@ class TestCliUsesDaemonRunner:
         """The CLI creates a DaemonRunner and calls runner.run()."""
         from afcore.nightshift.daemon import DaemonState
 
-        mock_state = DaemonState(total_cost=0.5, issues_fixed=1)
+        mock_state = DaemonState(total_cost=0.5)
 
         with (
             patch(_PATCHES["validate"]),
@@ -225,7 +225,7 @@ class TestCredentialPreflightCheck:
         """AC-3: CLI does not exit when check_credentials() returns normally."""
         from afcore.nightshift.daemon import DaemonState
 
-        mock_state = DaemonState(total_cost=0.0, issues_fixed=0)
+        mock_state = DaemonState(total_cost=0.0)
         mock_platform = MagicMock()
         mock_platform.check_credentials = AsyncMock(return_value=None)
 

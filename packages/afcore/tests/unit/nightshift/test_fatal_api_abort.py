@@ -248,7 +248,6 @@ class TestDaemonAbortsOnFatal:
         stream.shutdown = AsyncMock()
 
         config = MagicMock()
-        config.night_shift.enabled_streams = ["fixes"]
 
         runner = DaemonRunner(
             config=config,

@@ -37,13 +37,11 @@ logger = logging.getLogger(__name__)
 
 _STREAM_DISPLAY_NAMES: dict[str, str] = {
     "fix-pipeline": "fix check",
-    "spec-executor": "spec check",
     "pr-feedback": "PR check",
     "carry-patch": "carry-patch check",
 }
 
 _STREAM_ACTIVE_LABELS: dict[str, str] = {
-    "spec-executor": "spec sessions",
     "fix-pipeline": "fix pipeline",
     "pr-feedback": "PR feedback",
     "carry-patch": "resolving conflicts",
@@ -79,7 +77,7 @@ def _format_active_text(
     when the next idle check is scheduled.
     """
     # Display active streams in priority order for a consistent label.
-    _prio = ["spec-executor", "fix-pipeline"]
+    _prio = ["fix-pipeline", "pr-feedback"]
     sorted_active = [s for s in _prio if s in active_streams] + sorted(s for s in active_streams if s not in _prio)
     labels = [_STREAM_ACTIVE_LABELS.get(s, s) for s in sorted_active]
     running_part = ", ".join(labels)
@@ -148,11 +146,6 @@ class DaemonState:
 
     run_id: str = ""
     total_cost: float = 0.0
-    total_sessions: int = 0
-    issues_created: int = 0
-    issues_fixed: int = 0
-    issue_checks_completed: int = 0
-    specs_executed: int = 0
     uptime_seconds: float = 0.0
 
 
@@ -170,12 +163,11 @@ class DaemonRunner:
 
     Requirements: 85-REQ-1.2, 85-REQ-1.3, 85-REQ-2.1, 85-REQ-2.2,
                   85-REQ-2.3, 85-REQ-2.4, 85-REQ-2.5, 85-REQ-4.1,
-                  85-REQ-4.2, 85-REQ-4.3, 85-REQ-9.2
+                  85-REQ-4.2, 85-REQ-4.3
     """
 
     # Priority order for stream execution (85-REQ-4.2, 85-REQ-4.3, 07-REQ-2.3).
     _PRIORITY_ORDER = [
-        "spec-executor",
         "fix-pipeline",
         "pr-feedback",
     ]
@@ -201,20 +193,6 @@ class DaemonRunner:
         self._shutting_down = False
         self._shutdown_event = asyncio.Event()
         self._fatal_error: FatalAPIError | None = None
-
-        # Log unknown stream names in enabled_streams config (85-REQ-9.2).
-        known_stream_names = {
-            "specs": "spec-executor",
-            "fixes": "fix-pipeline",
-        }
-        enabled_cfg = getattr(getattr(config, "night_shift", None), "enabled_streams", None)
-        if enabled_cfg:
-            for name in enabled_cfg:
-                if name not in known_stream_names:
-                    logger.warning(
-                        "Unknown stream name in enabled_streams: %r (ignored)",
-                        name,
-                    )
 
     @property
     def streams(self) -> list[WorkStream]:

@@ -436,7 +436,6 @@ class TestDaemonShutdownPropagesToEngine:
         config.orchestrator.max_sessions = None
         config.gate = None
         config.night_shift = MagicMock()
-        config.night_shift.enabled_streams = ["fixes"]
 
         platform = MagicMock()
         engine = NightShiftEngine(config, platform)
@@ -470,7 +469,6 @@ class TestDaemonShutdownPropagesToEngine:
         config.orchestrator.max_retries = 0
         config.gate = None
         config.night_shift = MagicMock()
-        config.night_shift.enabled_streams = ["fixes"]
         config.night_shift.max_parallel = 1
         config.night_shift.max_attempts_per_issue = 99
 
