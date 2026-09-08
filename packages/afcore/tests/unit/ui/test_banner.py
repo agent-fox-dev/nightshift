@@ -63,6 +63,7 @@ def _capture_banner(
         file=buf,
         theme=rich_theme,
         force_terminal=force_terminal,
+        color_system="truecolor" if force_terminal else None,
         width=120,
     )
     render_banner(theme, quiet=quiet, models_config=models_config)

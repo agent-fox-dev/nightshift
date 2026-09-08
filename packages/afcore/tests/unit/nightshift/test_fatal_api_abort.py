@@ -148,7 +148,7 @@ class TestEngineAbortsOnFatal:
                 new=AsyncMock(return_value=[]),
             ),
             patch("afcore.nightshift.engine.build_graph", return_value=[1, 2]),
-            patch.object(engine, "_process_fix", new=AsyncMock(return_value=None)),
+            patch.object(engine, "_process_fix", new=AsyncMock(return_value=True)),
             patch(
                 "afcore.nightshift.engine.check_staleness",
                 new=AsyncMock(side_effect=FATAL),
@@ -192,7 +192,7 @@ class TestEngineAbortsOnFatal:
                 new=AsyncMock(return_value=[]),
             ),
             patch("afcore.nightshift.engine.build_graph", return_value=[1, 2]),
-            patch.object(engine, "_process_fix", new=AsyncMock(return_value=None)),
+            patch.object(engine, "_process_fix", new=AsyncMock(return_value=True)),
             patch(
                 "afcore.nightshift.engine.check_staleness",
                 new=AsyncMock(side_effect=RuntimeError("transient")),

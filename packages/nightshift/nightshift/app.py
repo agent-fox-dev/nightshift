@@ -195,7 +195,6 @@ def _run_daemon(ctx, om, config, *, hub_client=None):  # noqa: C901
     except Exception as exc:
         # Includes FatalAPIError — a non-recoverable API condition (no
         # credit, rejected credentials) raised by DaemonRunner.run().
-        progress.stop()
         report_failure(exc)
     finally:
         progress.stop()
