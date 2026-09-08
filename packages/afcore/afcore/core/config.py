@@ -645,6 +645,18 @@ class AgentFoxConfig(BaseModel):
     gate: GateConfig = Field(default_factory=GateConfig)
 
     _caching_explicit: bool = PrivateAttr(default=False)
+    _source_path: str | None = PrivateAttr(default=None)
+
+    @property
+    def source_path(self) -> str | None:
+        """Path of the config file actually in effect, if any.
+
+        ``None`` when no config file was found and defaults were used.
+        Callers use this to point the user at the file their edits must
+        go into — which is not necessarily the one they last edited, since
+        a local config shadows the global one entirely.
+        """
+        return self._source_path
 
 
 def _check_symlink(path: Path) -> None:
@@ -761,9 +773,27 @@ def _load_config_single_file(path: Path) -> AgentFoxConfig:
             logger.warning("Ignoring unknown config section: '%s'", key)
 
     config = _validate_config_dict(data, source=str(path))
+    config._source_path = str(path)
     if "caching" in data:
         config._caching_explicit = True
     return config
+
+
+def _path_exists(path: Path) -> bool:
+    """``Path.exists()`` that treats an unreadable path as absent."""
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
+def _global_config_path() -> Path | None:
+    """Resolve ``~/.nightshift/config.toml``, or None when $HOME is unusable."""
+    try:
+        return Path.home() / ".nightshift" / "config.toml"
+    except (RuntimeError, OSError):
+        logger.debug("$HOME could not be resolved; global config loading skipped")
+        return None
 
 
 def _load_config_global_local() -> AgentFoxConfig:
@@ -782,12 +812,28 @@ def _load_config_global_local() -> AgentFoxConfig:
         _check_symlink(local_path)
         local_dict = _parse_toml_file(local_path)
 
-        logger.debug(
-            "Local config found at %s — using as sole config source (global ignored)",
-            local_path,
-        )
+        # A local config replaces the global one outright — it is never
+        # merged.  Silently discarding a global config the user has been
+        # editing is the single most confusing thing this loader can do,
+        # so say it at WARNING (visible at the default level) whenever a
+        # global config actually exists to be shadowed.
+        global_path = _global_config_path()
+        if global_path is not None and _path_exists(global_path):
+            logger.warning(
+                "Local config %s is the sole config source — the global config at %s "
+                "is ignored entirely, including any [models] overrides it defines. "
+                "Move settings you need into the local file.",
+                local_path,
+                global_path,
+            )
+        else:
+            logger.debug(
+                "Local config found at %s — using as sole config source",
+                local_path,
+            )
 
         config = _validate_config_dict(local_dict, source=str(local_path))
+        config._source_path = str(local_path)
 
         if "caching" in local_dict:
             config._caching_explicit = True
@@ -797,32 +843,22 @@ def _load_config_global_local() -> AgentFoxConfig:
     logger.debug("No local config found at %s", local_path)
 
     global_dict: dict = {}
-    home: Path | None = None
+    global_config_path = _global_config_path()
+    loaded_from: Path | None = None
 
-    try:
-        home = Path.home()
-    except (RuntimeError, OSError):
-        logger.debug("$HOME could not be resolved; global config loading skipped")
-
-    if home is not None:
-        global_config_path = home / ".nightshift" / "config.toml"
-
-        try:
-            config_exists = global_config_path.exists()
-        except OSError:
-            config_exists = False
-
-        if config_exists:
-            _check_symlink(global_config_path)
-            global_dict = _parse_toml_file(global_config_path)
-            logger.debug("Loaded global config from %s", global_config_path)
+    if global_config_path is not None and _path_exists(global_config_path):
+        _check_symlink(global_config_path)
+        global_dict = _parse_toml_file(global_config_path)
+        loaded_from = global_config_path
+        logger.debug("Loaded global config from %s", global_config_path)
 
     # NS-REQ-4: When neither local nor global config exists, auto-create
     # a global config at ~/.nightshift/config.toml.
-    if not global_dict and home is not None:
-        _create_default_global_config(home / ".nightshift" / "config.toml")
+    if not global_dict and global_config_path is not None:
+        _create_default_global_config(global_config_path)
 
     config = _validate_config_dict(global_dict, source="global config")
+    config._source_path = str(loaded_from) if loaded_from is not None else None
 
     if "caching" in global_dict:
         config._caching_explicit = True

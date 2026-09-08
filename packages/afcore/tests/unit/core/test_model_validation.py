@@ -365,6 +365,69 @@ class TestInaccessibleModelErrorMessage:
             validate_model_access(models_config=models_cfg)
 
 
+class TestErrorNamesConfigInEffect:
+    """The error points at the config file actually in effect.
+
+    A local .nightshift/config.toml shadows the global one entirely, so
+    naming a bare "config.toml" can send the user back to the file whose
+    edits are being ignored.
+    """
+
+    def _mock_models_page(self, model_ids: list[str]) -> MagicMock:
+        page = MagicMock()
+        page.data = [SimpleNamespace(id=mid) for mid in model_ids]
+        return page
+
+    def _error_message(self, config_path: str | None) -> str:
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = self._mock_models_page(["claude-sonnet-4-6", "claude-opus-4-6"])
+
+        with (
+            patch("afcore.core.client.create_anthropic_client", return_value=mock_client),
+            patch.object(logging.getLogger("afcore.core.models"), "error") as mock_error,
+            pytest.raises(SystemExit),
+        ):
+            validate_model_access(config_path=config_path)
+
+        return mock_error.call_args[0][1]
+
+    def test_names_the_resolved_config_path(self) -> None:
+        """The supplied path replaces the bare "config.toml" reference."""
+        path = "/data/workspace/nightshift/.nightshift/config.toml"
+
+        message = self._error_message(path)
+
+        assert path in message
+        assert "in config.toml" not in message
+
+    def test_falls_back_to_bare_filename(self) -> None:
+        """Without a resolved path the message still reads sensibly."""
+        message = self._error_message(None)
+
+        assert "config.toml" in message
+
+    def test_forwarded_from_validate_to_formatter(self) -> None:
+        """validate_model_access threads config_path into the formatter."""
+        from afcore.core.models import _format_inaccessible_models
+
+        message = _format_inaccessible_models(
+            ["claude-haiku-4-5"],
+            {"claude-haiku-4-5": {"SIMPLE"}},
+            "/etc/ns/config.toml",
+        )
+
+        assert "/etc/ns/config.toml" in message
+        assert "SIMPLE" in message
+
+    def test_path_named_even_without_tier_provenance(self) -> None:
+        """A model with no tier still points at the right file."""
+        from afcore.core.models import _format_inaccessible_models
+
+        message = _format_inaccessible_models(["some-model"], {"some-model": set()}, "/etc/ns/config.toml")
+
+        assert "/etc/ns/config.toml" in message
+
+
 class TestModelEntryConfigVariantRejection:
     """AC-2 (issue #47): `variant` in [models.registry.*] gets an actionable error."""
 
