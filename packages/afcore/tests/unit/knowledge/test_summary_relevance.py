@@ -1,18 +1,27 @@
-"""Unit tests for relevance-based summary ranking in FoxKnowledgeProvider.
+"""Unit tests for summary ordering in FoxKnowledgeProvider.
 
-Test Spec: TS-NS-1 through TS-NS-5
-Requirements: NS-REQ-1, NS-REQ-2, NS-REQ-3, NS-REQ-4, NS-REQ-5
+Test Spec: TS-NS-1, TS-NS-2, TS-NS-4, TS-NS-5
+Requirements: NS-REQ-1, NS-REQ-2, NS-REQ-4, NS-REQ-5
 
-Covers relevance filtering of session summary injection based on
-file-footprint overlap between the current task group and prior groups.
+Covers:
+- TS-NS-1 / NS-REQ-1: Relevance branch removed (delete option); verified
+  by TestRelevanceBranchRemoved.
+- TS-NS-2 / NS-REQ-2: ``_spec_dir`` / ``set_spec_dir`` removed; verified
+  by TestSpecDirRemoved.
+- TS-NS-4 / NS-REQ-4: Fallback to ascending task-group order when no
+  footprint; verified by TestFallbackOrdering.
+- TS-NS-5 / NS-REQ-5: ``query_limit = 1000`` removed with relevance
+  branch; verified by TestRelevanceBranchRemoved.
 """
 
 from __future__ import annotations
 
+import inspect
 import uuid
 
 import duckdb
 import pytest
+from afcore.knowledge.fox_provider import FoxKnowledgeProvider
 from afcore.knowledge.migrations import run_migrations
 from afcore.knowledge.summary_store import (
     SummaryRecord,
@@ -77,7 +86,7 @@ def _make_record(
     )
 
 
-def _make_provider(provider_db, run_id=None, spec_dir=None, max_summary_items=20):
+def _make_provider(provider_db, run_id=None, max_summary_items=20):
     from afcore.core.config import KnowledgeProviderConfig
     from afcore.knowledge.fox_provider import FoxKnowledgeProvider
 
@@ -85,8 +94,6 @@ def _make_provider(provider_db, run_id=None, spec_dir=None, max_summary_items=20
     provider = FoxKnowledgeProvider(provider_db, config)
     if run_id is not None:
         provider._run_id = run_id
-    if spec_dir is not None:
-        provider.set_spec_dir(spec_dir)
     return provider
 
 
@@ -156,3 +163,50 @@ class TestFallbackOrdering:
         groups = _extract_group_numbers(context_items)
 
         assert groups == [1, 2, 3], f"Expected ascending order [1, 2, 3] with empty footprint; got {groups}"
+
+    def test_nonempty_footprint_preserves_ascending_order(self, provider_db, provider_conn):
+        """file_footprint with values still uses ascending order (relevance branch removed)."""
+        _insert_groups(provider_conn, [1, 2, 3])
+
+        provider = _make_provider(provider_db, run_id="run-1")
+
+        items = provider.retrieve(
+            "spec_a",
+            "task description",
+            task_group="4",
+            file_footprint=["src/main.py", "src/utils.py"],
+        )
+
+        context_items = [i for i in items if i.startswith("[CONTEXT]")]
+        groups = _extract_group_numbers(context_items)
+
+        assert groups == [1, 2, 3], f"Expected ascending order [1, 2, 3] with non-empty footprint; got {groups}"
+
+
+# TS-NS-1 / TS-NS-5: Relevance branch removed (delete option)
+class TestRelevanceBranchRemoved:
+    """NS-REQ-1, NS-REQ-5: Dead relevance branch and query_limit=1000 removed."""
+
+    def test_group_impacts_not_in_source(self):
+        """group_impacts variable no longer exists in _query_same_spec_summaries source."""
+        source = inspect.getsource(FoxKnowledgeProvider._query_same_spec_summaries)
+        assert "group_impacts" not in source, "group_impacts should have been removed with the relevance branch"
+
+    def test_query_limit_1000_not_in_source(self):
+        """query_limit = 1000 no longer exists in _query_same_spec_summaries source."""
+        source = inspect.getsource(FoxKnowledgeProvider._query_same_spec_summaries)
+        assert "1000" not in source, "query_limit = 1000 should have been removed with the relevance branch"
+
+
+# TS-NS-2: _spec_dir / set_spec_dir removed
+class TestSpecDirRemoved:
+    """NS-REQ-2: _spec_dir and set_spec_dir deleted from FoxKnowledgeProvider."""
+
+    def test_no_spec_dir_attribute(self):
+        """FoxKnowledgeProvider has no _spec_dir attribute after deletion."""
+        assert not hasattr(FoxKnowledgeProvider, "set_spec_dir"), "set_spec_dir method should have been removed"
+
+    def test_no_spec_dir_in_source(self):
+        """_spec_dir does not appear in FoxKnowledgeProvider source."""
+        source = inspect.getsource(FoxKnowledgeProvider)
+        assert "_spec_dir" not in source, "_spec_dir should have been removed from FoxKnowledgeProvider"

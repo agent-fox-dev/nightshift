@@ -12,7 +12,6 @@ Requirements: 116-REQ-1.3, 116-REQ-1.4, 116-REQ-2.2,
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from afcore.core.config import KnowledgeProviderConfig
@@ -155,7 +154,6 @@ class FoxKnowledgeProvider:
         self._knowledge_db = knowledge_db
         self._config = config
         self._run_id: str | None = None
-        self._spec_dir: Path | None = None
 
     def set_run_id(self, run_id: str) -> None:
         """Set the current run ID for summary queries.
@@ -166,14 +164,6 @@ class FoxKnowledgeProvider:
         Requirements: 120-REQ-1.1, 120-REQ-1.2
         """
         self._run_id = run_id if run_id else None
-
-    def set_spec_dir(self, spec_dir: Path | None) -> None:
-        """Set the current spec directory for file impact lookups.
-
-        Used by ``_query_same_spec_summaries()`` to compute per-group
-        file overlap for relevance scoring.
-        """
-        self._spec_dir = spec_dir
 
     # ------------------------------------------------------------------
     # KnowledgeProvider protocol methods
@@ -265,9 +255,7 @@ class FoxKnowledgeProvider:
         # Session summary injection (119-REQ-2.1)
         # NS-REQ-3: Skip [CONTEXT] summaries for reviewer/verifier archetypes.
         if archetype not in ("reviewer", "verifier"):
-            same_spec_summaries = self._query_same_spec_summaries(
-                conn, spec_name, task_group, file_footprint=file_footprint
-            )
+            same_spec_summaries = self._query_same_spec_summaries(conn, spec_name, task_group)
             result.extend(same_spec_summaries)
             summary_count = len(same_spec_summaries)
         else:
@@ -459,19 +447,11 @@ class FoxKnowledgeProvider:
         conn: Any,
         spec_name: str,
         task_group: str | None,
-        *,
-        file_footprint: list[str] | None = None,
     ) -> list[str]:
         """Query and format same-spec summaries as [CONTEXT] items.
 
-        When *file_footprint* is provided (non-empty), summaries are ranked
-        by file-overlap relevance: the intersection of the current group's
-        file footprint with each prior group's predicted file impacts.  The
-        immediately preceding group's summary is always included regardless
-        of its overlap score.
-
-        When *file_footprint* is ``None`` or empty, falls back to the
-        original ascending task-group ordering.
+        Returns summaries from prior task groups in ascending task-group
+        order, capped at ``max_summary_items``.
 
         Requirements: 119-REQ-2.1, 119-REQ-2.2
         """
@@ -479,7 +459,6 @@ class FoxKnowledgeProvider:
             return []
 
         max_items = self._config.max_summary_items
-        use_relevance = bool(file_footprint)
 
         # Cross-run retrieval (issue #83): pass run_id=None so
         # query_same_spec_summaries skips the run_id filter and uses
@@ -489,15 +468,12 @@ class FoxKnowledgeProvider:
         def _do_query():
             from afcore.knowledge.summary_store import query_same_spec_summaries
 
-            # When relevance filtering is active, fetch all prior-group
-            # summaries so we can rank them before applying the cap.
-            query_limit = 1000 if use_relevance else max_items
             return query_same_spec_summaries(
                 conn,
                 spec_name,
                 task_group,
                 run_id=None,
-                max_items=query_limit,
+                max_items=max_items,
             )
 
         records = _query_safe(_do_query, (), label="same-spec summaries", spec_name=spec_name)
@@ -505,62 +481,10 @@ class FoxKnowledgeProvider:
         if not records:
             return []
 
-        # When no file footprint is available, preserve the original
-        # ascending task-group ordering (fallback behaviour).
-        if not use_relevance:
-            return [
-                f"[CONTEXT] ({r.archetype}, group {r.task_group}, attempt {r.attempt}) "
-                f"{r.summary[:500] + '...' if len(r.summary) > 500 else r.summary}"
-                for r in records
-            ]
-
-        # --- Relevance-based ranking ---
-        current_files = set(file_footprint)
-        current_group_int = int(task_group)
-        preceding_group = str(current_group_int - 1)
-
-        # Compute per-group file impacts for overlap scoring.
-        # Cache impacts by group number to avoid redundant extraction
-        # when multiple archetypes exist for the same group.
-        group_impacts: dict[str, set[str]] = {}
-        for r in records:
-            if r.task_group in group_impacts:
-                continue
-            group_impacts[r.task_group] = set()
-
-        # Score each record by file overlap.
-        scored: list[tuple[int, int, Any]] = []
-        for r in records:
-            prior_files = group_impacts.get(r.task_group, set())
-            overlap = len(current_files & prior_files)
-            scored.append((overlap, int(r.task_group), r))
-
-        # Sort by overlap descending, then task_group ascending for stability.
-        scored.sort(key=lambda x: (-x[0], x[1]))
-
-        # Always include the immediately preceding group regardless of
-        # its overlap score (NS-REQ-2).  Reserve one slot for it if it
-        # would otherwise be pushed out by the max_items cap.
-        preceding_record = None
-        non_preceding: list[Any] = []
-        for _, _, r in scored:
-            if r.task_group == preceding_group and preceding_record is None:
-                preceding_record = r
-            else:
-                non_preceding.append(r)
-
-        # Build the final list: preceding group first (if it exists),
-        # then remaining records sorted by relevance, capped at max_items.
-        ranked_records: list[Any] = []
-        if preceding_record is not None:
-            ranked_records.append(preceding_record)
-        remaining_slots = max_items - len(ranked_records)
-        ranked_records.extend(non_preceding[:remaining_slots])
-
         return [
             f"[CONTEXT] ({r.archetype}, group {r.task_group}, attempt {r.attempt}) "
             f"{r.summary[:500] + '...' if len(r.summary) > 500 else r.summary}"
-            for r in ranked_records
+            for r in records
         ]
 
     def _store_summary(
