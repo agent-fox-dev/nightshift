@@ -614,7 +614,7 @@ async def _run_feedback_iteration(
             attempt=new_attempt,
         )
         try:
-            await pipeline._auto_commit_pending_changes(commit_msg, workspace)
+            await pipeline._auto_commit_pending_changes(workspace, message=commit_msg)
         except Exception as exc:
             logger.error(
                 "Error in feedback iteration for issue #%d, PR #%d: auto-commit failed — %s",
