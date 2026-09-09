@@ -231,32 +231,6 @@ class TestEmitDispatchNoopWhenNoHumanFn:
         assert out.getvalue() == ""
 
 
-class TestBannerSuppression:
-    """TS-03-21: banner() writes to stderr only when both json_mode=False and quiet=False."""
-
-    @pytest.mark.parametrize(
-        ("json_mode", "quiet", "expect_output"),
-        [
-            (False, False, True),
-            (True, False, False),
-            (False, True, False),
-            (True, True, False),
-        ],
-        ids=["human-verbose", "json-verbose", "human-quiet", "json-quiet"],
-    )
-    def test_banner_suppression_rules(self, json_mode: bool, quiet: bool, expect_output: bool) -> None:
-        """03-REQ-4.8: Banner written to stderr only for (json_mode=False, quiet=False)."""
-        from afcore.io import OutputManager
-
-        om = OutputManager(json_mode=json_mode, quiet=quiet, verbose=False)
-        with capture_stderr() as err:
-            om.banner()
-        if expect_output:
-            assert len(err.getvalue()) > 0
-        else:
-            assert len(err.getvalue()) == 0
-
-
 class TestStatusSuppression:
     """TS-03-22: status() writes to stderr when quiet=False; suppressed when quiet=True."""
 

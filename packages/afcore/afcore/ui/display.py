@@ -67,6 +67,7 @@ class AppTheme:
     """Themed console output with configurable color roles."""
 
     config: ThemeConfig
+    stderr: bool = False
     console: Console = field(init=False)
 
     def __post_init__(self) -> None:
@@ -78,7 +79,7 @@ class AppTheme:
             styles[role] = _validate_style(raw_style, role)
 
         rich_theme = Theme({role: style for role, style in styles.items() if style})
-        self.console = Console(theme=rich_theme)
+        self.console = Console(stderr=self.stderr, theme=rich_theme)
 
     def styled(self, text: str, role: str) -> str:
         """Return text styled for the given role.
@@ -93,16 +94,17 @@ class AppTheme:
         self.console.print(f"[{role}]{text}[/{role}]")
 
 
-def create_theme(config: ThemeConfig) -> AppTheme:
+def create_theme(config: ThemeConfig, *, stderr: bool = False) -> AppTheme:
     """Create an AppTheme from configuration.
 
     Args:
         config: Theme configuration with color roles.
+        stderr: If True, the console targets stderr instead of stdout.
 
     Returns:
         A fully initialized AppTheme ready for styled output.
     """
-    return AppTheme(config=config)
+    return AppTheme(config=config, stderr=stderr)
 
 
 # ---------------------------------------------------------------------------

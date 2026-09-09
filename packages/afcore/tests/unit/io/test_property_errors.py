@@ -26,7 +26,7 @@ from afcore.core.errors import AgentFoxError
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from tests.unit.io.conftest import capture_stderr, capture_stdout, mock_stdout_raises
+from tests.unit.io.conftest import capture_stdout, mock_stdout_raises
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -288,10 +288,10 @@ class TestPropAgentFoxErrorSnakeCase:
 
 
 class TestPropOutputManagerDispatchExclusion:
-    """TS-03-P7: emit_json/emit_human/banner are mutually exclusive.
+    """TS-03-P7: emit_json/emit_human are mutually exclusive.
 
     Property: 03-PROP-7
-    Validates: 03-REQ-4.1, 03-REQ-4.2, 03-REQ-4.3, 03-REQ-4.4, 03-REQ-4.8
+    Validates: 03-REQ-4.1, 03-REQ-4.2, 03-REQ-4.3, 03-REQ-4.4
     """
 
     @pytest.mark.property
@@ -313,12 +313,6 @@ class TestPropOutputManagerDispatchExclusion:
             om.emit_human("test")
         output_present = len(out.getvalue()) > 0
         assert output_present == (not json_mode)
-
-        # banner writes iff json_mode=False and quiet=False
-        with capture_stderr() as err:
-            om.banner()
-        output_present = len(err.getvalue()) > 0
-        assert output_present == (not json_mode and not quiet)
 
 
 # ---------------------------------------------------------------------------

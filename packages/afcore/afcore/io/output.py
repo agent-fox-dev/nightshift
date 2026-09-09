@@ -104,38 +104,6 @@ class OutputManager:
         elif human_fn is not None:
             human_fn()
 
-    def banner(self) -> None:
-        """Render the themed banner on stderr.
-
-        Suppressed when ``json_mode=True`` or ``quiet=True``.
-
-        Requirements: 03-REQ-4.8
-        """
-        if self.json_mode or self.quiet:
-            return
-
-        try:
-            from rich.theme import Theme as RichTheme
-
-            from afcore.core.config import ThemeConfig
-            from afcore.ui.display import create_theme, render_banner
-
-            theme = create_theme(ThemeConfig())
-            # 03-REQ-4.8: Banner must render to stderr, not stdout.
-            # AppTheme creates Console() targeting stdout by default.
-            # Replace it with a stderr-targeting Console that preserves
-            # the same Rich theme styles for colored output.
-            cfg = theme.config
-            styles: dict[str, str] = {}
-            for role in ("header", "muted"):
-                val = getattr(cfg, role, "")
-                if val:
-                    styles[role] = val
-            theme.console = Console(stderr=True, theme=RichTheme(styles))
-            render_banner(theme, quiet=False)
-        except Exception:
-            pass
-
     def status(self, message: str) -> None:
         """Write a status message to stderr; suppressed when quiet=True.
 

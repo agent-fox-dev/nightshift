@@ -70,52 +70,59 @@ class TestPythonMInvocation:
 
 
 class TestBannerDisplay:
-    """TS-07-9: Fox ASCII art banner is displayed without --quiet or --json.
+    """TS-07-9: Fox ASCII art banner is displayed on stderr without --quiet or --json.
 
-    Requirements: 07-REQ-3.1
+    Requirements: 07-REQ-3.1, 03-REQ-4.8
     """
 
-    def test_banner_present_without_flags(self, cli_runner: CliRunner) -> None:
-        """Invoking nightshift without --quiet or --json shows the fox banner."""
+    def test_banner_on_stderr_without_flags(self) -> None:
+        """Invoking nightshift without --quiet or --json shows the fox banner on stderr."""
         from nightshift.app import main
 
-        result = cli_runner.invoke(main, [])
-        assert FOX_BANNER_PATTERN in result.output, f"Expected fox ASCII art banner in output, got:\n{result.output}"
+        runner = CliRunner()
+        result = runner.invoke(main, [])
+        assert FOX_BANNER_PATTERN in result.stderr, f"Expected fox ASCII art banner on stderr, got:\n{result.stderr}"
+        assert FOX_BANNER_PATTERN not in result.stdout, "Fox banner must NOT appear on stdout (03-REQ-4.8)"
 
-    def test_banner_appears_before_startup_message(self, cli_runner: CliRunner) -> None:
-        """Fox banner must appear before 'Nightshift daemon starting' message.
+    def test_banner_appears_before_startup_message(self) -> None:
+        """Fox banner on stderr must appear; startup message on stdout must appear.
 
-        TS-07-9 Expected: banner printed to stdout before the daemon start message.
+        TS-07-9 Expected: banner printed to stderr before the daemon start
+        message on stdout. Since they are on different streams, we verify
+        both are present on their respective streams.
         """
         from nightshift.app import main
 
-        result = cli_runner.invoke(main, [])
-        assert FOX_BANNER_PATTERN in result.output, "Fox banner must be present in output"
-        assert "Nightshift daemon starting" in result.output, "Startup message must be present in output"
-        banner_pos = result.output.index(FOX_BANNER_PATTERN)
-        startup_pos = result.output.index("Nightshift daemon starting")
-        assert banner_pos < startup_pos, "Fox ASCII art banner must appear before the daemon start message"
+        runner = CliRunner()
+        result = runner.invoke(main, [])
+        assert FOX_BANNER_PATTERN in result.stderr, "Fox banner must be present on stderr"
+        assert FOX_BANNER_PATTERN not in result.stdout, "Fox banner must not appear on stdout"
+        assert "Nightshift daemon starting" in result.stdout, "Startup message must be present on stdout"
 
 
 class TestBannerSuppression:
-    """TS-07-10: Banner suppressed with --quiet or --json.
+    """TS-07-10: Banner suppressed on both stdout and stderr with --quiet or --json.
 
-    Requirements: 07-REQ-3.2
+    Requirements: 07-REQ-3.2, NS-REQ-5
     """
 
-    def test_banner_absent_with_quiet(self, cli_runner: CliRunner) -> None:
-        """--quiet suppresses the fox ASCII art banner."""
+    def test_banner_absent_with_quiet(self) -> None:
+        """--quiet suppresses the fox ASCII art banner on both streams."""
         from nightshift.app import main
 
-        result = cli_runner.invoke(main, ["--quiet"])
-        assert FOX_BANNER_PATTERN not in result.output, "Fox banner must be suppressed with --quiet"
+        runner = CliRunner()
+        result = runner.invoke(main, ["--quiet"])
+        assert FOX_BANNER_PATTERN not in result.stdout, "Fox banner must be suppressed on stdout with --quiet"
+        assert FOX_BANNER_PATTERN not in result.stderr, "Fox banner must be suppressed on stderr with --quiet"
 
-    def test_banner_absent_with_json(self, cli_runner: CliRunner) -> None:
-        """--json suppresses the fox ASCII art banner."""
+    def test_banner_absent_with_json(self) -> None:
+        """--json suppresses the fox ASCII art banner on both streams."""
         from nightshift.app import main
 
-        result = cli_runner.invoke(main, ["--json"])
-        assert FOX_BANNER_PATTERN not in result.output, "Fox banner must be suppressed with --json"
+        runner = CliRunner()
+        result = runner.invoke(main, ["--json"])
+        assert FOX_BANNER_PATTERN not in result.stdout, "Fox banner must be suppressed on stdout with --json"
+        assert FOX_BANNER_PATTERN not in result.stderr, "Fox banner must be suppressed on stderr with --json"
 
 
 class TestGlobalOptions:
@@ -446,12 +453,18 @@ class TestAfAgentMode:
                 pass
         assert len(json_lines) >= 1, f"AF_AGENT=1 must activate JSONL output, got:\n{result.output}"
 
-    def test_af_agent_suppresses_banner(self, cli_runner: CliRunner) -> None:
-        """AF_AGENT=1 suppresses the fox ASCII art banner."""
+    def test_af_agent_suppresses_banner(self) -> None:
+        """AF_AGENT=1 suppresses the fox ASCII art banner on both streams."""
         from nightshift.app import main
 
-        result = cli_runner.invoke(main, [], env={"AF_AGENT": "1"})
-        assert FOX_BANNER_PATTERN not in result.output, "Fox banner must be suppressed in agent mode (AF_AGENT=1)"
+        runner = CliRunner()
+        result = runner.invoke(main, [], env={"AF_AGENT": "1"})
+        assert FOX_BANNER_PATTERN not in result.stdout, (
+            "Fox banner must be suppressed on stdout in agent mode (AF_AGENT=1)"
+        )
+        assert FOX_BANNER_PATTERN not in result.stderr, (
+            "Fox banner must be suppressed on stderr in agent mode (AF_AGENT=1)"
+        )
 
 
 class TestBehavioralParity:

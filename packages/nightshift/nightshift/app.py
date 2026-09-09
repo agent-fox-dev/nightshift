@@ -48,8 +48,9 @@ def main(ctx: click.Context, json_flag=None, hub_url=None, workspace=None, token
     config = load_config()
     ctx.obj.update(config=config, verbose=om.verbose, quiet=om.quiet)
     if not om.json_mode and not om.quiet:
+        # 03-REQ-4.8: Banner must render to stderr, not stdout.
         render_banner(
-            create_theme(getattr(config, "theme", None) or ThemeConfig()),
+            create_theme(getattr(config, "theme", None) or ThemeConfig(), stderr=True),
             quiet=om.quiet,
             models_config=config.models,
         )
