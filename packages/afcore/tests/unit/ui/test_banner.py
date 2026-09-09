@@ -9,14 +9,18 @@ Requirements: 14-REQ-1.1, 14-REQ-1.2, 14-REQ-2.1, 14-REQ-2.2,
 
 from __future__ import annotations
 
+import re
+import subprocess
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from afcore import __version__
+from afcore._build_info import GIT_REVISION
 from afcore.core.config import ModelsConfig, ThemeConfig
 from afcore.ui.display import (
+    _get_git_revision,
     _resolve_coding_model_display,
     create_theme,
     render_banner,
@@ -310,3 +314,77 @@ class TestResolveCodingModelDisplay:
         """An empty ModelsConfig returns the hardcoded default."""
         result = _resolve_coding_model_display(models_config=ModelsConfig())
         assert result == "claude-sonnet-4-6"
+
+
+# --- Git Revision Tests (Issue #94) ---
+
+
+def _git_head_short() -> str | None:
+    """Return ``git rev-parse --short HEAD`` or None if not in a git repo."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+class TestBuildInfoTrackedValue:
+    """TS-NS-2: No tracked file contains a literal git revision.
+
+    Requirement: NS-REQ-2
+    """
+
+    def test_build_info_git_revision_is_none(self) -> None:
+        """The tracked _build_info.GIT_REVISION must be None."""
+        assert GIT_REVISION is None, (
+            f"_build_info.GIT_REVISION must be None in the tracked source, got {GIT_REVISION!r}"
+        )
+
+
+class TestGetGitRevisionFallback:
+    """TS-NS-3: The live fallback path is reachable when GIT_REVISION is None.
+
+    Requirement: NS-REQ-3
+    """
+
+    def test_returns_valid_short_sha(self) -> None:
+        """_get_git_revision returns a hex string matching the current HEAD."""
+        revision = _get_git_revision()
+        # In a git checkout this should return a non-empty hex string
+        assert revision is not None, "_get_git_revision() returned None in a git checkout"
+        assert re.fullmatch(r"[0-9a-f]+", revision), f"Expected a hex short-SHA, got {revision!r}"
+
+    def test_matches_actual_head(self) -> None:
+        """_get_git_revision returns a SHA that matches HEAD."""
+        expected = _git_head_short()
+        assert expected is not None, "Not in a git repo — cannot verify"
+        revision = _get_git_revision()
+        assert revision == expected, f"_get_git_revision() returned {revision!r}, expected HEAD {expected!r}"
+
+    def test_fallback_runs_when_build_info_is_none(self) -> None:
+        """With GIT_REVISION=None, the subprocess fallback actually runs."""
+        with patch("afcore.ui.display.GIT_REVISION", None):
+            revision = _get_git_revision()
+        assert revision is not None, "Fallback did not run with GIT_REVISION=None"
+        assert re.fullmatch(r"[0-9a-f]+", revision)
+
+
+class TestGetGitRevisionInBanner:
+    """TS-NS-1 / TS-NS-4: Banner displays the actual HEAD short-SHA.
+
+    Requirements: NS-REQ-1, NS-REQ-4
+    """
+
+    def test_banner_shows_actual_head_revision(self) -> None:
+        """render_banner prints a revision matching git rev-parse --short HEAD."""
+        expected = _git_head_short()
+        assert expected is not None, "Not in a git repo — cannot verify"
+        output = _capture_banner(ThemeConfig())
+        assert f"({expected})" in output, f"Expected '({expected})' in banner output, got:\n{output}"

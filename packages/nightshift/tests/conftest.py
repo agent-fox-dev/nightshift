@@ -49,11 +49,19 @@ def _make_mock_config() -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def _reset_agent_fox_logger() -> Generator[None, None, None]:
-    """Reset the afcore logger after each test."""
+    """Reset the afcore and nightshift loggers after each test.
+
+    ``setup_logging`` (called by the CLI entry point) sets explicit levels
+    on both the ``afcore`` and ``nightshift`` package loggers.  Without
+    resetting both, a CLI test that activates quiet/json mode leaves the
+    ``nightshift`` logger at ERROR, which silently swallows WARNING-level
+    records in later tests that rely on ``caplog``.
+    """
     yield
-    agent_logger = logging.getLogger("afcore")
-    agent_logger.setLevel(logging.NOTSET)
-    agent_logger.handlers.clear()
+    for name in ("afcore", "nightshift"):
+        pkg_logger = logging.getLogger(name)
+        pkg_logger.setLevel(logging.NOTSET)
+        pkg_logger.handlers.clear()
 
 
 @pytest.fixture(autouse=True)
