@@ -3158,7 +3158,7 @@ class TestCleanupWorktreeRemovalFailure:
     """Verify removal failure is logged at WARNING and does not re-raise."""
 
     def test_removal_failure_returns_none(self, tmp_path: Path) -> None:
-        """TS-07-E26: Returns None even when removal command fails."""
+        """TS-07-E26: Returns None even when git worktree remove command fails."""
         from afcore.nightshift.pr_feedback import _cleanup_feedback_worktree
 
         # Create the directory so removal is attempted
@@ -3166,8 +3166,8 @@ class TestCleanupWorktreeRemovalFailure:
         worktree_dir.mkdir(parents=True)
 
         with patch(
-            "afcore.nightshift.pr_feedback.shutil.rmtree",
-            side_effect=PermissionError("denied"),
+            "afcore.nightshift.pr_feedback.subprocess.run",
+            side_effect=OSError("git command failed"),
         ):
             result = _cleanup_feedback_worktree(
                 issue_number=10,
@@ -3184,8 +3184,8 @@ class TestCleanupWorktreeRemovalFailure:
         worktree_dir.mkdir(parents=True)
 
         with patch(
-            "afcore.nightshift.pr_feedback.shutil.rmtree",
-            side_effect=PermissionError("denied"),
+            "afcore.nightshift.pr_feedback.subprocess.run",
+            side_effect=OSError("git command failed"),
         ):
             # Should NOT raise
             _cleanup_feedback_worktree(
@@ -3207,8 +3207,8 @@ class TestCleanupWorktreeRemovalFailure:
         with (
             caplog.at_level(logging.WARNING),
             patch(
-                "afcore.nightshift.pr_feedback.shutil.rmtree",
-                side_effect=PermissionError("denied"),
+                "afcore.nightshift.pr_feedback.subprocess.run",
+                side_effect=OSError("git command failed"),
             ),
         ):
             _cleanup_feedback_worktree(
@@ -3217,8 +3217,8 @@ class TestCleanupWorktreeRemovalFailure:
             )
 
         warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-        assert any("denied" in m.lower() or "permission" in m.lower() for m in warn_msgs), (
-            f"Expected WARNING about PermissionError, got: {warn_msgs}"
+        assert any("git command failed" in m.lower() or "failed to remove" in m.lower() for m in warn_msgs), (
+            f"Expected WARNING about git command failure, got: {warn_msgs}"
         )
 
     def test_original_exception_propagates_normally(
@@ -3234,8 +3234,8 @@ class TestCleanupWorktreeRemovalFailure:
         original_error = RuntimeError("original error")
 
         with patch(
-            "afcore.nightshift.pr_feedback.shutil.rmtree",
-            side_effect=PermissionError("denied"),
+            "afcore.nightshift.pr_feedback.subprocess.run",
+            side_effect=OSError("git command failed"),
         ):
             # Cleanup should not mask the original exception
             _cleanup_feedback_worktree(
@@ -6202,3 +6202,179 @@ class TestSmokeEmptyDiffAfterCoder:
 
         # Cleanup called
         mock_cleanup.assert_called_once()
+
+
+# ===========================================================================
+# TS-NS-1 through TS-NS-5: Feedback worktree cleanup removes git
+# administrative state (issue #68)
+# Requirements: NS-REQ-1, NS-REQ-2, NS-REQ-3, NS-REQ-4, NS-REQ-5
+# ===========================================================================
+
+
+class TestFeedbackWorktreeCleanupGitState:
+    """Integration tests: cleanup removes git administrative state.
+
+    These tests use a real temporary git repo to verify that
+    ``_cleanup_feedback_worktree`` properly invokes ``git worktree remove``
+    (or falls back to ``shutil.rmtree`` + ``git worktree prune``) so that
+    stale ``.git/worktrees/`` entries do not accumulate and block
+    subsequent worktree creation for the same branch.
+    """
+
+    @pytest.fixture()
+    def git_repo(self, tmp_path: Path) -> Path:
+        """Create a temporary git repo with an initial commit."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", str(repo)], capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        # Initial commit so branches can be created
+        (repo / "README.md").write_text("init")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        return repo
+
+    def _create_worktree(self, repo: Path, issue_number: int, branch: str) -> Path:
+        """Create a feedback worktree using git directly (simulating setup)."""
+        worktree_base = repo / "worktrees"
+        worktree_base.mkdir(exist_ok=True)
+        worktree_path = worktree_base / f"feedback-{issue_number}"
+        # Create the branch first
+        subprocess.run(
+            ["git", "branch", branch],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "worktree", "add", str(worktree_path), branch],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        return worktree_path
+
+    def test_second_setup_succeeds_after_cleanup(self, git_repo: Path) -> None:
+        """TS-NS-1 (NS-REQ-1): setup -> cleanup -> setup succeeds for same issue."""
+        from afcore.nightshift.pr_feedback import _cleanup_feedback_worktree
+
+        branch = "fix/10-some-fix"
+        worktree_path = self._create_worktree(git_repo, 10, branch)
+        assert worktree_path.exists()
+
+        # Cleanup
+        _cleanup_feedback_worktree(
+            issue_number=10,
+            worktree_base=str(git_repo / "worktrees"),
+        )
+
+        # Second setup should succeed -- branch still exists, no stale entry
+        worktree_path2 = git_repo / "worktrees" / "feedback-10"
+        result = subprocess.run(
+            ["git", "worktree", "add", str(worktree_path2), branch],
+            cwd=git_repo,
+            capture_output=True,
+        )
+        assert result.returncode == 0, f"Second worktree add failed: {result.stderr.decode()}"
+        assert worktree_path2.exists()
+
+    def test_no_stale_worktree_entry_after_cleanup(self, git_repo: Path) -> None:
+        """TS-NS-2 (NS-REQ-2): git worktree list has no entry for removed worktree."""
+        from afcore.nightshift.pr_feedback import _cleanup_feedback_worktree
+
+        branch = "fix/10-some-fix"
+        self._create_worktree(git_repo, 10, branch)
+
+        _cleanup_feedback_worktree(
+            issue_number=10,
+            worktree_base=str(git_repo / "worktrees"),
+        )
+
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                assert "feedback-10" not in line, f"Stale worktree entry found: {line}"
+
+    def test_cleanup_noop_when_directory_already_gone(self, git_repo: Path) -> None:
+        """TS-NS-3 (NS-REQ-3): cleanup does not raise when directory is missing."""
+        from afcore.nightshift.pr_feedback import _cleanup_feedback_worktree
+
+        # No worktree created -- directory does not exist
+        _cleanup_feedback_worktree(
+            issue_number=999,
+            worktree_base=str(git_repo / "worktrees"),
+        )
+        # No exception raised -- test passes
+
+    def test_fix_branch_survives_cleanup(self, git_repo: Path) -> None:
+        """TS-NS-4 (NS-REQ-4): fix branch still exists after cleanup."""
+        from afcore.nightshift.pr_feedback import _cleanup_feedback_worktree
+
+        branch = "fix/10-some-fix"
+        self._create_worktree(git_repo, 10, branch)
+
+        _cleanup_feedback_worktree(
+            issue_number=10,
+            worktree_base=str(git_repo / "worktrees"),
+        )
+
+        # Branch must still exist
+        result = subprocess.run(
+            ["git", "branch", "--list", branch],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert branch in result.stdout.strip(), f"Fix branch '{branch}' was deleted by cleanup"
+
+    def test_git_failure_logs_warning_no_raise(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """TS-NS-5 (NS-REQ-5): git error -> WARNING log, no exception."""
+        from afcore.nightshift.pr_feedback import _cleanup_feedback_worktree
+
+        worktree_dir = tmp_path / "worktrees" / "feedback-10"
+        worktree_dir.mkdir(parents=True)
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch(
+                "afcore.nightshift.pr_feedback.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="git", timeout=30),
+            ),
+        ):
+            result = _cleanup_feedback_worktree(
+                issue_number=10,
+                worktree_base=str(tmp_path / "worktrees"),
+            )
+
+        assert result is None
+        warn_msgs = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("failed to remove" in m.lower() for m in warn_msgs), (
+            f"Expected WARNING about failed removal, got: {warn_msgs}"
+        )

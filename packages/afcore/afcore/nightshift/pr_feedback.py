@@ -792,16 +792,37 @@ def _cleanup_feedback_worktree(
     *,
     worktree_base: str = "worktrees",
 ) -> None:
-    """Remove the feedback worktree directory if it exists.
+    """Remove the feedback worktree directory and git administrative state.
 
-    Silently no-ops if the directory does not exist.  If removal itself
-    fails (e.g. permission error), logs at WARNING and does *not*
-    re-raise — the finally block must never mask the original exception.
+    Uses ``git worktree remove --force`` to cleanly remove both the worktree
+    directory and its ``.git/worktrees/`` administrative entry.  Falls back
+    to ``shutil.rmtree`` plus ``git worktree prune`` when the remove command
+    fails.
+
+    Silently no-ops if the directory does not exist (after pruning any stale
+    administrative entries).  If removal itself fails (e.g. permission error),
+    logs at WARNING and does *not* re-raise — the finally block must never
+    mask the original exception.
 
     Requirements: 07-REQ-9.2, 07-REQ-13.1, 07-REQ-13.2, 07-REQ-13.E1
     """
-    worktree_path = pathlib.Path(worktree_base) / f"feedback-{issue_number}"
+    worktree_base_path = pathlib.Path(worktree_base).resolve()
+    worktree_path = worktree_base_path / f"feedback-{issue_number}"
+    # Derive repo root for git commands (worktree_base is a direct child
+    # of the repo root, e.g. "<repo>/worktrees").
+    repo_root = str(worktree_base_path.parent)
+
     if not worktree_path.exists():
+        # Prune stale administrative entries even when directory is already gone
+        try:
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                capture_output=True,
+                timeout=30,
+                cwd=repo_root,
+            )
+        except Exception:
+            pass  # Best-effort; may fail outside a git repo
         logger.debug(
             "Feedback worktree not found for issue #%d — skipping cleanup.",
             issue_number,
@@ -809,7 +830,25 @@ def _cleanup_feedback_worktree(
         return None
 
     try:
-        shutil.rmtree(worktree_path)
+        result = subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)],
+            capture_output=True,
+            timeout=30,
+            cwd=repo_root,
+        )
+        if result.returncode != 0:
+            # git worktree remove failed — fall back to manual cleanup
+            logger.debug(
+                "git worktree remove failed for issue #%d — falling back to manual cleanup.",
+                issue_number,
+            )
+            shutil.rmtree(worktree_path, ignore_errors=True)
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                capture_output=True,
+                timeout=30,
+                cwd=repo_root,
+            )
     except Exception as exc:
         logger.warning(
             "Failed to remove feedback worktree for issue #%d at %s — %s",
@@ -817,4 +856,16 @@ def _cleanup_feedback_worktree(
             worktree_path,
             exc,
         )
+        # Last-ditch: try to at least remove the directory and prune
+        try:
+            if worktree_path.exists():
+                shutil.rmtree(worktree_path, ignore_errors=True)
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                capture_output=True,
+                timeout=30,
+                cwd=repo_root,
+            )
+        except Exception:
+            pass  # Never raise from cleanup
     return None
