@@ -456,6 +456,37 @@ class TestTemplateHeaderFooter:
         assert merged == fresh, "Merging a fresh config must be idempotent"
 
 
+class TestConfigDocsDrift:
+    """Drift test: every AgentFoxConfig top-level field must have a matching section in config-reference.md."""
+
+    def test_all_config_fields_documented(self) -> None:
+        """Every top-level field of AgentFoxConfig has a ## <field> heading in config-reference.md.
+
+        Requirement: NS-REQ-3 (issue #60)
+        """
+        docs_path = Path(__file__).parents[5] / "docs" / "config-reference.md"
+        assert docs_path.exists(), f"docs/config-reference.md not found at {docs_path}"
+
+        content = docs_path.read_text(encoding="utf-8")
+
+        # Extract all ## headings (level-2 only, not sub-sections like ### or ## sub.section)
+        headings: set[str] = set()
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("## ") and not stripped.startswith("### "):
+                heading = stripped[3:].strip()
+                headings.add(heading)
+
+        # Get all top-level fields from AgentFoxConfig
+        config_fields = set(AgentFoxConfig.model_fields.keys())
+
+        missing = config_fields - headings
+        assert not missing, (
+            f"The following AgentFoxConfig fields are missing a '## <section>' heading "
+            f"in docs/config-reference.md: {sorted(missing)}"
+        )
+
+
 class TestCodingDeprecation:
     """Tests for the deprecated [models] coding field (issue #597).
 

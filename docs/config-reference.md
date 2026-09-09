@@ -58,6 +58,7 @@ still needs copying by hand.
   - [models.tier_defaults](#modelstier_defaults)
 - [pricing](#pricing)
 - [night_shift](#night_shift)
+- [gate](#gate)
 - [workspace](#workspace)
 - [caching](#caching)
 - [hub](#hub)
@@ -411,6 +412,29 @@ issue_check_interval = 1800
 max_parallel = 3
 push_fix_branch = true
 max_pr_retries = 3
+```
+
+---
+
+## gate
+
+Mechanical verification gate for the fix pipeline. When `command` is non-empty,
+Night Shift runs it after each coder session and requires exit code 0 before
+proceeding to the reviewer. A failing gate short-circuits the reviewer entirely
+and feeds the captured output into the next coder attempt.
+
+When `command` is empty (the default), no build check runs and fixes are merged
+on the reviewer model's verdict alone.
+
+| Field | Type | Default | Bounds | Description |
+|-------|------|---------|--------|-------------|
+| `command` | str | `""` | -- | Shell command to run as the verification gate (e.g. `"make check"`). Empty string disables the gate — fixes merge on reviewer verdict alone with no build check. |
+| `timeout` | int | `600` | 30–3600 | Maximum seconds to wait for the gate command |
+
+```toml
+[gate]
+command = "make check"
+timeout = 600
 ```
 
 ---
