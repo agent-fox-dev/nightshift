@@ -275,10 +275,10 @@ def build_streams(
             engine=engine,
             repo_root=getattr(engine, "repo_root", None),
         )
-        # Wire the monitor to the engine so _run_carry_patch_monitor()
-        # can delegate to it (03-REQ-7.4, 11.2 wiring verification).
-        if engine is not None:
-            engine._carry_patch_monitor = monitor
+        # The monitor is passed directly as the stream engine so that
+        # run_once() calls monitor.run_cycle() without indirection.
+        # A single monitor instance is reused across all cycles,
+        # preserving the in-memory session retry counter (03-PROP-3).
         streams.append(
             EngineWorkStream(
                 stream_name="carry-patch",

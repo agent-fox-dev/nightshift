@@ -175,11 +175,11 @@ class NightShiftEngine:
         # staleness evaluation by sibling fixes.
         self._in_flight: set[int] = set()
         self._in_flight_lock = asyncio.Lock()
-        # Single CarryPatchMonitor instance reused across all calls to
-        # _run_carry_patch_monitor().  Set by build_streams() when
-        # carry-patch is enabled (see streams.py).
-        # Requirements: 03-REQ-7.4
-        self._carry_patch_monitor: object | None = None
+        # NOTE: The carry-patch stream calls CarryPatchMonitor.run_cycle()
+        # directly — the monitor instance is passed as the stream engine
+        # by build_streams() (see streams.py).  Instance reuse across
+        # cycles (03-PROP-3) is preserved because build_streams() creates
+        # a single monitor and passes it as the EngineWorkStream target.
         # Sum of estimated worst-case costs reserved for issues currently
         # dispatched but not yet complete.  Mutated only from the
         # synchronous dispatch loop in _process_issues_parallel and from
@@ -1163,17 +1163,3 @@ class NightShiftEngine:
             archetype=archetype,
             sink_dispatcher=self._sink,
         )
-
-    async def _run_carry_patch_monitor(self, slug: str) -> object:
-        """Delegate to the stored CarryPatchMonitor instance.
-
-        The monitor is stored as ``self._carry_patch_monitor`` and reused
-        across all calls to preserve the in-memory session retry counter
-        (03-PROP-3).  Any exception raised by the monitor is propagated
-        to the caller (03-REQ-7.E2).
-
-        Returns a ``MonitorCycleResult`` instance.
-
-        Requirements: 03-REQ-7.4, 03-REQ-7.E2
-        """
-        return await self._carry_patch_monitor.run_cycle()

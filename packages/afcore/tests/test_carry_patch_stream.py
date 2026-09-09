@@ -1,21 +1,12 @@
-"""Tests for carry-patch stream registration, daemon labels, and engine method.
+"""Tests for carry-patch stream registration, daemon labels, and stream behaviour.
 
-All tests in this file are *intentionally failing* pending the implementation
-in task group 9.  They are collected by pytest without import errors but fail
-because:
-- ``build_streams()`` does not yet accept a ``hub_client`` parameter or
-  register a carry-patch stream.
-- ``_STREAM_DISPLAY_NAMES`` / ``_STREAM_ACTIVE_LABELS`` do not yet contain
-  the ``carry-patch`` key.
-- ``NightShiftEngine`` does not yet have ``_run_carry_patch_monitor()``.
+The carry-patch stream calls ``CarryPatchMonitor.run_cycle()`` directly —
+the monitor instance is passed as the ``EngineWorkStream`` engine by
+``build_streams()``.  Instance reuse across cycles preserves the in-memory
+retry counter (03-PROP-3).
 
-Dependencies and forward stubs
--------------------------------
-- ``afhub`` package (Spec 01) is not yet available; HubClient is mocked.
-- ``afcore.core.config.CarryPatchConfig`` (Spec 02) may not yet expose all
-  fields; config is built with ``MagicMock`` to avoid import errors.
-- ``CarryPatchMonitor`` (group 5) is a stub with ``run_cycle()`` raising
-  ``NotImplementedError``; tests that reach ``run_cycle()`` will fail on that.
+See ``docs/errata/03_carry_patch_pipeline_monitor.md`` for why the original
+``_run_carry_patch_monitor`` delegation method was removed.
 
 Specification: 03_carry_patch_pipeline_monitor
 Requirements: 03-REQ-7
@@ -315,100 +306,124 @@ class TestDaemonDisplayRegistry:
 
 
 # ---------------------------------------------------------------------------
-# 3.5 — TS-03-22: NightShiftEngine._run_carry_patch_monitor delegation
+# 3.5 — TS-03-22 (revised): carry-patch stream targets monitor directly
 # ---------------------------------------------------------------------------
 
 
-class TestEngineRunCarryPatchMonitor:
-    """TS-03-22: _run_carry_patch_monitor delegates to CarryPatchMonitor.run_cycle.
+class TestCarryPatchStreamBehaviour:
+    """Carry-patch stream targets the CarryPatchMonitor instance directly.
 
-    Requirements: 03-REQ-7.4
-    Test ID: TS-03-22
+    The stream's run_once() calls CarryPatchMonitor.run_cycle() without
+    indirection through NightShiftEngine.  Instance reuse across cycles
+    preserves the in-memory retry counter (03-PROP-3).
+
+    See docs/errata/03_carry_patch_pipeline_monitor.md for the divergence
+    from spec 03-REQ-7.4.
+
+    Requirements: 03-REQ-7.1, 03-PROP-3
+    Test ID: TS-03-22 (revised)
     """
 
-    async def test_engine_has_run_carry_patch_monitor_method(self) -> None:
-        """NightShiftEngine has _run_carry_patch_monitor method.
+    def test_carry_patch_stream_targets_monitor_instance(self) -> None:
+        """The carry-patch EngineWorkStream targets the CarryPatchMonitor.
 
-        Requirements: 03-REQ-7.4
-        Test ID: TS-03-22
-        Fails: method not yet added to engine (group 9 pending)
+        Requirements: 03-REQ-7.1
+        Test ID: TS-03-22 (revised)
         """
-        from afcore.nightshift.engine import NightShiftEngine  # noqa: PLC0415
+        config = _make_config(carry_patch_enabled=True, check_interval=60)
+        hub_client = _make_hub_client()
 
-        assert hasattr(NightShiftEngine, "_run_carry_patch_monitor"), (
-            "NightShiftEngine must have _run_carry_patch_monitor method"
-        )
+        streams = build_streams(config, hub_client=hub_client)
 
-    async def test_run_carry_patch_monitor_delegates_to_monitor(self) -> None:
-        """_run_carry_patch_monitor delegates to CarryPatchMonitor.run_cycle.
+        carry_patch_streams = [s for s in streams if s.name == "carry-patch"]
+        assert len(carry_patch_streams) == 1
+        stream = carry_patch_streams[0]
+        # The stream's engine must be the CarryPatchMonitor, not the
+        # NightShiftEngine — run_once() calls engine.run_cycle() directly.
+        assert isinstance(stream._engine, CarryPatchMonitor)
 
-        Requirements: 03-REQ-7.4
-        Test ID: TS-03-22
-        Fails: method not yet added to engine (group 9 pending)
+    async def test_run_once_calls_monitor_run_cycle(self) -> None:
+        """run_once() delegates to CarryPatchMonitor.run_cycle().
+
+        Requirements: 03-REQ-7.4, 03-REQ-7.E2
+        Test ID: TS-03-22 (revised)
         """
-        from afcore.nightshift.engine import NightShiftEngine  # noqa: PLC0415
-
-        # Build a minimal engine (mocked to avoid heavy __init__ deps)
-        engine = MagicMock(spec=NightShiftEngine)
-
-        # Create a mock monitor whose run_cycle returns a known result
         mock_monitor = MagicMock(spec=CarryPatchMonitor)
         mock_result = MagicMock(spec=MonitorCycleResult)
-        mock_result.conflicts_detected = 1
-        mock_result.conflicts_resolved = 1
-        mock_result.conflicts_failed = 0
-        mock_result.patches_merged = 0
-        mock_result.rebuild_triggered = True
         mock_monitor.run_cycle = AsyncMock(return_value=mock_result)
-        engine._carry_patch_monitor = mock_monitor
 
-        # Call the real method (not the mock method)
-        result = await NightShiftEngine._run_carry_patch_monitor(engine, slug="ws-1")
+        from afcore.nightshift.streams import EngineWorkStream  # noqa: PLC0415
 
-        # After implementation:
-        assert result is mock_result, (
-            "_run_carry_patch_monitor must return the MonitorCycleResult from CarryPatchMonitor.run_cycle()"
+        stream = EngineWorkStream(
+            stream_name="carry-patch",
+            engine=mock_monitor,
+            method_name="run_cycle",
+            budget=None,
+            enabled=True,
+            interval=60,
+            track_cost=False,
         )
+
+        await stream.run_once()
+
         mock_monitor.run_cycle.assert_called_once()
 
-    async def test_run_carry_patch_monitor_reuses_same_monitor_instance(
-        self,
-    ) -> None:
-        """Same CarryPatchMonitor instance is reused across calls.
+    async def test_run_once_reuses_same_monitor_instance(self) -> None:
+        """Two successive run_once() calls use the same monitor (03-PROP-3).
 
-        Requirements: 03-REQ-7.4 (reuse to preserve retry counter)
-        Test ID: TS-03-22
-        Fails: method not yet added to engine (group 9 pending)
+        The single CarryPatchMonitor instance preserves the in-memory
+        session retry counter across cycles.
+
+        Requirements: 03-PROP-3
+        Test ID: TS-03-22 (revised)
         """
-        from afcore.nightshift.engine import NightShiftEngine  # noqa: PLC0415
-
-        engine = MagicMock(spec=NightShiftEngine)
         mock_monitor = MagicMock(spec=CarryPatchMonitor)
         mock_monitor.run_cycle = AsyncMock(return_value=MagicMock(spec=MonitorCycleResult))
-        engine._carry_patch_monitor = mock_monitor
 
-        # Call twice
-        await NightShiftEngine._run_carry_patch_monitor(engine, slug="ws-1")
-        await NightShiftEngine._run_carry_patch_monitor(engine, slug="ws-1")
+        from afcore.nightshift.streams import EngineWorkStream  # noqa: PLC0415
+
+        stream = EngineWorkStream(
+            stream_name="carry-patch",
+            engine=mock_monitor,
+            method_name="run_cycle",
+            budget=None,
+            enabled=True,
+            interval=60,
+            track_cost=False,
+        )
+
+        await stream.run_once()
+        await stream.run_once()
 
         # Same monitor must be used both times — 2 calls total
         assert mock_monitor.run_cycle.call_count == 2, (
-            "CarryPatchMonitor.run_cycle() must be called on the same instance (reuse), not a fresh instance per call"
+            "CarryPatchMonitor.run_cycle() must be called on the same instance across cycles"
         )
+        # Verify identity: the stream holds a reference to the original
+        assert stream._engine is mock_monitor
 
-    async def test_run_carry_patch_monitor_propagates_exception(self) -> None:
-        """Exceptions from CarryPatchMonitor propagate to caller (03-REQ-7.E2).
+    async def test_run_once_propagates_exception(self) -> None:
+        """Exceptions from CarryPatchMonitor propagate through run_once().
 
         Requirements: 03-REQ-7.E2
-        Test ID: TS-03-22
-        Fails: method not yet added to engine (group 9 pending)
+        Test ID: TS-03-22 (revised)
         """
-        from afcore.nightshift.engine import NightShiftEngine  # noqa: PLC0415
-
-        engine = MagicMock(spec=NightShiftEngine)
         mock_monitor = MagicMock(spec=CarryPatchMonitor)
-        mock_monitor.run_cycle = AsyncMock(side_effect=RuntimeError("unexpected monitor failure"))
-        engine._carry_patch_monitor = mock_monitor
+        mock_monitor.run_cycle = AsyncMock(
+            side_effect=RuntimeError("unexpected monitor failure"),
+        )
+
+        from afcore.nightshift.streams import EngineWorkStream  # noqa: PLC0415
+
+        stream = EngineWorkStream(
+            stream_name="carry-patch",
+            engine=mock_monitor,
+            method_name="run_cycle",
+            budget=None,
+            enabled=True,
+            interval=60,
+            track_cost=False,
+        )
 
         with pytest.raises(RuntimeError, match="unexpected monitor failure"):
-            await NightShiftEngine._run_carry_patch_monitor(engine, slug="ws-1")
+            await stream.run_once()
