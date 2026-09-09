@@ -400,6 +400,14 @@ async def _harvest_under_lock(
         # Checkout the development branch in the main repo
         await checkout_branch(repo_root, dev_branch)
 
+        # Capture HEAD before merge so we can verify it advances (issue #72).
+        _, head_before, _ = await run_git(
+            ["rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=False,
+        )
+        head_before = head_before.strip()
+
         # Squash merge produces a single commit on dev_branch, collapsing
         # any internal merge topology on the feature branch.
         merge_rc, merge_stdout, merge_stderr = await run_git(
@@ -447,6 +455,25 @@ async def _harvest_under_lock(
                     dev_branch,
                 )
                 await run_git(["commit", "-m", msg], cwd=repo_root)
+
+        # Belt-and-braces: verify HEAD actually advanced (issue #72).
+        # If the merge agent staged files but never committed, or if no
+        # merge happened at all, HEAD will not have moved. Returning
+        # changed_files in that case would cause the caller to believe
+        # the merge landed while the finally-block cleanup wipes the work.
+        _, head_after, _ = await run_git(
+            ["rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=False,
+        )
+        head_after = head_after.strip()
+        if changed_files and head_before and head_after and head_after == head_before:
+            raise IntegrationError(
+                f"Squash merge of '{workspace.branch}' into '{dev_branch}' "
+                f"produced no commit — HEAD did not advance. The merge agent "
+                f"may have staged files without committing.",
+                branch=workspace.branch,
+            )
 
         logger.info(
             "Squash merge of '%s' into '%s' succeeded",

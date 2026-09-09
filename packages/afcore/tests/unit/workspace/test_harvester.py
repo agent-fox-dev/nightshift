@@ -922,6 +922,53 @@ class TestSharedDirectoryCampaign:
 # ---------------------------------------------------------------------------
 
 
+class TestHarvestHeadMustAdvance:
+    """TS-NS-3: harvest() raises IntegrationError when HEAD does not advance.
+
+    Issue #72: When the merge agent stages files but never commits,
+    harvest must not return a non-empty changed_files list. Instead it
+    must raise IntegrationError so the caller does not mistakenly close
+    the issue and delete the branch.
+
+    Requirements: NS-REQ-3
+    """
+
+    @pytest.mark.asyncio
+    async def test_staged_without_commit_raises_integration_error(
+        self,
+        tmp_worktree_repo: Path,
+    ) -> None:
+        """When run_merge_agent stages resolved files but does not commit,
+        harvest raises IntegrationError rather than returning changed_files."""
+        ws = await create_worktree(tmp_worktree_repo, "test_spec", 1, base_branch="develop")
+
+        # Create a conflicting file on both branches
+        add_commit_to_branch(ws.path, "shared.py", "feature content\n")
+
+        subprocess.run(
+            ["git", "checkout", "develop"],
+            cwd=tmp_worktree_repo,
+            check=True,
+            capture_output=True,
+        )
+        add_commit_to_branch(tmp_worktree_repo, "shared.py", "develop content\n")
+
+        # Fake merge agent: resolves conflict and stages, but does NOT commit.
+        async def fake_merge_agent_stages_only(worktree_path, conflict_output, model_id):
+            # Resolve the conflict by writing clean content
+            (worktree_path / "shared.py").write_text("resolved content\n")
+            await _real_run_git(["add", "shared.py"], cwd=worktree_path)
+            # Deliberately do NOT commit — this is the bug scenario.
+            return True  # Agent incorrectly reports success
+
+        with patch(
+            "afcore.workspace.harvest.run_merge_agent",
+            side_effect=fake_merge_agent_stages_only,
+        ):
+            with pytest.raises(IntegrationError, match="(?i)no commit|HEAD did not advance"):
+                await harvest(tmp_worktree_repo, ws, dev_branch="develop")
+
+
 class TestHarvestCleanupOnFailure:
     """Issue #724: git clean runs in the finally block on all exit paths.
 

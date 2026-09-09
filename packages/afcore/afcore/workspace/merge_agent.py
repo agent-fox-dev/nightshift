@@ -134,18 +134,64 @@ async def _run_agent_session(
 
 
 async def _check_conflicts_resolved(worktree_path: Path) -> bool:
-    """Check if all merge conflicts have been resolved.
+    """Check if all merge conflicts have been resolved **and committed**.
 
-    Uses ``git diff --check`` to detect remaining conflict markers.
+    Performs three checks:
+
+    1. ``git ls-files -u`` — must be empty (no unmerged index entries).
+    2. ``git diff --check`` — no leftover conflict markers in the working
+       tree.
+    3. ``git diff --cached --quiet`` — nothing staged but uncommitted.
+       A staged-but-uncommitted resolution would be wiped by the
+       ``finally`` cleanup in ``_harvest_under_lock``.
+
+    All three must pass for the function to return ``True``.
 
     Returns:
-        True if no conflict markers remain, False otherwise.
+        True if conflicts are resolved and committed, False otherwise.
     """
     from afcore.workspace import run_git
 
+    # (1) No unmerged index entries
+    rc, stdout, _stderr = await run_git(
+        ["ls-files", "-u"],
+        cwd=worktree_path,
+        check=False,
+    )
+    if rc != 0 or stdout.strip():
+        logger.debug(
+            "Unmerged index entries remain (worktree=%s): %s",
+            worktree_path,
+            stdout.strip()[:200],
+        )
+        return False
+
+    # (2) No conflict markers in working tree
     rc, _stdout, _stderr = await run_git(
         ["diff", "--check"],
         cwd=worktree_path,
         check=False,
     )
-    return rc == 0
+    if rc != 0:
+        logger.debug(
+            "Conflict markers remain in working tree (worktree=%s)",
+            worktree_path,
+        )
+        return False
+
+    # (3) Nothing staged but uncommitted — the resolution must be
+    #     committed, not just staged, or the finally-block cleanup
+    #     will discard it.
+    rc, _stdout, _stderr = await run_git(
+        ["diff", "--cached", "--quiet"],
+        cwd=worktree_path,
+        check=False,
+    )
+    if rc != 0:
+        logger.debug(
+            "Staged but uncommitted changes remain (worktree=%s); merge agent may have staged without committing",
+            worktree_path,
+        )
+        return False
+
+    return True
