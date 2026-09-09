@@ -28,12 +28,15 @@ Do not implement anything before completing these steps.
 ```
 packages/nightshift/    # CLI entry point (nightshift command)
 packages/afcore/        # Core library (sessions, knowledge, archetypes)
-packages/afissues/      # Platform abstraction (GitHub, GitLab, Gitea)
-packages/afaudit/       # Audit infrastructure (events, sinks, traces)
-packages/afhub/         # Hub API client (carry-patch, polling)
 docs/                   # Documentation
 .specs/                 # Specs to be implemented
 ```
+
+Three additional packages — `afissues` (platform abstraction), `afaudit`
+(audit infrastructure), and `afhub` (hub API client) — live in the external
+[agent-fox-dev/af-python](https://github.com/agent-fox-dev/af-python)
+repository and are pulled as git dependencies (see `[tool.uv.sources]` in
+`pyproject.toml`). To modify them, open a PR against that repository.
 
 ## Spec-Driven Workflow
 

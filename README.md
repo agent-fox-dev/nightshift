@@ -69,15 +69,21 @@ including resolution priority and error behavior.
 ## Development
 
 This is a [uv workspace](https://docs.astral.sh/uv/concepts/workspaces/)
-with five packages:
+with two local packages:
 
 | Package | Description |
 |---------|-------------|
 | `packages/nightshift/` | CLI entry point (`nightshift` command) |
 | `packages/afcore/` | Core library — session infrastructure, knowledge system, archetypes |
-| `packages/afissues/` | Platform abstraction — GitHub, GitLab, Gitea integration |
-| `packages/afaudit/` | Audit infrastructure — structured events, sinks, traces |
-| `packages/afhub/` | Hub API client — authentication, polling, carry-patch helpers |
+
+Three additional packages are pulled as external git dependencies from
+[agent-fox-dev/af-python](https://github.com/agent-fox-dev/af-python):
+
+| Package | Description |
+|---------|-------------|
+| `afissues` | Platform abstraction — GitHub, GitLab, Gitea integration |
+| `afaudit` | Audit infrastructure — structured events, sinks, traces |
+| `afhub` | Hub API client — authentication, polling, carry-patch helpers |
 
 ```bash
 uv sync                      # install all packages
