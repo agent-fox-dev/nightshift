@@ -144,12 +144,13 @@ class TestBackendConfig:
         config = BackendConfig(provider="google")
         assert config.provider == "google"
 
-    def test_backend_provider_deepagents_is_valid(self) -> None:
-        """BackendConfig accepts 'deepagents' as a valid provider."""
+    def test_backend_provider_deepagents_is_rejected(self) -> None:
+        """BackendConfig rejects 'deepagents' (removed backend)."""
         from afcore.core.config import BackendConfig
+        from pydantic import ValidationError
 
-        config = BackendConfig(provider="deepagents")
-        assert config.provider == "deepagents"
+        with pytest.raises(ValidationError):
+            BackendConfig(provider="deepagents")
 
     def test_backend_provider_invalid_raises_validation_error(self) -> None:
         """BackendConfig rejects invalid provider values."""
@@ -173,13 +174,21 @@ class TestBackendConfig:
         assert AgentFoxConfig.model_fields["backend"].annotation is BackendConfig
 
     def test_toml_with_backend_section_loads_provider(self, tmp_path: Path) -> None:
-        """A TOML with [backend] provider='deepagents' loads correctly."""
+        """A TOML with [backend] provider='google' loads correctly."""
         config_file = tmp_path / "config.toml"
-        config_file.write_text('[backend]\nprovider = "deepagents"\n')
+        config_file.write_text('[backend]\nprovider = "google"\n')
 
         config = load_config(path=config_file)
 
-        assert config.backend.provider == "deepagents"
+        assert config.backend.provider == "google"
+
+    def test_toml_with_deepagents_backend_raises(self, tmp_path: Path) -> None:
+        """A TOML with [backend] provider='deepagents' raises ConfigError (removed backend)."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[backend]\nprovider = "deepagents"\n')
+
+        with pytest.raises(ConfigError):
+            load_config(path=config_file)
 
     def test_old_orchestrator_backend_silently_ignored(self, tmp_path: Path) -> None:
         """An old TOML with [orchestrator] backend='deepagents' is silently ignored.

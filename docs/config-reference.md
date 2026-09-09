@@ -72,7 +72,7 @@ Selects the AI backend provider used for agent sessions.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | str | `"claude"` | Backend provider: `"claude"`, `"deepagents"`, or `"google"` |
+| `provider` | str | `"claude"` | Backend provider: `"claude"` or `"google"` |
 
 ```toml
 [backend]

@@ -53,7 +53,7 @@ change to the same wiring.
 - Changes to the DuckDB sink schema.
 - Changes to the `AuditJsonlSink` or structured audit events.
 - Filtering or redacting tool responses (captured verbatim, subject to truncation).
-- Changes to other backends (deepagents, google_adk) — those are out of scope; only `ClaudeBackend` is extended.
+- Changes to other backends (google_adk) — those are out of scope; only `ClaudeBackend` is extended.
 
 ## Technical Context
 
@@ -115,7 +115,7 @@ The new `PostToolUse` hook follows the same pattern with a `tool_result_callback
 2. When `--audit` is active and a tool returns a response longer than 50 000 characters, the `tool_response` field in the trace is exactly 50 000 chars followed by ` [truncated]`.
 3. When `--audit` is NOT active (no `AgentTraceSink` in the dispatcher), no `tool.result` events are written.
 4. A `PostToolUse` hook failure (e.g. serialization error) does not interrupt session execution — it logs a WARNING and the session continues.
-5. Other backends (deepagents, google_adk) are not affected; they do not receive a `tool_result_callback`.
+5. Other backends (google_adk) are not affected; they do not receive a `tool_result_callback`.
 
 ## Verified External API
 
@@ -142,7 +142,7 @@ The new `PostToolUse` hook follows the same pattern with a `tool_result_callback
 
 3. **50 000-char truncation limit**: Generous enough to capture most tool outputs (file reads, API responses) in full, while preventing single massive Bash outputs from bloating the trace file.
 
-4. **Only `ClaudeBackend` is extended**: Other backends (deepagents, google_adk) do not have an equivalent post-tool hook. Extending them is a separate task once each backend's hook API is understood.
+4. **Only `ClaudeBackend` is extended**: Other backends (google_adk) do not have an equivalent post-tool hook. Extending them is a separate task once each backend's hook API is understood.
 
 5. **`record_tool_result` is optional in `SinkDispatcher`**: Uses `_dispatch_optional` (already the pattern for trace methods) so non-trace sinks do not need to implement it.
 

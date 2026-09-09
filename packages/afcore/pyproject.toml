@@ -39,7 +39,6 @@ dependencies = [
     "tree-sitter-css>=0.25.0",
     "tree-sitter-regex>=0.25.0",
     "tree-sitter-swift>=0.0.1",
-    "deepagents>=0.7.13",
     "google-adk>=2.8.0",
     "google-api-core>=2.0",
 ]

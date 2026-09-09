@@ -1894,16 +1894,6 @@ class TestCreateBackendExistingKeys:
         assert isinstance(result, ClaudeBackend), f"Expected ClaudeBackend, got {type(result).__name__}"
         assert isinstance(result, Backend)
 
-    def test_create_backend_deepagents_still_works(self) -> None:
-        """TS-04-34: create_backend('deepagents') returns DeepAgentsBackend."""
-        from afcore.session.backends import create_backend
-        from afcore.session.backends.deepagents import DeepAgentsBackend
-        from afcore.session.backends.protocol import Backend
-
-        result = create_backend("deepagents")
-        assert isinstance(result, DeepAgentsBackend), f"Expected DeepAgentsBackend, got {type(result).__name__}"
-        assert isinstance(result, Backend)
-
 
 # ---------------------------------------------------------------------------
 # TS-04-35: OrchestratorConfig accepts 'google-adk' backend value
@@ -1927,13 +1917,6 @@ class TestOrchestratorConfigGoogleAdk:
 
         config = BackendConfig(provider="claude")
         assert config.provider == "claude"
-
-    def test_deepagents_still_accepted(self) -> None:
-        """TS-04-35: BackendConfig(provider='deepagents') still validates."""
-        from afcore.core.config import BackendConfig
-
-        config = BackendConfig(provider="deepagents")
-        assert config.provider == "deepagents"
 
 
 # ---------------------------------------------------------------------------
@@ -2386,13 +2369,13 @@ class TestCrossSpecEntryPointVerification:
         config = BackendConfig(provider="google")
         assert config.provider == "google"
 
-    def test_all_three_backends_validate_and_create(self) -> None:
-        """13.5: All three backend keys validate in config and create_backend."""
+    def test_all_backends_validate_and_create(self) -> None:
+        """13.5: All backend keys validate in config and create_backend."""
         from afcore.core.config import BackendConfig
         from afcore.session.backends import create_backend
         from afcore.session.backends.protocol import Backend
 
-        for backend_name in ("claude", "deepagents", "google"):
+        for backend_name in ("claude", "google"):
             # Config validation
             config = BackendConfig(provider=backend_name)
             assert config.provider == backend_name

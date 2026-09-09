@@ -98,7 +98,7 @@ class BackendConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    provider: Literal["claude", "deepagents", "google"] = Field(
+    provider: Literal["claude", "google"] = Field(
         default="claude",
         description="Backend provider to use for agent sessions",
     )

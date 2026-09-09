@@ -375,10 +375,10 @@
         },
         {
           "id": "6.2",
-          "title": "Confirm other backends (deepagents, google_adk) do not receive tool_result_callback",
+          "title": "Confirm other backends (google_adk) do not receive tool_result_callback",
           "details": [
             "Verify that only ClaudeBackend.execute() is called with tool_result_callback in session.py",
-            "Confirm deepagents and google_adk backend execute() calls are not modified",
+            "Confirm google_adk backend execute() calls are not modified",
             "Add a comment in session.py noting that tool_result_callback is ClaudeBackend-specific"
           ],
           "test_spec_refs": [
@@ -520,7 +520,7 @@
           "title": "Verify tool_result_callback call-site is wired in production session.py",
           "details": [
             "Confirm _execute_query() in session.py actually passes tool_result_callback to ClaudeBackend.execute() in production code (not just in tests)",
-            "Confirm deepagents and google_adk backend execute() calls do not receive tool_result_callback",
+            "Confirm google_adk backend execute() calls do not receive tool_result_callback",
             "Confirm the callback is None when --audit is not active, preventing any PostToolUse hook registration"
           ],
           "test_spec_refs": [

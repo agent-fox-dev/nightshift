@@ -163,7 +163,6 @@ class TestPropertyProtocolIsolation:
 SDK_CONTAINMENT: dict[str, str] = {
     "claude_agent_sdk": "claude.py",
     "google.adk": "google_adk.py",
-    # "deepagents": "deepagents.py",  # spec 03 (test_deepagents.py covers this)
 }
 
 
@@ -547,14 +546,12 @@ class TestSdkContainmentStructure:
         assert SDK_CONTAINMENT["claude_agent_sdk"] == "claude.py"
 
     def test_placeholder_comments_exist(self) -> None:
-        """TS-02-25: Source contains placeholder comments for future backends."""
+        """TS-02-25: Source contains SDK_CONTAINMENT entries for active backends."""
         with open(__file__, encoding="utf-8") as f:
             src = f.read()
         assert "SDK_CONTAINMENT" in src
         assert "claude_agent_sdk" in src
         assert "claude.py" in src
-        # Check for future backend placeholder comments
-        assert "deepagents" in src
         assert "google" in src
 
 
@@ -660,7 +657,7 @@ class TestOrchestratorConfigBackendNoEnvVar:
         original_values = {}
         for var in env_vars:
             original_values[var] = os.environ.get(var)
-            os.environ[var] = "deepagents"
+            os.environ[var] = "google"
 
         try:
             from afcore.core.config import BackendConfig
@@ -930,7 +927,6 @@ class TestExistingSessionTestsPass:
                 "packages/afcore/tests/unit/session/",
                 "-q",
                 "--tb=short",
-                "--ignore=packages/afcore/tests/unit/session/backends/test_deepagents.py",
                 "--ignore=packages/afcore/tests/unit/session/backends/test_google_adk.py",
                 "--ignore=packages/afcore/tests/unit/session/backends/test_adk_tools.py",
                 "-k",
@@ -1427,7 +1423,6 @@ class TestPropertyCreateBackendInvariant:
             "claude",
             "foo",
             "",
-            "deepagents",
             "google-adk",
             "None",
             "unknown",
@@ -1554,7 +1549,6 @@ class TestPropertySessionTestsPass:
                 "packages/afcore/tests/unit/session/",
                 "--tb=short",
                 "-q",
-                "--ignore=packages/afcore/tests/unit/session/backends/test_deepagents.py",
                 "--ignore=packages/afcore/tests/unit/session/backends/test_google_adk.py",
                 "--ignore=packages/afcore/tests/unit/session/backends/test_adk_tools.py",
                 "-k",

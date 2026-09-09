@@ -19,7 +19,7 @@ from afcore.session.backends.types import (
     ToolUseMessage,
 )
 
-_VALID_BACKENDS = ["claude", "deepagents", "google"]
+_VALID_BACKENDS = ["claude", "google"]
 
 
 def create_backend(name: str) -> Backend:
@@ -52,13 +52,6 @@ def create_backend(name: str) -> Backend:
             )
         return _Claude()
 
-    if name == "deepagents":
-        from afcore.session.backends.deepagents import (
-            DeepAgentsBackend as _DeepAgents,
-        )
-
-        return _DeepAgents()
-
     if name in ("google", "google-adk"):
         try:
             from afcore.session.backends.google_adk import (
@@ -83,10 +76,6 @@ def __getattr__(name: str) -> object:
         from afcore.session.backends.claude import ClaudeBackend
 
         return ClaudeBackend
-    if name == "DeepAgentsBackend":
-        from afcore.session.backends.deepagents import DeepAgentsBackend
-
-        return DeepAgentsBackend
     if name == "GoogleADKBackend":
         from afcore.session.backends.google_adk import GoogleADKBackend
 
@@ -99,7 +88,6 @@ __all__ = [
     "AssistantMessage",
     "Backend",
     "ClaudeBackend",
-    "DeepAgentsBackend",
     "GoogleADKBackend",
     "PermissionCallback",
     "ResultMessage",

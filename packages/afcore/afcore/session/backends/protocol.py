@@ -23,7 +23,7 @@ class Backend(Protocol):
     Members:
 
     - ``name`` -- read-only property returning the backend identifier string
-      (e.g. ``'claude'``, ``'deepagents'``, ``'google-adk'``).
+      (e.g. ``'claude'``, ``'google-adk'``).
     - ``execute()`` -- async method that drives an agent session and yields
       canonical ``AgentMessage`` objects.
     - ``close()`` -- async teardown; must be idempotent.

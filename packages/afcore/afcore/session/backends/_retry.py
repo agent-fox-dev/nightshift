@@ -1,7 +1,7 @@
 """Shared retry constants for backend adapters.
 
 Centralises the transport-layer retry parameters so that every backend
-(``ClaudeBackend``, ``DeepAgentsBackend``, etc.) uses the same policy.
+(``ClaudeBackend``, ``GoogleADKBackend``, etc.) uses the same policy.
 
 The exponential backoff formula is::
 

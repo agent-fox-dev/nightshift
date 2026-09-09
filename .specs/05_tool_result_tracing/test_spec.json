@@ -517,17 +517,16 @@
       "id": "TS-05-E7",
       "requirement_id": "05-REQ-3.E3",
       "kind": "unit",
-      "description": "Other backends (deepagents, google_adk) do not accept or register a tool_result_callback; the parameter is exclusive to ClaudeBackend.execute().",
+      "description": "Other backends (google_adk) do not accept or register a tool_result_callback; the parameter is exclusive to ClaudeBackend.execute().",
       "preconditions": [
-        "DeepAgentsBackend and GoogleADKBackend classes are importable",
-        "Their execute() method signatures are inspectable"
+        "GoogleADKBackend class is importable",
+        "Its execute() method signature is inspectable"
       ],
       "input": {},
       "expected": {
-        "deepagents": "DeepAgentsBackend.execute() does not have a tool_result_callback parameter",
         "google_adk": "GoogleADKBackend.execute() does not have a tool_result_callback parameter"
       },
-      "assertion_pseudocode": "import inspect; deepagents_params = inspect.signature(DeepAgentsBackend.execute).parameters; google_adk_params = inspect.signature(GoogleADKBackend.execute).parameters; assert 'tool_result_callback' not in deepagents_params; assert 'tool_result_callback' not in google_adk_params"
+      "assertion_pseudocode": "import inspect; google_adk_params = inspect.signature(GoogleADKBackend.execute).parameters; assert 'tool_result_callback' not in google_adk_params"
     },
     {
       "id": "TS-05-E8",

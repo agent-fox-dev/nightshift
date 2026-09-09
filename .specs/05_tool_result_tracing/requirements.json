@@ -179,7 +179,7 @@
           "id": "05-REQ-3.E3",
           "ears_pattern": "ubiquitous",
           "system": "ClaudeBackend",
-          "action": "never register a PostToolUse hook for backends other than ClaudeBackend (deepagents, google_adk); the tool_result_callback parameter is exclusive to ClaudeBackend.execute()",
+          "action": "never register a PostToolUse hook for backends other than ClaudeBackend (google_adk); the tool_result_callback parameter is exclusive to ClaudeBackend.execute()",
           "return_contract": null
         }
       ]

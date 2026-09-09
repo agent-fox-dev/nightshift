@@ -62,7 +62,7 @@ Sub-config models (all pydantic `BaseModel` subclasses with documented defaults)
 
 | Model | Key Fields |
 |-------|------------|
-| `BackendConfig` | `provider` (claude, deepagents, google) |
+| `BackendConfig` | `provider` (claude, google) |
 | `OrchestratorConfig` | `max_retries`, `session_timeout`, `max_cost`, `max_sessions`, `max_budget_usd` |
 | `SecurityConfig` | `bash_allowlist`, `bash_allowlist_extend`, `permission_mode` |
 | `WorkspaceConfig` | `integration_branch`, `merge_strategy` |
