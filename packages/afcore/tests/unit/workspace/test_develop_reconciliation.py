@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from afcore.workspace import _sync_integration_with_remote
+from afcore.workspace.merge_agent import MergeAgentResult
 
 # ---- Helpers ----
 
@@ -135,7 +136,7 @@ class TestAllStrategiesFailWarning:
             patch(
                 "afcore.workspace.integration.run_merge_agent",
                 new_callable=AsyncMock,
-                return_value=False,
+                return_value=MergeAgentResult(success=False),
             ),
         ):
             with caplog.at_level(logging.WARNING):
@@ -156,7 +157,7 @@ class TestAllStrategiesFailWarning:
             patch(
                 "afcore.workspace.integration.run_merge_agent",
                 new_callable=AsyncMock,
-                return_value=False,
+                return_value=MergeAgentResult(success=False),
             ),
         ):
             # Should not raise
@@ -425,7 +426,7 @@ class TestFallbackChainOrdering:
             patch(
                 "afcore.workspace.integration.run_merge_agent",
                 new_callable=AsyncMock,
-                return_value=True,
+                return_value=MergeAgentResult(success=True),
             ) as mock_agent,
         ):
             await _sync_integration_with_remote(tmp_path, "develop")
@@ -451,7 +452,7 @@ class TestFallbackChainOrdering:
             patch(
                 "afcore.workspace.integration.run_merge_agent",
                 new_callable=AsyncMock,
-                return_value=False,
+                return_value=MergeAgentResult(success=False),
             ),
             caplog.at_level(logging.WARNING),
         ):

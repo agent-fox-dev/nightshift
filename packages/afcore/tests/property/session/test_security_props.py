@@ -8,7 +8,11 @@ Requirements: 03-REQ-8.1, 03-REQ-8.2
 from __future__ import annotations
 
 from afcore.core.config import AgentFoxConfig
-from afcore.core.security import DEFAULT_ALLOWLIST, make_pre_tool_use_hook
+from afcore.core.security import (
+    _DANGEROUS_ARG_TOKENS,
+    DEFAULT_ALLOWLIST,
+    make_pre_tool_use_hook,
+)
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
@@ -68,8 +72,15 @@ class TestAllowlistBlocksNonAllowlisted:
         """Commands with a first token in the allowlist are not blocked.
 
         Args are restricted to safe characters (no shell operators like
-        pipes, semicolons, subshells, or redirects).
+        pipes, semicolons, subshells, or redirects) and must not contain
+        dangerous argument tokens (e.g. ``-exec``, ``-execdir``) which
+        are blocked regardless of the command.
         """
+        # Exclude args that contain dangerous argument tokens — those are
+        # intentionally blocked even for allowlisted commands.
+        arg_tokens = args.split()
+        assume(not any(t in _DANGEROUS_ARG_TOKENS for t in arg_tokens))
+
         config = AgentFoxConfig()
         hook = make_pre_tool_use_hook(config.security)
 

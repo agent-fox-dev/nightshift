@@ -1440,6 +1440,7 @@ class FixPipeline:
         issue: IssueResult,
         spec: InMemorySpec,
         workspace: WorkspaceInfo,
+        metrics: FixMetrics | None = None,
     ) -> tuple[str, list[str]]:
         """Auto-commit, optionally push, and harvest the fix branch.
 
@@ -1588,7 +1589,7 @@ class FixPipeline:
         # Must run BEFORE cleanup destroys the feature branch.
         self._update_spinner(f"Merging fix for issue #{issue.number} into develop…")
         try:
-            changed_files = await self._harvest_and_push(spec, workspace)
+            changed_files = await self._harvest_and_push(spec, workspace, metrics=metrics)
         except Exception as exc:
             logger.warning(
                 "Harvest/push failed for issue #%d on branch %s: %s",
@@ -2066,7 +2067,7 @@ class FixPipeline:
                 session_status="completed",
             )
 
-            harvest_result, changed_files = await self._integrate_fix(issue, spec, workspace)
+            harvest_result, changed_files = await self._integrate_fix(issue, spec, workspace, metrics=metrics)
             metrics.fix_diff = self._last_fix_diff
 
             # 05-REQ-2.1: Post-harvest knowledge ingestion with real touched_files.
@@ -2202,6 +2203,7 @@ class FixPipeline:
         self,
         spec: InMemorySpec,
         workspace: WorkspaceInfo,
+        metrics: FixMetrics | None = None,
     ) -> list[str]:
         """Harvest the fix branch into the integration branch and push to origin.
 
@@ -2209,13 +2211,34 @@ class FixPipeline:
         empty list when no files were changed.  Raises on error — the caller
         is responsible for catching and handling exceptions.
 
+        When *metrics* is provided, any merge-agent sessions spawned during
+        harvest are accumulated into it so their tokens are not lost.
+
         Requirements: 05-REQ-1.1, 05-REQ-1.2, 05-REQ-1.E1
         """
         from afcore.workspace.harvest import harvest, post_harvest_integrate
+        from afcore.workspace.merge_agent import MergeAgentResult
 
         branch = self._config.workspace.integration_branch
         repo_root = self._repo_root
-        changed_files = await harvest(repo_root, workspace, dev_branch=branch)
+
+        merge_outcomes: list[MergeAgentResult] = []
+        changed_files = await harvest(
+            repo_root,
+            workspace,
+            dev_branch=branch,
+            sink_dispatcher=self._sink,
+            run_id=self._run_id,
+            max_budget_usd=None,
+            merge_outcomes=merge_outcomes,
+        )
+
+        # Accumulate merge-agent session metrics (issue #74).
+        if metrics is not None:
+            for result in merge_outcomes:
+                if result.outcome is not None:
+                    self._accumulate_metrics(metrics, result.outcome)
+
         if not changed_files:
             logger.warning(
                 "No changes produced for issue #%d on branch %s",

@@ -18,6 +18,7 @@ from afcore.core.errors import IntegrationError
 from afcore.workspace import create_worktree
 from afcore.workspace.git import run_git as _real_run_git
 from afcore.workspace.harvest import _clean_conflicting_untracked, harvest
+from afcore.workspace.merge_agent import MergeAgentResult
 
 from .conftest import add_commit_to_branch
 
@@ -372,7 +373,7 @@ class TestHarvesterConflictAutoResolve:
         with patch(
             "afcore.workspace.harvest.run_merge_agent",
             new_callable=AsyncMock,
-            return_value=False,
+            return_value=MergeAgentResult(success=False),
         ):
             with pytest.raises(IntegrationError, match="(?i)agent"):
                 await harvest(tmp_worktree_repo, ws, dev_branch="develop")
@@ -405,7 +406,7 @@ class TestHarvesterConflictAutoResolve:
         with patch(
             "afcore.workspace.harvest.run_merge_agent",
             new_callable=AsyncMock,
-            return_value=False,
+            return_value=MergeAgentResult(success=False),
         ):
             with pytest.raises(IntegrationError, match="(?i)agent"):
                 await harvest(tmp_worktree_repo, ws, dev_branch="develop")
@@ -437,7 +438,7 @@ class TestHarvesterConflictAutoResolve:
         with patch(
             "afcore.workspace.harvest.run_merge_agent",
             new_callable=AsyncMock,
-            return_value=False,
+            return_value=MergeAgentResult(success=False),
         ):
             with pytest.raises(IntegrationError, match="(?i)agent"):
                 await harvest(tmp_worktree_repo, ws, dev_branch="develop")
@@ -715,7 +716,7 @@ class TestMergeConflictRemainsRetryable:
         with patch(
             "afcore.workspace.harvest.run_merge_agent",
             new_callable=AsyncMock,
-            return_value=False,
+            return_value=MergeAgentResult(success=False),
         ):
             with pytest.raises(IntegrationError) as exc_info:
                 await harvest(tmp_worktree_repo, ws, dev_branch="develop")
@@ -954,12 +955,12 @@ class TestHarvestHeadMustAdvance:
         add_commit_to_branch(tmp_worktree_repo, "shared.py", "develop content\n")
 
         # Fake merge agent: resolves conflict and stages, but does NOT commit.
-        async def fake_merge_agent_stages_only(worktree_path, conflict_output, model_id):
+        async def fake_merge_agent_stages_only(worktree_path, conflict_output, model_id, **kwargs):
             # Resolve the conflict by writing clean content
             (worktree_path / "shared.py").write_text("resolved content\n")
             await _real_run_git(["add", "shared.py"], cwd=worktree_path)
             # Deliberately do NOT commit — this is the bug scenario.
-            return True  # Agent incorrectly reports success
+            return MergeAgentResult(success=True)  # Agent incorrectly reports success
 
         with patch(
             "afcore.workspace.harvest.run_merge_agent",
@@ -1006,7 +1007,7 @@ class TestHarvestCleanupOnFailure:
         with patch(
             "afcore.workspace.harvest.run_merge_agent",
             new_callable=AsyncMock,
-            return_value=False,
+            return_value=MergeAgentResult(success=False),
         ):
             with pytest.raises(IntegrationError):
                 await harvest(tmp_worktree_repo, ws, dev_branch="develop")
@@ -1121,7 +1122,7 @@ class TestHarvestCleanupOnFailure:
         with patch(
             "afcore.workspace.harvest.run_merge_agent",
             new_callable=AsyncMock,
-            return_value=False,
+            return_value=MergeAgentResult(success=False),
         ):
             with pytest.raises(IntegrationError):
                 await harvest(tmp_worktree_repo, ws, dev_branch="develop")

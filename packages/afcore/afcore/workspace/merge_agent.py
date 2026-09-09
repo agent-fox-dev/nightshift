@@ -3,9 +3,29 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from afaudit.sink import SinkDispatcher
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class MergeAgentResult:
+    """Result of a merge-agent session.
+
+    Carries both the boolean success flag (for existing callers) and the
+    ``SessionOutcome`` (for token/cost accounting and audit).
+
+    When the session raised an exception before producing an outcome,
+    ``outcome`` is ``None``.
+    """
+
+    success: bool
+    outcome: object | None = None
 
 
 MERGE_AGENT_SYSTEM_PROMPT = """\
@@ -29,16 +49,26 @@ async def run_merge_agent(
     worktree_path: Path,
     conflict_output: str,
     model_id: str,
-) -> bool:
+    *,
+    sink_dispatcher: SinkDispatcher | None = None,
+    run_id: str = "",
+    max_budget_usd: float | None = None,
+) -> MergeAgentResult:
     """Spawn a merge agent to resolve git conflicts.
 
     Args:
         worktree_path: Path to the git worktree with unresolved conflicts.
         conflict_output: Git conflict/diff output to include in the prompt.
         model_id: Model ID to use (resolved from ADVANCED tier).
+        sink_dispatcher: Optional audit sink so the session appears in
+            the run's audit trail.
+        run_id: Optional run ID for audit event context.
+        max_budget_usd: Optional per-session budget cap.
 
     Returns:
-        True if conflicts were resolved and committed, False otherwise.
+        A ``MergeAgentResult`` containing a boolean success flag and,
+        when the session completed (even on failure), the
+        ``SessionOutcome`` for token/cost accounting.
 
     Requirements: 45-REQ-4.1, 45-REQ-4.2, 45-REQ-4.3, 45-REQ-4.4,
                   45-REQ-4.5, 45-REQ-4.E1, 45-REQ-4.E2
@@ -51,25 +81,30 @@ async def run_merge_agent(
     )
 
     try:
-        session_ok = await _run_agent_session(
+        outcome = await _run_agent_session(
             worktree_path=worktree_path,
             system_prompt=MERGE_AGENT_SYSTEM_PROMPT,
             task_prompt=task_prompt,
             model_id=model_id,
+            sink_dispatcher=sink_dispatcher,
+            run_id=run_id,
+            max_budget_usd=max_budget_usd,
         )
     except Exception:
         logger.exception(
             "Merge agent session failed with exception (worktree=%s)",
             worktree_path,
         )
-        return False
+        return MergeAgentResult(success=False)
+
+    session_ok = outcome.status == "completed"
 
     if not session_ok:
         logger.error(
             "Merge agent session returned failure (worktree=%s)",
             worktree_path,
         )
-        return False
+        return MergeAgentResult(success=False, outcome=outcome)
 
     # Verify conflicts are actually resolved
     resolved = await _check_conflicts_resolved(worktree_path)
@@ -78,10 +113,10 @@ async def run_merge_agent(
             "Merge agent did not resolve all conflicts (worktree=%s)",
             worktree_path,
         )
-        return False
+        return MergeAgentResult(success=False, outcome=outcome)
 
     logger.info("Merge agent resolved all conflicts (worktree=%s)", worktree_path)
-    return True
+    return MergeAgentResult(success=True, outcome=outcome)
 
 
 async def _run_agent_session(
@@ -89,7 +124,11 @@ async def _run_agent_session(
     system_prompt: str,
     task_prompt: str,
     model_id: str,
-) -> bool:
+    *,
+    sink_dispatcher: SinkDispatcher | None = None,
+    run_id: str = "",
+    max_budget_usd: float | None = None,
+) -> object:
     """Run a coding agent session for conflict resolution.
 
     This is the internal integration point with the session runner.
@@ -97,7 +136,11 @@ async def _run_agent_session(
     spawning real agent sessions.
 
     Returns:
-        True if the session completed successfully, False otherwise.
+        The ``SessionOutcome`` from ``run_session``.
+
+    Raises:
+        Exception: Re-raises any exception from the session runner so the
+            caller can handle it and still record partial metrics.
     """
     from afcore.core.config import load_config
     from afcore.session.session import run_session
@@ -112,25 +155,23 @@ async def _run_agent_session(
         task_group=0,
     )
 
-    try:
-        # Note: effort, compaction, and cache_policy are intentionally omitted.
-        # The merge agent is a narrow, single-purpose tool for conflict
-        # resolution — it does not use resolve_session_params or the
-        # archetype config cascade.  The caller supplies model_id directly
-        # (resolved from ADVANCED tier) and SDK defaults suffice for the
-        # remaining parameters.  See issue #20.
-        outcome = await run_session(
-            workspace=workspace,
-            node_id="merge-agent",
-            system_prompt=system_prompt,
-            task_prompt=task_prompt,
-            config=config,
-            model_id=model_id,
-        )
-        return outcome.status == "completed"
-    except Exception:
-        logger.exception("Agent session raised an exception")
-        return False
+    # Note: effort, compaction, and cache_policy are intentionally omitted.
+    # The merge agent is a narrow, single-purpose tool for conflict
+    # resolution — it does not use resolve_session_params or the
+    # archetype config cascade.  The caller supplies model_id directly
+    # (resolved from ADVANCED tier) and SDK defaults suffice for the
+    # remaining parameters.  See issue #20.
+    return await run_session(
+        workspace=workspace,
+        node_id="merge-agent",
+        system_prompt=system_prompt,
+        task_prompt=task_prompt,
+        config=config,
+        model_id=model_id,
+        sink_dispatcher=sink_dispatcher,
+        run_id=run_id,
+        max_budget_usd=max_budget_usd,
+    )
 
 
 async def _check_conflicts_resolved(worktree_path: Path) -> bool:

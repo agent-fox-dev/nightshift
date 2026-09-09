@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from afcore.workspace import _sync_integration_with_remote
 from afcore.workspace.harvest import _push_integration_branch
+from afcore.workspace.merge_agent import MergeAgentResult
 
 # ---- Helpers ----
 
@@ -179,7 +180,11 @@ class TestMergeFailOursSucceed:
     """
 
     @pytest.mark.asyncio
-    @patch("afcore.workspace.integration.run_merge_agent", new_callable=AsyncMock, return_value=False)
+    @patch(
+        "afcore.workspace.integration.run_merge_agent",
+        new_callable=AsyncMock,
+        return_value=MergeAgentResult(success=False),
+    )
     async def test_conflicting_divergence_preserves_local(self, _mock_agent: AsyncMock, tmp_path: Path) -> None:
         """Conflicting divergence -> merge agent fails, local content preserved."""
         working, _origin = _create_diverged_repo(tmp_path, conflicting=True)

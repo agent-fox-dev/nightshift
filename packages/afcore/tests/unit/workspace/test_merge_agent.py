@@ -8,15 +8,40 @@ Requirements: 45-REQ-4.1 through 45-REQ-4.5, 45-REQ-4.E1, 45-REQ-4.E2,
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from afcore.workspace.merge_agent import (
     MERGE_AGENT_SYSTEM_PROMPT,
+    MergeAgentResult,
     _check_conflicts_resolved,
     run_merge_agent,
 )
+
+# ---------------------------------------------------------------------------
+# Helpers: lightweight SessionOutcome stand-in for unit tests
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeOutcome:
+    """Minimal stand-in for ``afaudit.sink.SessionOutcome``."""
+
+    status: str = "completed"
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    duration_ms: int = 0
+    error_message: str | None = None
+    response: str = ""
+    is_transport_error: bool = False
+
+
+def _make_outcome(*, status: str = "completed", **kwargs) -> _FakeOutcome:
+    return _FakeOutcome(status=status, **kwargs)
 
 
 class TestAgentSpawnedOnMergeFailure:
@@ -24,12 +49,12 @@ class TestAgentSpawnedOnMergeFailure:
 
     @pytest.mark.asyncio
     async def test_agent_returns_true_on_success(self, tmp_path: Path) -> None:
-        """run_merge_agent returns True when conflicts are resolved."""
+        """run_merge_agent returns MergeAgentResult with success=True when conflicts are resolved."""
         with (
             patch(
                 "afcore.workspace.merge_agent._run_agent_session",
                 new_callable=AsyncMock,
-                return_value=True,
+                return_value=_make_outcome(status="completed"),
             ) as mock_session,
             patch(
                 "afcore.workspace.merge_agent._check_conflicts_resolved",
@@ -42,23 +67,28 @@ class TestAgentSpawnedOnMergeFailure:
                 conflict_output="CONFLICT (content): Merge conflict in foo.py",
                 model_id="claude-opus-4-6",
             )
-            assert result is True
+            assert isinstance(result, MergeAgentResult)
+            assert result.success is True
+            assert result.outcome is not None
             mock_session.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_agent_returns_false_on_failure(self, tmp_path: Path) -> None:
-        """run_merge_agent returns False when agent fails to resolve."""
+        """run_merge_agent returns MergeAgentResult with success=False when agent fails to resolve."""
         with patch(
             "afcore.workspace.merge_agent._run_agent_session",
             new_callable=AsyncMock,
-            return_value=False,
+            return_value=_make_outcome(status="failed"),
         ):
             result = await run_merge_agent(
                 worktree_path=tmp_path,
                 conflict_output="CONFLICT",
                 model_id="claude-opus-4-6",
             )
-            assert result is False
+            assert isinstance(result, MergeAgentResult)
+            assert result.success is False
+            # Outcome should still be present for accounting
+            assert result.outcome is not None
 
 
 class TestAgentUsesAdvancedModel:
@@ -71,7 +101,7 @@ class TestAgentUsesAdvancedModel:
             patch(
                 "afcore.workspace.merge_agent._run_agent_session",
                 new_callable=AsyncMock,
-                return_value=True,
+                return_value=_make_outcome(status="completed"),
             ) as mock_session,
             patch(
                 "afcore.workspace.merge_agent._check_conflicts_resolved",
@@ -133,9 +163,10 @@ class TestAgentReceivesConflictOutput:
             system_prompt: str,
             task_prompt: str,
             model_id: str,
-        ) -> bool:
+            **kwargs,
+        ) -> _FakeOutcome:
             captured_prompt.append(task_prompt)
-            return True
+            return _make_outcome(status="completed")
 
         with (
             patch(
@@ -163,12 +194,12 @@ class TestAgentResolutionCompletesMerge:
 
     @pytest.mark.asyncio
     async def test_resolution_returns_true(self, tmp_path: Path) -> None:
-        """When agent resolves conflicts, run_merge_agent returns True."""
+        """When agent resolves conflicts, run_merge_agent returns MergeAgentResult with success=True."""
         with (
             patch(
                 "afcore.workspace.merge_agent._run_agent_session",
                 new_callable=AsyncMock,
-                return_value=True,
+                return_value=_make_outcome(status="completed"),
             ),
             patch(
                 "afcore.workspace.merge_agent._check_conflicts_resolved",
@@ -181,7 +212,7 @@ class TestAgentResolutionCompletesMerge:
                 conflict_output="CONFLICT",
                 model_id="claude-opus-4-6",
             )
-            assert result is True
+            assert result.success is True
 
 
 class TestAgentApiErrorTreatedAsFailure:
@@ -189,7 +220,7 @@ class TestAgentApiErrorTreatedAsFailure:
 
     @pytest.mark.asyncio
     async def test_api_error_returns_false(self, tmp_path: Path) -> None:
-        """When agent session raises an exception, run_merge_agent returns False."""
+        """When agent session raises an exception, run_merge_agent returns failure with no outcome."""
         with patch(
             "afcore.workspace.merge_agent._run_agent_session",
             new_callable=AsyncMock,
@@ -200,11 +231,12 @@ class TestAgentApiErrorTreatedAsFailure:
                 conflict_output="CONFLICT",
                 model_id="claude-opus-4-6",
             )
-            assert result is False
+            assert result.success is False
+            assert result.outcome is None
 
     @pytest.mark.asyncio
     async def test_timeout_error_returns_false(self, tmp_path: Path) -> None:
-        """When agent session times out, run_merge_agent returns False."""
+        """When agent session times out, run_merge_agent returns failure with no outcome."""
         with patch(
             "afcore.workspace.merge_agent._run_agent_session",
             new_callable=AsyncMock,
@@ -215,7 +247,8 @@ class TestAgentApiErrorTreatedAsFailure:
                 conflict_output="CONFLICT",
                 model_id="claude-opus-4-6",
             )
-            assert result is False
+            assert result.success is False
+            assert result.outcome is None
 
 
 # ---------------------------------------------------------------------------
@@ -390,3 +423,205 @@ class TestCheckConflictsResolvedRealRepo:
         repo = _init_repo(tmp_path / "repo")
 
         assert await _check_conflicts_resolved(repo) is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #74: Merge-agent accounting, audit, and budget tests
+# ---------------------------------------------------------------------------
+
+
+class TestMergeAgentSessionAccounting:
+    """Tests for issue #74: merge-agent session accounting.
+
+    Verifies that run_merge_agent returns SessionOutcome data,
+    passes sink_dispatcher / run_id / max_budget_usd through to
+    _run_agent_session, and preserves deliberate omissions (effort,
+    compaction, cache_policy).
+    """
+
+    @pytest.mark.asyncio
+    async def test_outcome_returned_with_token_counts(self, tmp_path: Path) -> None:
+        """AC-1: The SessionOutcome with token counts is returned."""
+        outcome = _make_outcome(
+            status="completed",
+            input_tokens=100,
+            output_tokens=50,
+            cache_read_input_tokens=10,
+            cache_creation_input_tokens=5,
+        )
+        with (
+            patch(
+                "afcore.workspace.merge_agent._run_agent_session",
+                new_callable=AsyncMock,
+                return_value=outcome,
+            ),
+            patch(
+                "afcore.workspace.merge_agent._check_conflicts_resolved",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            result = await run_merge_agent(
+                worktree_path=tmp_path,
+                conflict_output="CONFLICT",
+                model_id="claude-opus-4-6",
+            )
+            assert result.success is True
+            assert result.outcome is outcome
+            assert result.outcome.input_tokens == 100
+            assert result.outcome.output_tokens == 50
+
+    @pytest.mark.asyncio
+    async def test_sink_dispatcher_and_run_id_forwarded(self, tmp_path: Path) -> None:
+        """AC-2: sink_dispatcher and run_id are forwarded to _run_agent_session."""
+        sentinel_sink = object()
+        with (
+            patch(
+                "afcore.workspace.merge_agent._run_agent_session",
+                new_callable=AsyncMock,
+                return_value=_make_outcome(status="completed"),
+            ) as mock_session,
+            patch(
+                "afcore.workspace.merge_agent._check_conflicts_resolved",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            await run_merge_agent(
+                worktree_path=tmp_path,
+                conflict_output="CONFLICT",
+                model_id="claude-opus-4-6",
+                sink_dispatcher=sentinel_sink,
+                run_id="test-run-123",
+            )
+            call_kwargs = mock_session.call_args
+            assert call_kwargs.kwargs["sink_dispatcher"] is sentinel_sink
+            assert call_kwargs.kwargs["run_id"] == "test-run-123"
+
+    @pytest.mark.asyncio
+    async def test_max_budget_usd_forwarded(self, tmp_path: Path) -> None:
+        """AC-3: max_budget_usd is forwarded to _run_agent_session."""
+        with (
+            patch(
+                "afcore.workspace.merge_agent._run_agent_session",
+                new_callable=AsyncMock,
+                return_value=_make_outcome(status="completed"),
+            ) as mock_session,
+            patch(
+                "afcore.workspace.merge_agent._check_conflicts_resolved",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            await run_merge_agent(
+                worktree_path=tmp_path,
+                conflict_output="CONFLICT",
+                model_id="claude-opus-4-6",
+                max_budget_usd=5.0,
+            )
+            call_kwargs = mock_session.call_args
+            assert call_kwargs.kwargs["max_budget_usd"] == 5.0
+
+    @pytest.mark.asyncio
+    async def test_deliberate_omissions_preserved(self, tmp_path: Path) -> None:
+        """AC-4: effort, compaction, cache_policy are NOT passed to run_session.
+
+        The merge agent intentionally omits these per issue #20.
+        This test patches run_session (not _run_agent_session) to
+        verify the omission at the session-runner boundary.
+        """
+        with (
+            patch(
+                "afcore.core.config.load_config",
+            ),
+            patch(
+                "afcore.session.session.run_session",
+                new_callable=AsyncMock,
+                return_value=_make_outcome(status="completed"),
+            ) as mock_run_session,
+        ):
+            from afcore.workspace.merge_agent import _run_agent_session
+
+            await _run_agent_session(
+                worktree_path=tmp_path,
+                system_prompt="test",
+                task_prompt="test",
+                model_id="claude-opus-4-6",
+            )
+
+            call_kwargs = mock_run_session.call_args
+            # These must not be present in the call
+            assert "effort" not in call_kwargs.kwargs
+            assert "compaction" not in call_kwargs.kwargs
+            assert "cache_policy" not in call_kwargs.kwargs
+
+    @pytest.mark.asyncio
+    async def test_run_session_receives_sink_and_budget(self, tmp_path: Path) -> None:
+        """Verify that _run_agent_session passes sink_dispatcher, run_id,
+        and max_budget_usd through to run_session."""
+        sentinel_sink = object()
+        with (
+            patch(
+                "afcore.core.config.load_config",
+            ),
+            patch(
+                "afcore.session.session.run_session",
+                new_callable=AsyncMock,
+                return_value=_make_outcome(status="completed"),
+            ) as mock_run_session,
+        ):
+            from afcore.workspace.merge_agent import _run_agent_session
+
+            await _run_agent_session(
+                worktree_path=tmp_path,
+                system_prompt="test",
+                task_prompt="test",
+                model_id="claude-opus-4-6",
+                sink_dispatcher=sentinel_sink,
+                run_id="run-42",
+                max_budget_usd=3.5,
+            )
+
+            call_kwargs = mock_run_session.call_args
+            assert call_kwargs.kwargs["sink_dispatcher"] is sentinel_sink
+            assert call_kwargs.kwargs["run_id"] == "run-42"
+            assert call_kwargs.kwargs["max_budget_usd"] == 3.5
+
+    @pytest.mark.asyncio
+    async def test_failed_session_still_returns_outcome(self, tmp_path: Path) -> None:
+        """When the session fails (non-completed status), the outcome is still
+        returned so its tokens can be accounted for."""
+        outcome = _make_outcome(
+            status="failed",
+            input_tokens=80,
+            output_tokens=20,
+        )
+        with patch(
+            "afcore.workspace.merge_agent._run_agent_session",
+            new_callable=AsyncMock,
+            return_value=outcome,
+        ):
+            result = await run_merge_agent(
+                worktree_path=tmp_path,
+                conflict_output="CONFLICT",
+                model_id="claude-opus-4-6",
+            )
+            assert result.success is False
+            assert result.outcome is outcome
+            assert result.outcome.input_tokens == 80
+
+    @pytest.mark.asyncio
+    async def test_exception_returns_no_outcome(self, tmp_path: Path) -> None:
+        """When _run_agent_session raises, outcome is None (no tokens to account for)."""
+        with patch(
+            "afcore.workspace.merge_agent._run_agent_session",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ):
+            result = await run_merge_agent(
+                worktree_path=tmp_path,
+                conflict_output="CONFLICT",
+                model_id="claude-opus-4-6",
+            )
+            assert result.success is False
+            assert result.outcome is None

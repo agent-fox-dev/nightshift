@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from afcore.workspace.integration import _sync_integration_under_lock, ensure_integration_branch
+from afcore.workspace.merge_agent import MergeAgentResult
 
 
 class TestDevelopSyncAuditOnSuccess:
@@ -101,7 +102,7 @@ class TestDevelopSyncAuditOnFailure:
             patch(
                 "afcore.workspace.integration.run_merge_agent",
                 new_callable=AsyncMock,
-                return_value=False,
+                return_value=MergeAgentResult(success=False),
             ),
             patch(
                 "afcore.workspace.integration.emit_audit_event",

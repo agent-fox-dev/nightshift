@@ -31,7 +31,7 @@ from afcore.workspace import (
     rebase_onto,
     run_git,
 )
-from afcore.workspace.merge_agent import run_merge_agent
+from afcore.workspace.merge_agent import MergeAgentResult, run_merge_agent
 from afcore.workspace.merge_lock import MergeLock
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,9 @@ async def harvest(
     audit_sink: object | None = None,
     run_id: str | None = None,
     node_id: str | None = None,
+    sink_dispatcher: object | None = None,
+    max_budget_usd: float | None = None,
+    merge_outcomes: list[MergeAgentResult] | None = None,
 ) -> list[str]:
     """Integrate a workspace's changes into the development branch.
 
@@ -77,6 +80,13 @@ async def harvest(
         audit_sink: Optional audit sink for push failure/retry events.
         run_id: Optional run ID for audit event context.
         node_id: Optional node ID for audit event context.
+        sink_dispatcher: Optional audit sink dispatcher for the merge-agent
+            session so it appears in the run's audit trail.
+        max_budget_usd: Optional per-session budget cap for merge-agent
+            sessions.
+        merge_outcomes: Optional output list.  When provided, any
+            ``MergeAgentResult`` produced during the harvest is appended
+            so the caller can accumulate token metrics.
 
     Raises:
         IntegrationError: If merge fails after merge-agent attempt.
@@ -108,6 +118,9 @@ async def harvest(
             audit_sink=audit_sink,
             run_id=run_id,
             node_id=node_id,
+            sink_dispatcher=sink_dispatcher,
+            max_budget_usd=max_budget_usd,
+            merge_outcomes=merge_outcomes,
         )
 
 
@@ -360,6 +373,9 @@ async def _harvest_under_lock(
     audit_sink: object | None = None,
     run_id: str | None = None,
     node_id: str | None = None,
+    sink_dispatcher: object | None = None,
+    max_budget_usd: float | None = None,
+    merge_outcomes: list[MergeAgentResult] | None = None,
 ) -> list[str]:
     """Execute the harvest squash-merge under the merge lock.
 
@@ -422,12 +438,17 @@ async def _harvest_under_lock(
                 "Squash merge of '%s' had conflicts, spawning merge agent",
                 workspace.branch,
             )
-            resolved = await run_merge_agent(
+            merge_result = await run_merge_agent(
                 worktree_path=repo_root,
                 conflict_output=merge_detail,
                 model_id="ADVANCED",
+                sink_dispatcher=sink_dispatcher,
+                run_id=run_id or "",
+                max_budget_usd=max_budget_usd,
             )
-            if not resolved:
+            if merge_outcomes is not None:
+                merge_outcomes.append(merge_result)
+            if not merge_result.success:
                 # Abort the failed squash merge and raise.
                 # Squash does not set MERGE_HEAD, so use reset --merge.
                 await run_git(

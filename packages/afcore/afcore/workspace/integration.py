@@ -20,7 +20,7 @@ from afcore.workspace.git import (
     remote_branch_exists,
     run_git,
 )
-from afcore.workspace.merge_agent import run_merge_agent
+from afcore.workspace.merge_agent import MergeAgentResult, run_merge_agent
 from afcore.workspace.merge_lock import MergeLock
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,10 @@ async def _sync_integration_with_remote(
     branch: str,
     *,
     _lock_held: bool = False,
+    sink_dispatcher: object | None = None,
+    run_id: str = "",
+    max_budget_usd: float | None = None,
+    merge_outcomes: list[MergeAgentResult] | None = None,
 ) -> str | None:
     """Synchronize local integration branch with its remote counterpart.
 
@@ -121,15 +125,32 @@ async def _sync_integration_with_remote(
     if remote_ahead == 0:
         return None
 
+    merge_kwargs = {
+        "sink_dispatcher": sink_dispatcher,
+        "run_id": run_id,
+        "max_budget_usd": max_budget_usd,
+        "merge_outcomes": merge_outcomes,
+    }
+
     if _lock_held:
-        return await _sync_integration_under_lock(repo_root, branch, remote_ahead, local_ahead)
+        return await _sync_integration_under_lock(repo_root, branch, remote_ahead, local_ahead, **merge_kwargs)
 
     lock = MergeLock(repo_root)
     async with lock:
-        return await _sync_integration_under_lock(repo_root, branch, remote_ahead, local_ahead)
+        return await _sync_integration_under_lock(repo_root, branch, remote_ahead, local_ahead, **merge_kwargs)
 
 
-async def _sync_integration_under_lock(repo_root: Path, branch: str, remote_ahead: int, local_ahead: int) -> str | None:
+async def _sync_integration_under_lock(
+    repo_root: Path,
+    branch: str,
+    remote_ahead: int,
+    local_ahead: int,
+    *,
+    sink_dispatcher: object | None = None,
+    run_id: str = "",
+    max_budget_usd: float | None = None,
+    merge_outcomes: list[MergeAgentResult] | None = None,
+) -> str | None:
     """Execute the integration branch sync strategies under the merge lock.
 
     Requirements: 118-REQ-5.1, 118-REQ-5.2, 118-REQ-5.3
@@ -209,12 +230,17 @@ async def _sync_integration_under_lock(repo_root: Path, branch: str, remote_ahea
                 logger.info("Merge commit failed; spawning merge agent to resolve conflicts.")
 
                 conflict_output = stderr_merge.strip() or stdout_merge.strip() or "merge conflict"
-                resolved = await run_merge_agent(
+                merge_result = await run_merge_agent(
                     worktree_path=repo_root,
                     conflict_output=conflict_output,
                     model_id="ADVANCED",
+                    sink_dispatcher=sink_dispatcher,
+                    run_id=run_id,
+                    max_budget_usd=max_budget_usd,
                 )
-                if resolved:
+                if merge_outcomes is not None:
+                    merge_outcomes.append(merge_result)
+                if merge_result.success:
                     sync_method = "merge-agent"
                     logger.info(
                         "Merge agent resolved %s-sync conflicts successfully.",

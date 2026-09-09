@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from afcore.core.errors import IntegrationError
 from afcore.workspace import WorkspaceInfo
+from afcore.workspace.merge_agent import MergeAgentResult
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -118,7 +119,7 @@ class TestLockReleaseOnFailure:
             patch(
                 "afcore.workspace.harvest.run_merge_agent",
                 new_callable=AsyncMock,
-                return_value=False,
+                return_value=MergeAgentResult(success=False),
             ),
         ):
             from afcore.workspace.harvest import harvest
@@ -282,7 +283,7 @@ class TestAgentFailureAbortsHarvest:
             patch(
                 "afcore.workspace.harvest.run_merge_agent",
                 new_callable=AsyncMock,
-                return_value=False,
+                return_value=MergeAgentResult(success=False),
             ),
         ):
             from afcore.workspace.harvest import harvest
@@ -335,7 +336,7 @@ class TestDevelopSyncAgentFailureWarns:
             patch(
                 "afcore.workspace.integration.run_merge_agent",
                 new_callable=AsyncMock,
-                return_value=False,
+                return_value=MergeAgentResult(success=False),
             ),
             caplog.at_level(logging.WARNING),
         ):
