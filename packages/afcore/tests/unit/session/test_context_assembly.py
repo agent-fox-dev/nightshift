@@ -190,27 +190,27 @@ class TestPriorGroupFindings:
         assert "1" in groups
         assert "2" in groups
 
-    def test_includes_drift_findings_from_earlier_groups(
+    def test_includes_review_findings_from_multiple_prior_groups(
         self,
         schema_conn: duckdb.DuckDBPyConnection,
     ) -> None:
-        """TS-42-16: prior findings include drift findings from earlier groups."""
+        """TS-42-16: prior findings include review findings from multiple earlier groups."""
         id1 = _new_id()
         id2 = _new_id()
 
-        _insert_drift_finding(
+        _insert_review_finding(
             schema_conn,
             id1,
             "test_spec",
             task_group="1",
-            description="Drift from group 1",
+            description="Review from group 1",
         )
-        _insert_drift_finding(
+        _insert_review_finding(
             schema_conn,
             id2,
             "test_spec",
             task_group="2",
-            description="Drift from group 2",
+            description="Review from group 2",
         )
 
         result = get_prior_group_findings(
@@ -219,10 +219,9 @@ class TestPriorGroupFindings:
             task_group=3,
         )
 
-        # Should include drift findings from both prior groups
         descriptions = [r.description if hasattr(r, "description") else str(r) for r in result]
-        assert any("Drift from group 1" in d for d in descriptions)
-        assert any("Drift from group 2" in d for d in descriptions)
+        assert any("Review from group 1" in d for d in descriptions)
+        assert any("Review from group 2" in d for d in descriptions)
 
     def test_excludes_current_and_future_groups(
         self,
@@ -438,12 +437,12 @@ class TestPriorGroupFindings:
     ) -> None:
         """TS-NS-4: 3 findings with default max_items=10 returns all 3."""
         for i in range(3):
-            _insert_drift_finding(
+            _insert_review_finding(
                 schema_conn,
                 _new_id(),
                 "test_spec_few",
                 task_group="1",
-                description=f"Drift {i}",
+                description=f"Review {i}",
             )
 
         result = get_prior_group_findings(
