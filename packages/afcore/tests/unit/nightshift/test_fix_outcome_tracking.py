@@ -182,7 +182,6 @@ class TestDispatchGatesStalenessOnRealOutcome:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch("afcore.nightshift.engine.fetch_github_relationships", new=AsyncMock(return_value=[])),
             patch("afcore.nightshift.engine.build_graph", return_value=list(outcomes_by_number)),
             patch("afcore.nightshift.engine.FixPipeline") as mock_cls,
         ):

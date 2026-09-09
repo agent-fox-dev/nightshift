@@ -230,10 +230,6 @@ class TestAttemptCeilingDispatch:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[42]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
             patch.object(engine, "_exceeds_attempt_ceiling", return_value=True),
@@ -437,10 +433,6 @@ class TestPollExcludesFailedIssues:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[42]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
@@ -474,10 +466,6 @@ class TestPollExcludesFailedIssues:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[42]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
             patch.object(engine, "_exceeds_attempt_ceiling", return_value=False),
@@ -790,10 +778,6 @@ class TestCeilingExceededDrainRemoval:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[42]),
             patch.object(engine, "_exceeds_attempt_ceiling", return_value=True),
         ):
@@ -824,10 +808,6 @@ class TestCeilingExceededDrainRemoval:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[42]),
             patch.object(engine, "_exceeds_attempt_ceiling", return_value=True),
         ):
@@ -858,10 +838,6 @@ class TestCeilingExceededDrainRemoval:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[42]),
             patch.object(engine, "_exceeds_attempt_ceiling", return_value=True),
         ):
@@ -898,10 +874,6 @@ class TestCeilingExceededDrainRemoval:
             seen_set = seen if seen is not None else set()
             with (
                 patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-                patch(
-                    "afcore.nightshift.engine.fetch_github_relationships",
-                    new=AsyncMock(return_value=[]),
-                ),
                 patch("afcore.nightshift.engine.build_graph", return_value=[200]),
                 patch.object(engine, "_exceeds_attempt_ceiling", return_value=True),
             ):

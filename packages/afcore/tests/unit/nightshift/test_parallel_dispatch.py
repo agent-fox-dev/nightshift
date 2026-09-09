@@ -38,7 +38,6 @@ def _make_engine(
 
     platform = AsyncMock()
     platform.list_issues_by_label = AsyncMock(return_value=[])
-    platform.fetch_github_relationships = AsyncMock(return_value=[])
 
     engine = NightShiftEngine(config=config, platform=platform)
     return engine, platform
@@ -148,10 +147,6 @@ class TestParallelIndependentIssues:
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
             patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
-            patch(
                 "afcore.nightshift.engine.build_graph",
                 return_value=[1, 2, 3],
             ),
@@ -203,10 +198,6 @@ class TestDependencyAwareScheduling:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=edges),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch(
                 "afcore.nightshift.engine.build_graph",
                 return_value=[1, 3, 2],
@@ -414,10 +405,6 @@ class TestSerialProcessingWithMaxParallelOne:
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
             patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
-            patch(
                 "afcore.nightshift.engine.build_graph",
                 return_value=[1, 2, 3],
             ),
@@ -463,10 +450,6 @@ class TestCostBudgetCheckBetweenDispatches:
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
             patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
-            patch(
                 "afcore.nightshift.engine.build_graph",
                 return_value=[1, 2, 3],
             ),
@@ -502,10 +485,6 @@ class TestCostBudgetCheckBetweenDispatches:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch(
                 "afcore.nightshift.engine.build_graph",
                 return_value=[1, 2, 3],
@@ -543,10 +522,6 @@ class TestCostBudgetCheckBetweenDispatches:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch(
                 "afcore.nightshift.engine.build_graph",
                 return_value=[1, 2, 3],
@@ -653,10 +628,6 @@ class TestInFlightTracking:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[1]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
@@ -677,10 +648,6 @@ class TestInFlightTracking:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[1]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):

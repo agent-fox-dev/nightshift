@@ -147,10 +147,6 @@ class TestEngineAbortsOnFatal:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[1, 2]),
             patch.object(engine, "_process_fix", new=AsyncMock(return_value=True)),
             patch(
@@ -170,10 +166,6 @@ class TestEngineAbortsOnFatal:
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
             patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
-            patch(
                 "afcore.nightshift.engine.run_batch_triage",
                 new=AsyncMock(side_effect=FATAL),
             ),
@@ -191,10 +183,6 @@ class TestEngineAbortsOnFatal:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[1, 2]),
             patch.object(engine, "_process_fix", new=AsyncMock(return_value=True)),
             patch(

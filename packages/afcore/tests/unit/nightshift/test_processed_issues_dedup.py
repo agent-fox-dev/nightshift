@@ -31,7 +31,6 @@ def _make_engine(max_cost: float | None = None, max_sessions: int | None = None)
     platform = AsyncMock()
     # Default: no issues; individual tests override as needed.
     platform.list_issues_by_label = AsyncMock(return_value=[])
-    platform.fetch_github_relationships = AsyncMock(return_value=[])
 
     engine = NightShiftEngine(config=config, platform=platform)
     return engine, platform
@@ -83,10 +82,6 @@ class TestNoReprocessing:
         # Also stub out helpers called inside _run_issue_check.
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[464]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
@@ -121,10 +116,6 @@ class TestNoReprocessing:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", side_effect=fake_build_graph),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
@@ -162,10 +153,6 @@ class TestProcessedOnFailure:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[464]),
             patch.object(engine, "_process_fix", side_effect=failing_process_fix),
         ):

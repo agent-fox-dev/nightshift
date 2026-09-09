@@ -186,10 +186,6 @@ class TestSkipClosedIssue:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[10]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
@@ -218,10 +214,6 @@ class TestSkipClosedIssue:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[20]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
@@ -248,10 +240,6 @@ class TestSkipClosedIssue:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[30]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
@@ -276,10 +264,6 @@ class TestSkipClosedIssue:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                new=AsyncMock(return_value=[]),
-            ),
             patch("afcore.nightshift.engine.build_graph", return_value=[40]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):

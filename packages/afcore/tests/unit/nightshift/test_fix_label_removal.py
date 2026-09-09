@@ -264,7 +264,6 @@ class TestEngineLabelFixedOnClose:
         # Need >= 3 issues for batch triage to run
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch("afcore.nightshift.engine.fetch_github_relationships", AsyncMock(return_value=[])),
             patch(
                 "afcore.nightshift.engine.run_batch_triage",
                 AsyncMock(return_value=MagicMock(edges=[], supersession_pairs=[(10, 11)])),
@@ -314,7 +313,6 @@ class TestEngineLabelFixedOnClose:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch("afcore.nightshift.engine.fetch_github_relationships", AsyncMock(return_value=[])),
             patch("afcore.nightshift.engine.build_graph", return_value=[20, 21]),
             patch.object(engine, "_process_fix", AsyncMock()),
             patch("afcore.nightshift.engine.check_staleness", AsyncMock(return_value=staleness_result)),

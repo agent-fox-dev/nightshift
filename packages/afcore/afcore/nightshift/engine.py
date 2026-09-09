@@ -25,10 +25,7 @@ from afcore.core.errors import FatalAPIError
 from afcore.nightshift.dep_graph import build_graph, build_parallel_graph, merge_edges
 from afcore.nightshift.fix_pipeline import LABEL_FAILED, FixPipeline
 from afcore.nightshift.pr_feedback import process_pr_issue
-from afcore.nightshift.reference_parser import (
-    fetch_github_relationships,
-    parse_text_references,
-)
+from afcore.nightshift.reference_parser import parse_text_references
 from afcore.nightshift.staleness import check_staleness
 from afcore.nightshift.triage import run_batch_triage
 from afcore.ui.progress import ActivityCallback, SpinnerCallback, TaskCallback
@@ -425,18 +422,8 @@ class NightShiftEngine:
             self.state.issue_checks_completed += 1
             return
 
-        # Build dependency graph from explicit references and GitHub metadata
-        explicit_edges = parse_text_references(issues)
-        try:
-            github_edges = await fetch_github_relationships(self._platform, issues)
-        except Exception:
-            logger.warning(
-                "Failed to fetch GitHub relationships, continuing without",
-                exc_info=True,
-            )
-            github_edges = []
-
-        all_edges = explicit_edges + github_edges
+        # Build dependency graph from explicit text references
+        all_edges = parse_text_references(issues)
 
         # AI triage for batches >= 3 (71-REQ-3.1, 71-REQ-3.5)
         issue_check_run_id = generate_run_id()

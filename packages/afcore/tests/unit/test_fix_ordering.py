@@ -109,12 +109,12 @@ class TestBaseOrdering:
 
 # ---------------------------------------------------------------------------
 # TS-71-3, TS-71-4, TS-71-5: Reference parsing
-# Requirements: 71-REQ-2.1, 71-REQ-2.2, 71-REQ-2.3
+# Requirements: 71-REQ-2.1, 71-REQ-2.3
 # ---------------------------------------------------------------------------
 
 
 class TestReferenceParsing:
-    """Verify explicit dependency extraction from issue text and GitHub."""
+    """Verify explicit dependency extraction from issue text."""
 
     def test_ts_71_3_explicit_text_references_parsed(self) -> None:
         """'depends on #N' in issue body produces a dependency edge."""
@@ -130,35 +130,25 @@ class TestReferenceParsing:
         assert edges[0].to_issue == 20
         assert edges[0].source == "explicit"
 
-    @pytest.mark.asyncio
-    async def test_ts_71_4_github_relationships_incorporated(self) -> None:
-        """GitHub blocks/is-blocked-by metadata produces edges."""
-        from afcore.nightshift.reference_parser import (
-            fetch_github_relationships,
-        )
+    def test_ts_71_4_text_only_edges(self) -> None:
+        """Dependency ordering uses text-only edges (no GitHub timeline API).
 
-        mock_platform = AsyncMock()
-        # Mock platform to return timeline indicating #10 blocks #20
-        mock_platform.get_issue_timeline = AsyncMock(
-            side_effect=lambda n: (
-                [
-                    {
-                        "event": "cross-referenced",
-                        "source": {"issue": {"number": 10}},
-                    }
-                ]
-                if n == 20
-                else []
-            )
-        )
+        71-REQ-2.2 (GitHub timeline) was removed because no platform
+        implements ``get_issue_timeline``. Dependency ordering relies
+        solely on explicit text references (parse_text_references).
+        See ``docs/errata/71_github_timeline_dependency.md``.
+        """
+        from afcore.nightshift.reference_parser import parse_text_references
 
-        issue_10 = _make_issue(10)
-        issue_20 = _make_issue(20)
+        issue_10 = _make_issue(10, body="Standalone issue")
+        issue_20 = _make_issue(20, body="This depends on #10")
 
-        edges = await fetch_github_relationships(mock_platform, [issue_10, issue_20])
+        edges = parse_text_references([issue_10, issue_20])
 
         assert len(edges) == 1
-        assert edges[0].source == "github"
+        assert edges[0].source == "explicit"
+        assert edges[0].from_issue == 10
+        assert edges[0].to_issue == 20
 
     def test_ts_71_5_multiple_text_patterns_recognized(self) -> None:
         """All four text patterns matched case-insensitively."""

@@ -617,10 +617,6 @@ class TestSupersessionPairsActedOn:
                 "afcore.nightshift.engine.check_staleness",
                 AsyncMock(return_value=MagicMock(obsolete_issues=[], rationale={})),
             ),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                AsyncMock(return_value=[]),
-            ),
         ):
             await engine._run_issue_check()
 
@@ -668,10 +664,6 @@ class TestSupersessionPairsActedOn:
             patch(
                 "afcore.nightshift.engine.check_staleness",
                 AsyncMock(return_value=MagicMock(obsolete_issues=[], rationale={})),
-            ),
-            patch(
-                "afcore.nightshift.engine.fetch_github_relationships",
-                AsyncMock(return_value=[]),
             ),
         ):
             await engine._run_issue_check()
@@ -1224,7 +1216,7 @@ class TestScanCounterIncrement:
         self,
     ) -> None:
         """Scan counter increments after a full issue-check cycle with issues."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock
 
         from afcore.nightshift.engine import NightShiftEngine
         from afissues.protocol import IssueResult
@@ -1244,11 +1236,7 @@ class TestScanCounterIncrement:
         engine._process_fix = AsyncMock()  # type: ignore[assignment]
         assert engine.state.issue_checks_completed == 0
 
-        with patch(
-            "afcore.nightshift.engine.fetch_github_relationships",
-            AsyncMock(return_value=[]),
-        ):
-            await engine._run_issue_check()
+        await engine._run_issue_check()
 
         assert engine.state.issue_checks_completed == 1
 

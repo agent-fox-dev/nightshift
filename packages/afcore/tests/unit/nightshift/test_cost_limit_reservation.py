@@ -48,7 +48,6 @@ def _make_real_engine(
 
     platform = AsyncMock()
     platform.list_issues_by_label = AsyncMock(return_value=[])
-    platform.fetch_github_relationships = AsyncMock(return_value=[])
 
     engine = NightShiftEngine(config=config, platform=platform)
     return engine, platform
@@ -257,7 +256,6 @@ class TestDispatchGuardEndToEnd:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch("afcore.nightshift.engine.fetch_github_relationships", new=AsyncMock(return_value=[])),
             patch("afcore.nightshift.engine.build_graph", return_value=[1]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
@@ -280,7 +278,6 @@ class TestDispatchGuardEndToEnd:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch("afcore.nightshift.engine.fetch_github_relationships", new=AsyncMock(return_value=[])),
             patch("afcore.nightshift.engine.build_graph", return_value=[1]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
@@ -303,7 +300,6 @@ class TestDispatchGuardEndToEnd:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch("afcore.nightshift.engine.fetch_github_relationships", new=AsyncMock(return_value=[])),
             patch("afcore.nightshift.engine.build_graph", return_value=[1]),
             patch.object(engine, "_process_fix", side_effect=failing_process_fix),
         ):
@@ -328,7 +324,6 @@ class TestDispatchGuardEndToEnd:
 
         with (
             patch("afcore.nightshift.engine.parse_text_references", return_value=[]),
-            patch("afcore.nightshift.engine.fetch_github_relationships", new=AsyncMock(return_value=[])),
             patch("afcore.nightshift.engine.build_graph", return_value=[1]),
             patch.object(engine, "_process_fix", side_effect=fake_process_fix),
         ):
