@@ -1230,8 +1230,12 @@ def get_current_version(conn: duckdb.DuckDBPyConnection) -> int:
 def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> None:
     """Apply all migrations newer than the current schema version.
 
-    Each migration runs in its own transaction. On failure, raises
-    KnowledgeStoreError with the failing version and cause.
+    Each migration runs inside an explicit transaction.  Both the
+    migration's DDL/DML **and** the ``record_version`` call are
+    committed atomically.  On failure the transaction is rolled back so
+    the database remains at its pre-migration state, and
+    ``KnowledgeStoreError`` is raised with the failing version and
+    cause.
     """
     current = get_current_version(conn)
 
@@ -1239,8 +1243,10 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> None:
         if migration.version <= current:
             continue
         try:
+            conn.execute("BEGIN TRANSACTION")
             schema_changed = migration.apply(conn)
             record_version(conn, migration.version, migration.description)
+            conn.execute("COMMIT")
             if schema_changed is False:
                 logger.info(
                     "Marked migration v%d as applied (schema already up to date): %s",
@@ -1254,8 +1260,16 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> None:
                     migration.description,
                 )
         except KnowledgeStoreError:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
             raise
         except Exception as exc:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
             raise KnowledgeStoreError(
                 f"Migration to version {migration.version} failed: {exc}",
                 version=migration.version,

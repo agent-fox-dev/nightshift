@@ -16,6 +16,7 @@ from afcore.core.errors import KnowledgeStoreError
 from afcore.knowledge.migrations import (
     Migration,
     apply_pending_migrations,
+    get_current_version,
 )
 
 from tests.unit.knowledge.conftest import create_schema
@@ -264,3 +265,177 @@ class TestEmbeddingDimensionAllowlist:
         from afcore.knowledge.migrations import _sanitize_embedding_dim
 
         assert _sanitize_embedding_dim(0) == 384
+
+
+# -- Migration transaction atomicity tests (issue #84) -------------------------
+
+
+def _two_statement_migration(conn: duckdb.DuckDBPyConnection) -> None:
+    """A migration whose first statement succeeds but second fails."""
+    conn.execute("CREATE TABLE partial_side_effect (id INTEGER)")
+    conn.execute("THIS IS INVALID SQL")
+
+
+class TestMigrationTransactionAtomicity:
+    """Verify that multi-statement migrations are atomic via transactions.
+
+    Requirements: NS-REQ-1, NS-REQ-2, NS-REQ-3, NS-REQ-4, NS-REQ-5
+    """
+
+    def test_failed_migration_leaves_no_partial_artifacts(self) -> None:
+        """AC-1: A multi-statement migration that fails on its Nth statement
+        leaves the database unchanged — no table from statement 1 survives.
+
+        Test Spec: TS-NS-1
+        """
+        conn = duckdb.connect(":memory:")
+        create_schema(conn)
+
+        bad_migration = Migration(
+            version=2,
+            description="two-stmt migration with bad second stmt",
+            apply=_two_statement_migration,
+        )
+
+        with patch("afcore.knowledge.migrations.MIGRATIONS", [bad_migration]):
+            with pytest.raises(KnowledgeStoreError):
+                apply_pending_migrations(conn)
+
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            ).fetchall()
+        }
+        assert "partial_side_effect" not in tables, (
+            f"partial_side_effect should not exist after rollback, but tables are: {tables}"
+        )
+        conn.close()
+
+    def test_schema_version_unchanged_after_failed_migration(self) -> None:
+        """AC-2: get_current_version returns the pre-migration version after failure.
+
+        Test Spec: TS-NS-2
+        """
+        conn = duckdb.connect(":memory:")
+        create_schema(conn)
+
+        version_before = get_current_version(conn)
+
+        bad_migration = Migration(
+            version=version_before + 1,
+            description="failing migration",
+            apply=_two_statement_migration,
+        )
+
+        with patch("afcore.knowledge.migrations.MIGRATIONS", [bad_migration]):
+            with pytest.raises(KnowledgeStoreError):
+                apply_pending_migrations(conn)
+
+        assert get_current_version(conn) == version_before
+        conn.close()
+
+    def test_failed_migration_retryable_after_fix(self) -> None:
+        """AC-3: A previously failed migration succeeds on retry once fixed.
+
+        Test Spec: TS-NS-3
+        """
+        conn = duckdb.connect(":memory:")
+        create_schema(conn)
+
+        version_before = get_current_version(conn)
+        target_version = version_before + 1
+
+        bad_migration = Migration(
+            version=target_version,
+            description="initially failing migration",
+            apply=_two_statement_migration,
+        )
+
+        # First attempt: fails
+        with patch("afcore.knowledge.migrations.MIGRATIONS", [bad_migration]):
+            with pytest.raises(KnowledgeStoreError):
+                apply_pending_migrations(conn)
+
+        # Fix the migration (both statements now valid)
+        def fixed_migration_fn(c: duckdb.DuckDBPyConnection) -> None:
+            c.execute("CREATE TABLE partial_side_effect (id INTEGER)")
+            c.execute("CREATE TABLE another_table (id INTEGER)")
+
+        fixed_migration = Migration(
+            version=target_version,
+            description="now-fixed migration",
+            apply=fixed_migration_fn,
+        )
+
+        # Second attempt: succeeds
+        with patch("afcore.knowledge.migrations.MIGRATIONS", [fixed_migration]):
+            apply_pending_migrations(conn)
+
+        assert get_current_version(conn) == target_version
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            ).fetchall()
+        }
+        assert "partial_side_effect" in tables
+        assert "another_table" in tables
+        conn.close()
+
+    def test_repeated_failure_gives_same_root_cause_error(self) -> None:
+        """AC-4: Calling apply_pending_migrations twice after failure gives
+        the same root-cause error, not 'table already exists'.
+
+        Test Spec: TS-NS-4
+        """
+        conn = duckdb.connect(":memory:")
+        create_schema(conn)
+
+        bad_migration = Migration(
+            version=2,
+            description="two-stmt migration with bad second stmt",
+            apply=_two_statement_migration,
+        )
+
+        # First call — capture the error message
+        with patch("afcore.knowledge.migrations.MIGRATIONS", [bad_migration]):
+            with pytest.raises(KnowledgeStoreError) as first_exc:
+                apply_pending_migrations(conn)
+
+        # Second call — should fail with the same root cause
+        with patch("afcore.knowledge.migrations.MIGRATIONS", [bad_migration]):
+            with pytest.raises(KnowledgeStoreError) as second_exc:
+                apply_pending_migrations(conn)
+
+        first_msg = str(first_exc.value)
+        second_msg = str(second_exc.value)
+
+        # Neither should mention "already exists"
+        assert "already exists" not in first_msg.lower(), f"Unexpected error: {first_msg}"
+        assert "already exists" not in second_msg.lower(), f"Unexpected error: {second_msg}"
+
+        # Both should reference the same root cause (the invalid SQL)
+        assert "version 2" in first_msg.lower() or "2" in first_msg
+        assert "version 2" in second_msg.lower() or "2" in second_msg
+        conn.close()
+
+    def test_docstring_matches_implementation(self) -> None:
+        """AC-5: The docstring accurately describes the transactional guarantee.
+
+        Test Spec: TS-NS-5
+        """
+        import inspect
+
+        source = inspect.getsource(apply_pending_migrations)
+
+        # The docstring must mention transactions
+        assert "transaction" in apply_pending_migrations.__doc__.lower()
+
+        # The implementation must actually use BEGIN/COMMIT/ROLLBACK
+        assert "BEGIN TRANSACTION" in source
+        assert "COMMIT" in source
+        assert "ROLLBACK" in source
+
+        # The old inaccurate claim should be gone
+        assert "Each migration runs in its own transaction. On failure, raises" not in source
