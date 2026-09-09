@@ -140,6 +140,86 @@ class TestDuckDBSinkMultipleTouchedPaths:
 # -- Edge Case Tests ---------------------------------------------------------
 
 
+class TestDuckDBSinkWritesAll18Columns:
+    """Verify DuckDBSink.record_session_outcome writes all 18 session_outcomes columns.
+
+    Ensures column parity with afcore.engine.state.record_session so the
+    two writers cannot diverge.
+    """
+
+    def test_all_18_columns_written(self, knowledge_conn: duckdb.DuckDBPyConnection) -> None:
+        """Verify the sink INSERT covers all 18 columns, including extended fields."""
+        sink = DuckDBSink(knowledge_conn)
+
+        outcome = SessionOutcome(
+            spec_name="col_test",
+            task_group="1",
+            node_id="col_test/1",
+            touched_paths=["a.py"],
+            status="completed",
+            input_tokens=100,
+            output_tokens=50,
+            duration_ms=2000,
+            error_message=None,
+            is_transport_error=False,
+        )
+        sink.record_session_outcome(outcome)
+
+        row = knowledge_conn.execute(
+            """
+            SELECT id, spec_name, task_group, node_id, touched_path,
+                   status, input_tokens, output_tokens, duration_ms, created_at,
+                   run_id, attempt, cost, model, archetype,
+                   commit_sha, error_message, is_transport_error
+            FROM session_outcomes
+            """
+        ).fetchone()
+        assert row is not None
+
+        # Fields provided by SessionOutcome
+        assert str(row[0]) == str(outcome.id)
+        assert row[1] == "col_test"
+        assert row[2] == "1"
+        assert row[3] == "col_test/1"
+        assert row[4] == "a.py"
+        assert row[5] == "completed"
+        assert row[6] == 100
+        assert row[7] == 50
+        assert row[8] == 2000
+        assert row[9] is not None  # created_at
+
+        # Extended columns: NULL because SessionOutcome doesn't carry them.
+        # The column IS written (not silently omitted), which prevents the
+        # divergence described in issue #89.
+        assert row[10] is None  # run_id
+        assert row[11] is None  # attempt
+        assert row[12] is None  # cost
+        assert row[13] is None  # model
+        assert row[14] is None  # archetype
+        assert row[15] is None  # commit_sha
+
+        # error_message and is_transport_error ARE in SessionOutcome
+        assert row[16] is None  # error_message (None -> SQL NULL)
+        assert row[17] is False  # is_transport_error
+
+    def test_error_fields_written_correctly(self, knowledge_conn: duckdb.DuckDBPyConnection) -> None:
+        """Verify error_message and is_transport_error from SessionOutcome are persisted."""
+        sink = DuckDBSink(knowledge_conn)
+
+        outcome = SessionOutcome(
+            spec_name="err_test",
+            status="failed",
+            error_message="connection timed out",
+            is_transport_error=True,
+        )
+        sink.record_session_outcome(outcome)
+
+        row = knowledge_conn.execute("SELECT error_message, is_transport_error FROM session_outcomes").fetchone()
+        assert row is not None
+        assert row[0] == "connection timed out"
+        assert row[1] is True
+
+
 class TestDuckDBSinkWriteFailurePropagates:
     """TS-11-E3 (superseded by 38-REQ-3.1): DuckDB sink errors propagate.
 

@@ -56,19 +56,17 @@ def record_session(
 ) -> None:
     """INSERT a session outcome row into session_outcomes with all extended fields.
 
+    Uses the shared ``insert_session_outcome_row`` helper so the column set
+    stays in sync with ``DuckDBSink.record_session_outcome``.
+
     Stores NULL for error_message when the session succeeded (not empty string).
 
     Requirements: 105-REQ-3.2, 105-REQ-3.E1
     """
-    conn.execute(
-        """
-        INSERT INTO session_outcomes (
-            id, spec_name, task_group, node_id, touched_path,
-            status, input_tokens, output_tokens, duration_ms, created_at,
-            run_id, attempt, cost, model, archetype,
-            commit_sha, error_message, is_transport_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
+    from afcore.knowledge.duckdb_sink import insert_session_outcome_row
+
+    insert_session_outcome_row(
+        conn,
         [
             record.id,
             record.spec_name,

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import duckdb  # noqa: F401
 
-from afcore.core.errors import KnowledgeStoreError  # noqa: F401
+from afcore.core.errors import KnowledgeStoreError
 
 logger = logging.getLogger("afcore.knowledge.migrations")
 

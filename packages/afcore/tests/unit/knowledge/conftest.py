@@ -76,16 +76,24 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
 );
 
 CREATE TABLE IF NOT EXISTS session_outcomes (
-    id            UUID PRIMARY KEY,
-    spec_name     TEXT,
-    task_group    TEXT,
-    node_id       TEXT,
-    touched_path  TEXT,
-    status        TEXT,
-    input_tokens  INTEGER,
-    output_tokens INTEGER,
-    duration_ms   INTEGER,
-    created_at    TIMESTAMP
+    id                  UUID PRIMARY KEY,
+    spec_name           TEXT,
+    task_group          TEXT,
+    node_id             TEXT,
+    touched_path        TEXT,
+    status              TEXT,
+    input_tokens        INTEGER,
+    output_tokens       INTEGER,
+    duration_ms         INTEGER,
+    created_at          TIMESTAMP,
+    run_id              VARCHAR,
+    attempt             INTEGER DEFAULT 1,
+    cost                DOUBLE DEFAULT 0.0,
+    model               VARCHAR,
+    archetype           VARCHAR,
+    commit_sha          VARCHAR,
+    error_message       TEXT,
+    is_transport_error  BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS fact_causes (

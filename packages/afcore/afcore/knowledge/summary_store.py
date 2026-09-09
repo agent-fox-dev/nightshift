@@ -164,16 +164,3 @@ def query_same_spec_summaries(
         return []
 
     return [_row_to_summary_record(row) for row in rows]
-
-
-def truncate_for_audit(summary_text: str, max_len: int = 2000) -> str:
-    """Truncate summary text for audit event payload.
-
-    If *summary_text* exceeds *max_len* characters, truncate and append
-    a ``...`` marker.  Returns the original text unchanged when it fits.
-
-    Requirements: 119-REQ-4.E1
-    """
-    if len(summary_text) <= max_len:
-        return summary_text
-    return summary_text[:max_len] + "..."

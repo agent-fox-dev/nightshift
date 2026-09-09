@@ -16,6 +16,37 @@ from afaudit.sink import SessionOutcome, ToolCall, ToolError
 
 logger = logging.getLogger("afcore.knowledge.duckdb_sink")
 
+# ---------------------------------------------------------------------------
+# Shared INSERT for session_outcomes — single source of truth for the 18-
+# column set.  Both DuckDBSink.record_session_outcome and
+# afcore.engine.state.record_session call insert_session_outcome_row() so
+# the column list cannot diverge.
+# ---------------------------------------------------------------------------
+
+_SESSION_OUTCOMES_INSERT = """
+INSERT INTO session_outcomes (
+    id, spec_name, task_group, node_id, touched_path,
+    status, input_tokens, output_tokens, duration_ms, created_at,
+    run_id, attempt, cost, model, archetype,
+    commit_sha, error_message, is_transport_error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+
+def insert_session_outcome_row(
+    conn: duckdb.DuckDBPyConnection,
+    values: list,
+) -> None:
+    """Execute the canonical 18-column INSERT into session_outcomes.
+
+    Both ``DuckDBSink.record_session_outcome`` and
+    ``afcore.engine.state.record_session`` call this helper so the column
+    set cannot diverge.  Any schema change to session_outcomes must update
+    ``_SESSION_OUTCOMES_INSERT`` — the single definition — and both callers
+    will follow.
+    """
+    conn.execute(_SESSION_OUTCOMES_INSERT, values)
+
 
 class DuckDBSink:
     """SessionSink implementation backed by DuckDB.
@@ -33,6 +64,16 @@ class DuckDBSink:
     def record_session_outcome(self, outcome: SessionOutcome) -> None:
         """Insert a single row into session_outcomes.
 
+        Writes all 18 columns via the shared ``insert_session_outcome_row``
+        helper so the column set stays in sync with
+        ``afcore.engine.state.record_session``.
+
+        Fields not carried by :class:`SessionOutcome` (``run_id``,
+        ``attempt``, ``cost``, ``model``, ``archetype``, ``commit_sha``)
+        are written as ``NULL`` / default.  A future protocol extension
+        that adds those fields will automatically flow through via
+        ``getattr`` fallback.
+
         Multiple touched paths are stored as a comma-delimited string in the
         touched_path column so that each session produces exactly one row
         (fixes #457 — per-file row explosion).  If touched_paths is empty,
@@ -40,14 +81,8 @@ class DuckDBSink:
         DuckDB errors propagate to the caller (38-REQ-3.1).
         """
         touched_path: str | None = ",".join(outcome.touched_paths) if outcome.touched_paths else None
-        self._conn.execute(
-            """
-            INSERT INTO session_outcomes
-                (id, spec_name, task_group, node_id, touched_path,
-                 status, input_tokens, output_tokens, duration_ms,
-                 created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+        insert_session_outcome_row(
+            self._conn,
             [
                 str(outcome.id),
                 outcome.spec_name,
@@ -59,6 +94,14 @@ class DuckDBSink:
                 outcome.output_tokens,
                 outcome.duration_ms,
                 outcome.created_at,
+                getattr(outcome, "run_id", None),
+                getattr(outcome, "attempt", None),
+                getattr(outcome, "cost", None),
+                getattr(outcome, "model", None),
+                getattr(outcome, "archetype", None),
+                getattr(outcome, "commit_sha", None),
+                outcome.error_message,
+                outcome.is_transport_error,
             ],
         )
 
