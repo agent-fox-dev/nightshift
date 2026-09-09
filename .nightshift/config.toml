@@ -4,6 +4,10 @@
 [workspace]
 merge_strategy = "direct"
 
+[gate]
+command = "make check"
+timeout = 600
+
 [backend]
 provider = "claude"
 
@@ -25,3 +29,4 @@ max_turns = 120
 [archetypes.overrides.reviewer.modes.pre-flight]
 model_tier = "STANDARD"
 max_turns = 50
+
