@@ -5,11 +5,11 @@
 A project that is built by agents needs more than a loop over a list of spec
 packages: defects and change requests keep arriving after the specs are
 done, and a person should not have to start, watch and merge each piece of
-work. sparrow is the process that owns that work. It takes every piece of
+work. nightshift is the process that owns that work. It takes every piece of
 work (a spec package, a defect, a change request) from intake to a landed
 and verified change on a Parley hub, with agents doing the planning, the
 implementation and the review. The person steers and decides: they say
-which item may land without them, and they answer the questions sparrow
+which item may land without them, and they answer the questions nightshift
 cannot answer itself, in an inbox built for that. Everything else goes on
 without them.
 
@@ -19,7 +19,7 @@ without them.
   from a forge and a change request typed as free text each become a work
   item, and each reaches `done` through the same states: planned, mandated,
   implemented, reviewed, landed, verified.
-- **Nothing lands without a mandate.** A change produced by sparrow lands
+- **Nothing lands without a mandate.** A change produced by nightshift lands
   only when a person has given a mandate to its work item, and only while
   the change stays inside the mandate's paths and budget. A change outside
   them does not land; it becomes a decision.
@@ -32,12 +32,12 @@ without them.
 - **The inbox shows two things.** `Unread` holds what finished or changed
   since the person last looked; `Action` holds every decision that waits
   for them. Both are read over an HTTP API with a server-sent event stream,
-  and through the `sparrow` command.
+  and through the `nightshift` command.
 - **Independent items run at once.** Up to a configured number of agent
   sessions (3 unless configured) run in parallel, each item in a task fork
   of its own.
 - **A landing that breaks the main branch is dealt with.** After every
-  landing sparrow runs the workspace's health command on the landed commit.
+  landing nightshift runs the workspace's health command on the landed commit.
   A failure starts one repair; when that does not make the branch healthy,
   the landing is reverted.
 - **A decision is not asked twice.** An answered decision of a kind that
@@ -45,16 +45,16 @@ without them.
   change the person approves.
 - **One brief a day.** Once a day `Unread` gets one item that says what
   landed, what waits for a decision and what was spent.
-- **It survives a restart.** After `sparrowd` stops, by signal or by crash,
+- **It survives a restart.** After `nightshiftd` stops, by signal or by crash,
   the next start continues every work item from the state it had reached,
   and no decision, mandate or thread is lost.
 
 ## Non-goals
 
 - **Hosting code, landing or policy.** Forks, changes, landing, policy,
-  sandboxes and the event log are Parley's. sparrow uses them and
+  sandboxes and the event log are Parley's. nightshift uses them and
   implements none of them.
-- **Working without a hub.** sparrow always needs a Parley hub. A project
+- **Working without a hub.** nightshift always needs a Parley hub. A project
   without one keeps using `specrun` from `agent-fox-dev/spec`.
 - **A web or desktop client.** Version 1 has the API and the command-line
   client. Other clients are a later PRD on the same API.
@@ -67,17 +67,17 @@ without them.
   has landed. Starting on top of an open change is a later PRD.
 - **Several attempts at one item side by side.** One fork and one change
   per item.
-- **A learning loop.** sparrow does not propose changes to skills or to the
+- **A learning loop.** nightshift does not propose changes to skills or to the
   steering from a run's outcome, beyond the rules written back from
   decisions.
 - **Health of a main branch that moved by other means.** The health command
-  runs after sparrow's own landings and at registration, not after a sync
+  runs after nightshift's own landings and at registration, not after a sync
   from origin or a direct push.
-- **Changes to the spec format or to `afspec`.** sparrow reads and writes
+- **Changes to the spec format or to `afspec`.** nightshift reads and writes
   packages through the library as it is.
 - **The agents' prompts.** What the planner, the implementer and the
   reviewer are told is the text of the skills (`af-spec`, `af-impl`) and of
-  sparrow's own review brief; this PRD says what each role must produce,
+  nightshift's own review brief; this PRD says what each role must produce,
   not how it is worded.
 
 ## Background
@@ -106,17 +106,17 @@ and one-call revert (§8), advisory claims and the activity query (§9),
 forge reads and writes (§12), sandboxes (§13), and sessions with token
 usage plus a durable, replayable event log (§14). On 2026-11-13 its packages
 `01` to `04` and `09` are implemented (skeleton, API conventions, server
-lifecycle, authentication, CLI foundation); every package sparrow relies on
+lifecycle, authentication, CLI foundation); every package nightshift relies on
 is still pending.
 
-**`agent-fox-dev/sparrow`** is new and holds a `README.md` only. Every
-command, route and term this PRD names for sparrow is new.
+**`agent-fox-dev/nightshift`** is new and holds a `README.md` only. Every
+command, route and term this PRD names for nightshift is new.
 
 Mapped onto the hub, most of what `specrun` builds for itself is a fact the
 hub reports: "landed" is a land attempt's status, the gate is a check on a
 change version, a session's cost is its usage record. What the hub does not
 have, by its own scope, is the work item, the mandate and a place where a
-person is asked a question. Those are sparrow's.
+person is asked a question. Those are nightshift's.
 
 The inbox follows the pattern of Pizza Bot
 (`github.com/agent-fox-dev/pizza-bot`): two global views over threads,
@@ -127,13 +127,13 @@ on when no client is connected.
 ## Requirements
 
 Constraint: Linux and macOS; Windows is best effort. Constraint: Go, built
-as two programs, `sparrowd` (the daemon) and `sparrow` (the client), which
-speaks only the daemon's HTTP API. Constraint: `sparrowd` is one process
+as two programs, `nightshiftd` (the daemon) and `nightshift` (the client), which
+speaks only the daemon's HTTP API. Constraint: `nightshiftd` is one process
 holding the controller, its store and the inbox API.
 
 ### The daemon and its API
 
-`sparrowd` reads one configuration file (`~/.sparrow/config.toml` unless
+`nightshiftd` reads one configuration file (`~/.nightshift/config.toml` unless
 `--config` names another) and listens on `127.0.0.1:7878` unless configured.
 The configuration holds the hub's endpoint and an API key of the person's
 Parley account, the roles (below) and the limits this document names.
@@ -145,7 +145,7 @@ the check and the reason (`config: …`, `hub: 401 unauthorized`,
 `roles: reviewer and implementer share the provider "anthropic"`); nothing
 is started.
 
-On its first start it writes a client token to `~/.sparrow/token`, readable
+On its first start it writes a client token to `~/.nightshift/token`, readable
 by its owner only. Every API request carries it as a bearer token; without
 it, or with another, the answer is `401` with `error_type: unauthorized`.
 The API lives under `/api/v1` and answers JSON; an error is
@@ -167,14 +167,14 @@ the interrupted one does not count as a failed attempt.
 
 **When the hub is unreachable**, no session is started and nothing is
 landed; running sessions go on. `status` reports `hub: unreachable` with
-the time of the first failure. sparrow tries again every 30 seconds and
+the time of the first failure. nightshift tries again every 30 seconds and
 continues by itself. After 15 minutes without the hub, one item goes to
 `Unread` saying so; it is not repeated until the hub has been reachable in
 between.
 
 ### Workspaces
 
-`sparrow workspace add <slug> --health "<command>"` registers a Parley
+`nightshift workspace add <slug> --health "<command>"` registers a Parley
 workspace the person owns. Options: `--runner local|sandbox` (default
 `local`), `--health-timeout <duration>` (default `30m`) and
 `--adopt-policy`.
@@ -184,10 +184,10 @@ with exit code 1, the reason on stderr, and nothing stored:
 
 - the workspace exists on the hub and the API key has owner access to it
   (`workspace not found`, `not the owner of <slug>`);
-- its policy requires the three checks sparrow reports, `sparrow-gate`,
-  `sparrow-review` and `sparrow-mandate`, in `default` and in every rule
+- its policy requires the three checks nightshift reports, `nightshift-gate`,
+  `nightshift-review` and `nightshift-mandate`, in `default` and in every rule
   that does not block. When it does not, the refusal lists the rules that
-  lack them and names `--adopt-policy`; with that option sparrow adds the
+  lack them and names `--adopt-policy`; with that option nightshift adds the
   three names to those rules, writes the policy, and reports the new
   revision;
 - with `--runner sandbox`, the hub has sandboxes enabled
@@ -196,28 +196,28 @@ with exit code 1, the reason on stderr, and nothing stored:
   timeout (`health command exited <N>` or `health command timed out`, with
   the last 50 lines of its output).
 
-`sparrow workspace list` shows each workspace with its runner, its state
-(`green`, `red`) and its counts of open work items. `sparrow workspace
+`nightshift workspace list` shows each workspace with its runner, its state
+(`green`, `red`) and its counts of open work items. `nightshift workspace
 remove <slug>` is refused with exit code 1 while the workspace has a work
 item that is neither `done` nor `abandoned`, naming them; otherwise the
-workspace and its finished threads are removed from sparrow, and nothing on
+workspace and its finished threads are removed from nightshift, and nothing on
 the hub is changed.
 
 ### Work items and intake
 
-A work item belongs to one workspace and has a number unique in sparrow, a
+A work item belongs to one workspace and has a number unique in nightshift, a
 kind (`spec`, `defect`, `change_request`), a title, its source, a state and
 one thread. There are three ways to create one:
 
-- `sparrow item new <slug> --text "<text>" [--kind defect|change_request]`
+- `nightshift item new <slug> --text "<text>" [--kind defect|change_request]`
   creates an item from free text (default kind `change_request`). The text
   is 1 to 20,000 characters; outside that the command exits 2.
-- `sparrow item import <slug> --issue <N>` reads the issue and its comments
+- `nightshift item import <slug> --issue <N>` reads the issue and its comments
   through the hub's forge routes. The kind is `defect` when the issue
   carries `af:defect` or a label named `bug`, else `change_request`. An
   issue already imported is refused with exit code 1, naming the existing
   item. An issue that cannot be read is refused with the hub's error.
-- `sparrow item import <slug> --spec <NN>` takes an active spec package on
+- `nightshift item import <slug> --spec <NN>` takes an active spec package on
   the default branch. It is refused with exit code 1 when the package does
   not load (with the validator's first finding), is not `active`, has no
   task `pending` or `in_progress`, or is already an item.
@@ -240,8 +240,8 @@ A work item is in one of these states:
 | `abandoned` | Ended without landing, by the person |
 
 An item that waits for a decision keeps its state and names the decision in
-`waiting_on`. `sparrow item list [<slug>] [--state <s>]` lists items;
-`sparrow item abandon <N>` ends the item's sessions, abandons its change,
+`waiting_on`. `nightshift item list [<slug>] [--state <s>]` lists items;
+`nightshift item abandon <N>` ends the item's sessions, abandons its change,
 releases its claim and sets `abandoned`; it is refused with exit code 1 for
 an item that is `verifying` or `done`.
 
@@ -250,7 +250,7 @@ an item that is `verifying` or `done`.
 An item of kind `spec` is planned already: its package exists. It goes from
 `new` straight to `awaiting_mandate`.
 
-For a `defect` or a `change_request`, sparrow creates a task fork of the
+For a `defect` or a `change_request`, nightshift creates a task fork of the
 workspace and starts a planner session in it. The planner writes one spec
 package on a branch of the fork, as `af-spec` writes one: for a
 `change_request`, a package of the profile the work needs; for a `defect`,
@@ -279,7 +279,7 @@ touch (globs; for a package, the union of every task's `touches` and the
 package's own directory), a budget in tokens, and an expiry. The budget is
 `[mandate].default_budget_tokens` (20,000,000 unless configured) and the
 expiry 7 days after the grant, unless the person's answer sets others
-(`sparrow decide <id> --option approve --budget <tokens> --expires
+(`nightshift decide <id> --option approve --budget <tokens> --expires
 <duration>`).
 
 For an imported `spec` item the mandate is asked for with a decision of
@@ -287,7 +287,7 @@ kind `mandate`, showing the package's title, its tasks, the paths and the
 budget; its options are `approve` and `abandon`.
 
 A mandate ends when its item is `done` or `abandoned`, when it expires, or
-when the person runs `sparrow mandate revoke <item>`. An item whose mandate
+when the person runs `nightshift mandate revoke <item>`. An item whose mandate
 ended otherwise than by `done` has its sessions ended and returns to
 `awaiting_mandate` with a new `mandate` decision that says why; its fork
 and change stay.
@@ -318,7 +318,7 @@ daemon does not start otherwise (see *The daemon and its API*).
 
 Every agent session is registered on the hub as a session with its role as
 `archetype`, its model, and the item's number in `metadata`; forks, pushes,
-claims and lands name it. sparrow reports each session's token usage to the
+claims and lands name it. nightshift reports each session's token usage to the
 hub when the session ends, and marks it completed or failed.
 
 A session runs in the workspace's runner. With `local`, it is a process on
@@ -337,7 +337,7 @@ a row for the same step, the item waits on a decision of kind
 stream; its options are `retry` and `abandon`.
 
 The full output stream of every session is kept on the daemon's machine for
-30 days and can be read with `sparrow session log <session-id>`.
+30 days and can be read with `nightshift session log <session-id>`.
 
 ### Scheduling
 
@@ -351,36 +351,36 @@ A `ready` item does not start while:
 
 - a package it depends on (the `dependencies` of its `tasks.json`) is not
   finished on the default branch;
-- another sparrow item of the same workspace with an earlier mandate has
+- another nightshift item of the same workspace with an earlier mandate has
   claimed a path its own mandate also matches, and has not landed or been
   abandoned;
 - its workspace is `red` and it has reached `landing` (see *After a
   landing*).
 
-`sparrow item show <N>` names what an item waits for. When an item starts,
-sparrow creates a claim on the hub for the mandate's paths with the item's
+`nightshift item show <N>` names what an item waits for. When an item starts,
+nightshift creates a claim on the hub for the mandate's paths with the item's
 title as intent, and renews it while the item is open. An overlap with a
-change or claim that is not sparrow's does not hold the item back; it is
+change or claim that is not nightshift's does not hold the item back; it is
 noted in the thread with the other change's number.
 
 ### Implementation
 
-For a `ready` item sparrow creates the task fork, unless planning created
+For a `ready` item nightshift creates the task fork, unless planning created
 it, with a token limited to the mandate's paths, and starts an implementer
 session that implements the item's package with `af-impl`. The session
 commits on a branch and pushes it to the fork; it merges nothing. The
 first push opens the item's change on the hub, with the item's title and
 the package's intent.
 
-When the session ends, sparrow reads from the hub and the fork, not from
+When the session ends, nightshift reads from the hub and the fork, not from
 the session's account: the change exists and has a version newer than at
 the session's start, and the package on that version has no task `pending`
 or `in_progress`. When either does not hold, the session counts as failed
 with the reason (`no new version`, `tasks still open`).
 
-sparrow then runs the package's gate on the version (`speca`'s gate, in a
+nightshift then runs the package's gate on the version (`speca`'s gate, in a
 runner, on a clone of the fork at that version) and reports it to the hub
-as the check `sparrow-gate`, `passed` or `failed`, with the verdict's
+as the check `nightshift-gate`, `passed` or `failed`, with the verdict's
 summary. On `failed` the implementer is started again with the verdict;
 this counts toward the two attempts of *Roles and sessions*.
 
@@ -388,47 +388,47 @@ Open items the session reports (what `af-impl` calls `unmet`) each become a
 new work item of kind `defect` in state `new`, linked to the item they came
 from, and are listed in the thread. Unlike an item a person created, which
 is planned at once, such an item stays `new`, with no session and no
-mandate, until the person runs `sparrow item plan <N>`.
+mandate, until the person runs `nightshift item plan <N>`.
 
 ### Review of a change
 
-When `sparrow-gate` passed on a version, the item is `reviewing`. The
+When `nightshift-gate` passed on a version, the item is `reviewing`. The
 reviewer session reads the package, the diff of the version against its
 base and the gate's verdict, with a token that can read the fork and
 nothing else. Its verdict is `agree` or `object`, with findings that each
 name a file and a line or a criterion.
 
-On `agree`, sparrow reports the check `sparrow-review` as `passed` on that
+On `agree`, nightshift reports the check `nightshift-review` as `passed` on that
 version. On `object`, it reports `failed`, and the implementer is started
 with the findings; its new version is gated and reviewed again. After 3
 reviews of one item without `agree`, the item waits on a decision of kind
 `review_disagreement`, showing each open finding with the implementer's
 reply; its options are `side_with_reviewer` (the implementer gets one more
 session with the findings marked as binding), `side_with_implementer`
-(`sparrow-review` is reported `passed`, the summary naming the person's
+(`nightshift-review` is reported `passed`, the summary naming the person's
 decision) and `abandon`.
 
-sparrow never records an approval on the hub for a model's verdict: a
+nightshift never records an approval on the hub for a model's verdict: a
 model's review is a check, so that an approval a policy rule requires
 stays a person's.
 
 ### Landing
 
-With `sparrow-gate` and `sparrow-review` passed on the current version,
-sparrow evaluates the mandate: the mandate is live, the count is below the
+With `nightshift-gate` and `nightshift-review` passed on the current version,
+nightshift evaluates the mandate: the mandate is live, the count is below the
 budget, and every file the version touches matches the mandate's paths. It
-reports the result as the check `sparrow-mandate`, the summary naming the
+reports the result as the check `nightshift-mandate`, the summary naming the
 first condition that failed. A `failed` for the paths starts a `widen`
 decision; for the budget, a `budget` decision; for a mandate that ended, a
 `mandate` decision.
 
-With all three passed, the item is `landing` and sparrow asks the hub to
+With all three passed, the item is `landing` and nightshift asks the hub to
 land the change. What the hub answers decides:
 
 - **landed**: the item is `verifying`.
 - **pending on an approval** (a policy rule requires a person): a decision
   of kind `approval` goes to `Action`, naming the rule and the files it
-  matched; its options are `approve` (sparrow records the approval on the
+  matched; its options are `approve` (nightshift records the approval on the
   hub with the person's API key and asks to land again), `reject` (the
   rejection is recorded and the implementer is started with the comment,
   required) and `abandon`.
@@ -443,21 +443,21 @@ land the change. What the hub answers decides:
   at most 5 times, then the item waits on a decision of kind
   `session_failed` carrying the hub's reason.
 
-sparrow never overrides a policy requirement.
+nightshift never overrides a policy requirement.
 
 ### After a landing
 
-When a change landed, sparrow runs the workspace's health command in a
+When a change landed, nightshift runs the workspace's health command in a
 runner, on a clone of the workspace at the landed commit. Exit code 0
 within the timeout is healthy: the item is `done`, the fork is left to
 expire, and the thread gets an `Unread` entry with the change, the commit
 and the tokens spent.
 
 Any other exit code, or the timeout, makes the workspace `red`. While a
-workspace is `red`, sparrow lands nothing else in it: other items go on up
+workspace is `red`, nightshift lands nothing else in it: other items go on up
 to `landing` and wait there. Then:
 
-1. **Fix forward.** sparrow starts one repair: an implementer session in a
+1. **Fix forward.** nightshift starts one repair: an implementer session in a
    new fork, with the health command's last 200 lines of output, the
    landed change and the item's package, and a budget of
    `[repair].budget_tokens` (2,000,000 unless configured) under the paths
@@ -466,7 +466,7 @@ to `landing` and wait there. Then:
    runs again; healthy makes the workspace `green` and the item `done`.
 2. **Revert.** When the repair's session failed, its review ended in
    disagreement, its budget is spent, or the health command still fails
-   after it landed, sparrow asks the hub to revert the item's change (and
+   after it landed, nightshift asks the hub to revert the item's change (and
    the repair's, when it landed), lands the reverting changes, and runs
    the health command again. Healthy makes the workspace `green`; the item
    returns to `awaiting_mandate` with a `mandate` decision that carries
@@ -488,13 +488,13 @@ hub's outage); the installation has one for the daily brief. A thread is a
 list of entries in the order they happened, each with a time, a kind and a
 text: the item's state changes, each session's start and end with its role
 and tokens, each check reported, each land attempt, and each decision with
-its answer. sparrow writes the entries from what it did and what the hub
+its answer. nightshift writes the entries from what it did and what the hub
 reported; no agent writes to a thread directly.
 
 A thread is **unread** from an entry of a kind that marks it (the item
 `done` or `abandoned`, a decision opened, a revert, a repair, the hub's
 outage, a brief) until the person opens it (`GET` of the thread through
-the client, or `sparrow thread show <id>`) or marks it read.
+the client, or `nightshift thread show <id>`) or marks it read.
 
 A **decision** has an id, a kind, the item and thread, a question in one
 sentence, its evidence (links to the change, the version's diff, the
@@ -521,20 +521,20 @@ an answered decision is `409` with `error_type: already_answered` and the
 first answer in the body. An answer takes effect within 5 seconds: the
 item's next step is started or queued, and the thread shows it.
 
-The client mirrors these: `sparrow inbox [--unread|--action]` (the default
-shows `Action` first, then `Unread`), `sparrow thread show <id>`, `sparrow
-decision show <id>`, `sparrow decide <id> --option <key> [--comment
-"<text>"]`, and `sparrow watch`, which prints one line per event from the
+The client mirrors these: `nightshift inbox [--unread|--action]` (the default
+shows `Action` first, then `Unread`), `nightshift thread show <id>`, `nightshift
+decision show <id>`, `nightshift decide <id> --option <key> [--comment
+"<text>"]`, and `nightshift watch`, which prints one line per event from the
 stream until interrupted. Every command prints text for a terminal and,
 with `--json`, the API's JSON. Exit codes: 0 on success, 1 when the daemon
-refuses or cannot be reached (`cannot reach sparrowd at <address>`), 2 for
+refuses or cannot be reached (`cannot reach nightshiftd at <address>`), 2 for
 a usage error.
 
 ### Decisions written back as rules
 
 When a decision of kind `review_disagreement` or `widen` is answered with
 an option other than `abandon`, or any decision is answered with
-`--record`, sparrow starts a planner session in a new fork of the
+`--record`, nightshift starts a planner session in a new fork of the
 workspace that writes the answer down as a rule: the question, the answer
 and the person's comment, as a new ADR where the workspace has `docs/adr/`,
 else as a line appended to `.specs/steering.md`, else as a new file under
@@ -542,7 +542,7 @@ else as a line appended to `.specs/steering.md`, else as a new file under
 is discarded and counts as a failed session.
 
 The change is not mandated. It reaches the person as a decision of kind
-`rule` showing the text; its options are `approve` (sparrow reports its
+`rule` showing the text; its options are `approve` (nightshift reports its
 three checks as passed with the summary `rule approved by the owner` and
 lands it), `revise` (with a comment) and `discard`. A rule change runs the
 health command after landing as any other. Planner and reviewer sessions
@@ -551,18 +551,18 @@ started after it landed find the rule in the repository.
 ### The daily brief
 
 Once a day, at `[brief].at` (`08:00` in the daemon's time zone unless
-configured), sparrow adds one entry to the brief thread and marks it
+configured), nightshift adds one entry to the brief thread and marks it
 unread. It covers the time since the previous brief and lists, per
 workspace: the items that reached `done`, with their changes; the items
 reverted or abandoned; the decisions open, oldest first, with their age;
 the items waiting and what for; and the tokens spent, per role and in
 total. A day with no item changed and no decision open gets no brief.
-`sparrow brief` prints the same for the time since the last brief without
+`nightshift brief` prints the same for the time since the last brief without
 storing it.
 
 ### Writing back to the forge
 
-For an item imported from an issue, and for no other, sparrow writes to
+For an item imported from an issue, and for no other, nightshift writes to
 that issue through the hub's forge routes: one comment when the mandate is
 given, naming the change; one when the item is `done`, naming the landed
 commit, after which it closes the issue; one when the item is reverted or
@@ -573,14 +573,14 @@ thread; it never holds the item back.
 ### End-to-end flows
 
 **A change request, from text to verified landing.** The person runs
-`sparrow item new demo --text "Add a greeting endpoint"`. `sparrowd`
+`nightshift item new demo --text "Add a greeting endpoint"`. `nightshiftd`
 stores the item, creates a task fork on the hub and starts the planner in
 the runner; the planner pushes a package; the reviewer agrees; a `plan`
-decision appears in `sparrow inbox --action`. The person runs `sparrow
-decide <id> --option approve`. sparrow issues the path-limited token,
+decision appears in `nightshift inbox --action`. The person runs `nightshift
+decide <id> --option approve`. nightshift issues the path-limited token,
 creates the claim and starts the implementer; its push opens a change;
-sparrow gates it and reports `sparrow-gate`; the reviewer agrees and
-`sparrow-review` is reported; `sparrow-mandate` passes; the hub lands the
+nightshift gates it and reports `nightshift-gate`; the reviewer agrees and
+`nightshift-review` is reported; `nightshift-mandate` passes; the hub lands the
 change; the health command exits 0; the item is `done` and its thread is
 in `Unread`.
 
@@ -594,12 +594,12 @@ decision.
 
 **A landing that breaks the main branch.** Item 12 lands; the health
 command exits 1. The workspace is `red` and item 13, ready to land, waits.
-The repair lands and the health command fails again. sparrow reverts both
+The repair lands and the health command fails again. nightshift reverts both
 changes, the health command exits 0, the workspace is `green`, item 13
 lands, and item 12 is back in `Action` with a `mandate` decision carrying
 the failure's output.
 
-**A restart in the middle.** `sparrowd` is killed while two implementers
+**A restart in the middle.** `nightshiftd` is killed while two implementers
 run. At the next start both items get a new session for the same step;
 the open decisions are still in `Action` with their evidence; a client
 that reconnects to the event stream with its last `seq` receives what it
@@ -611,7 +611,7 @@ missed.
    controller and inbox are neither part of Parley, which hosts code and
    knows no work items, nor of the spec toolchain, which is short-lived
    commands.
-2. **sparrow's store is the source of truth for work items.** The owner
+2. **nightshift's store is the source of truth for work items.** The owner
    decided it. Issues and packages are sources it imports from.
 3. **A person pins each item.** The owner decided it: there is no standing
    rule that mandates a class of items.
@@ -632,7 +632,7 @@ missed.
 12. **API and command-line client in version 1.** The owner decided it.
 13. **One person, several repositories.** The owner decided it.
 14. **One daemon.** The owner decided it.
-15. **Parley is always required, and sparrow replaces `specrun`.** The
+15. **Parley is always required, and nightshift replaces `specrun`.** The
     owner decided it; `specrun` stays for projects without a hub until
     they move.
 16. **Only items imported from an issue are written back to the forge.**
@@ -644,18 +644,18 @@ missed.
     `touches` and a text the person can approve, and the plan lands with
     the code in one change.
 19. **A model's review is a check, never an approval.** Chosen here: the
-    hub counts an approval by credential, and sparrow holds the owner's
+    hub counts an approval by credential, and nightshift holds the owner's
     API key, so an approval recorded for a model would satisfy a rule that
     means a person.
 20. **The mandate is enforced on the hub twice:** by the fork token's
-    paths at push, and by the check `sparrow-mandate` at landing. Chosen
+    paths at push, and by the check `nightshift-mandate` at landing. Chosen
     here: the first stops the work early, the second holds when a token
     was widened or the mandate ended meanwhile.
 21. **The budget is counted in tokens, cache reads excluded.** Chosen
     here: the hub's usage records hold tokens, not money, and prices differ
     per model.
 22. **Registration refuses a workspace whose policy does not require
-    sparrow's checks, and changes the policy only with `--adopt-policy`.**
+    nightshift's checks, and changes the policy only with `--adopt-policy`.**
     Chosen here: a mandate that policy does not enforce can be bypassed by
     any land call, and a tool should not rewrite a policy unasked.
 23. **While a workspace is `red`, work goes on and only landing waits.**
@@ -679,9 +679,9 @@ missed.
 
 ## Dependencies
 
-- **Parley** (`agent-fox-dev/parley`, `docs/prd/`), the hub. sparrow needs
+- **Parley** (`agent-fox-dev/parley`, `docs/prd/`), the hub. nightshift needs
   these packages of its spec root, each `active` with every task `pending`
-  on 2026-11-13, so sparrow cannot run end to end before them:
+  on 2026-11-13, so nightshift cannot run end to end before them:
   `15_task_fork_creation`, `16_task_fork_lifetime`, `17_git_smart_http`,
   `19_git_push_to_change`, `22_change_opening_and_versions`,
   `23_change_lifecycle_and_mergeability`, `25_optimistic_landing`,
@@ -696,7 +696,7 @@ missed.
   and render packages and to tell whether one is finished.
 - **`af-spec` and `af-impl`** (`agent-fox-dev/spec`, `skills/`). `af-impl`
   today ends by merging into the base branch and pushing it, and opens its
-  open items as forge issues. sparrow needs a mode of it, new and not yet
+  open items as forge issues. nightshift needs a mode of it, new and not yet
   specified, that ends once the branch is pushed, merges nothing, and
   returns its open items in its result. That is a PRD for
   `agent-fox-dev/spec`.
@@ -704,13 +704,13 @@ missed.
   version.
 - **`specrun`** (`agent-fox-dev/spec`, `cmd/specrun`, its packages
   `20_specrun_driver`, `23_specrun_reconcile`, `24_specrun_repair`):
-  superseded by sparrow for a project on a hub. Nothing in it changes.
+  superseded by nightshift for a project on a hub. Nothing in it changes.
 - **Claude Code** (`claude`), installed where the `local` runner runs and
   in the sandbox profile the `sandbox` runner uses.
 
 ## Verified External API
 
-- **Parley's REST API: unverified.** The routes sparrow calls are specified
+- **Parley's REST API: unverified.** The routes nightshift calls are specified
   in `agent-fox-dev/parley`, `docs/prd/appendix_a_routes.md`, and none is
   implemented yet. Assumed from the PRD: `POST /api/v1/workspaces/:slug/forks`
   with `token.permissions` and `token.paths` (§4); `GET` and `PUT
@@ -741,12 +741,12 @@ missed.
 
 ## Glossary
 
-- **work item**: one piece of work sparrow drives to a landed change: a
+- **work item**: one piece of work nightshift drives to a landed change: a
   spec package, a defect or a change request.
 - **mandate**: a person's permission for one work item to land without
   them, limited to paths, a token budget and a time.
 - **thread**: the record of one work item (or of a workspace, or of the
-  briefs) as the inbox shows it, written by sparrow from what happened.
+  briefs) as the inbox shows it, written by nightshift from what happened.
 - **decision**: a question to the person with fixed options, kept in the
   inbox until answered.
 - **Unread**: the view of threads with something new since the person last
