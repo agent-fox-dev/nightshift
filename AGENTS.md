@@ -8,8 +8,21 @@ Read `.specs/steering.md`, the project's steering directives:
 
 @.specs/steering.md
 
-1. **Read ADRs and errata** in `docs/` for architectural context.
-2. **Check git state:** `git log --oneline -20`, `git status --short --branch`.
+1. **Read the ADRs** in `docs/adr/`: the decisions the code follows, which
+   the code alone does not show.
+2. **Read the errata of what you build on**, not all of them:
+   `docs/errata/NN_*.md` for the specs your change depends on or whose code
+   it changes (NN is the spec number), and the project-wide ones, which have
+   no number.
+3. **Check git state:** `git log --oneline -20`, `git status --short --branch`.
+
+Do not read the rest of `docs/` to orient yourself. A spec package holds what
+a change needs from the PRDs in `docs/prd/`. The reference docs describe the
+code, and the code is authoritative: open one only to update it, at the
+section the change makes wrong, found by searching it.
+
+A subagent that is handed a brief by a session which did these steps works
+from the brief, and does not repeat steps 1 and 2.
 
 Only read files tracked by git (`git ls-files`): what `.gitignore` excludes
 is private notes and local secrets, not project material.
@@ -67,9 +80,10 @@ When implementing a spec or any other feature:
 
 ## Documentation
 
-- **PRDs** live in `docs/prd/NN-imperative-verb-phrase.md`, one file per
-  PRD. To choose NN, list existing files, find the max numeric prefix, and
-  use the next number zero-padded to two digits (three digits once past 99).
+- **PRDs** live in `docs/prd/`. The Parley PRD is split there per section as
+  `NN_snake_case_topic.md` (`00_overview.md` to `17_sequencing_and_decisions.md`)
+  plus `appendix_*.md`. Where a new, separate PRD goes is not settled yet:
+  ask before creating one.
 - **ADRs** live in `docs/adr/NN-imperative-verb-phrase.md`. To choose NN,
   list existing files, find the max numeric prefix, and use the next number
   zero-padded to two digits for consistency (three digits once past 99).
