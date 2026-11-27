@@ -1,5 +1,8 @@
 # Drive work items through the hub under mandates
 
+> Superseded by [02-drive-work-items-through-the-hub.md](02-drive-work-items-through-the-hub.md),
+> which removes the mandate. Kept as the record of the first design.
+
 ## Intent
 
 A project that is built by agents needs more than a loop over a list of spec
