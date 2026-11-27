@@ -27,9 +27,11 @@ them.
   a path the workspace's landing policy marks with an approval lands only
   after the person approved it; one that touches a blocked path never
   lands. Every other change lands without the person.
-- **A second model reviews.** Every drafted plan and every change is
-  reviewed by a model of another provider than the one that wrote it,
-  before a person is asked and before anything lands.
+- **A reviewer with a fresh context reviews.** Every drafted plan and every
+  change is reviewed by an agent session that shares no context with the
+  session that wrote it, before a person is asked and before anything
+  lands. Which provider and model the reviewer runs on is configured: it
+  may be the writer's own.
 - **The person is never waited on by a process.** A question for the person
   is a durable decision in the inbox. No agent session stays alive for it,
   and work that does not depend on the answer goes on.
@@ -182,8 +184,7 @@ hub answers, that the credentials are accepted and fit their purpose, and
 that the roles are valid. A check that fails ends the process with exit
 code 1 and one line on stderr naming the check and the reason
 (`config: …`, `hub: connection refused`, `credentials: …`,
-`roles: reviewer and implementer share the provider "anthropic"`); nothing
-is started.
+`roles: reviewer names no model`); nothing is started.
 
 On its first start it writes a client token to `~/.nightshift/token`, readable
 by its owner only. Every API request carries it as a bearer token; without
@@ -394,9 +395,20 @@ until the item is `done` or `abandoned`.
 
 The configuration names three roles. `planner` and `implementer` each name
 a model run by the Claude Code command (`claude -p`); `reviewer` names a
-provider and a model run through `agentkit-go`. The reviewer's provider
-must differ from the provider of the implementer and of the planner; the
-daemon does not start otherwise (see *The daemon and its API*).
+provider and a model run through `agentkit-go`. The provider and the model
+may be the same as the planner's or the implementer's, or others. A role
+that names no model, or a reviewer that names no provider or one
+`agentkit-go` does not know, is invalid: the daemon does not start (see
+*The daemon and its API*; `roles: reviewer names no model`, `roles: unknown
+provider "<name>"`).
+
+**The reviewer's context is fresh.** Every review is a session of its own.
+It starts with nothing of the planner's or the implementer's session: not
+its conversation, not its reasoning, not its working directory. It is given
+only what *Planning* and *Review of a change* name as its input, and reads
+the repository through a clone of its own. A later review of the same item
+starts fresh too, and is given the earlier findings with the writer's
+replies as input.
 
 Every agent session is registered on the hub as a session on the item's
 workspace with its role as `archetype`, its model, and the item's number in
@@ -840,48 +852,52 @@ missed.
     implementer.
 19. **This PRD is a new document that supersedes PRD 01.** The owner
     decided it.
-20. **The reviewer is a model of another provider, and reviews the plan and
-    every change; the implementer runs on `claude -p` with `af-impl`, the
-    reviewer on `agentkit-go`.** Kept from PRD 01, where the owner decided
-    it, as are: one daemon, one person and several repositories, an
+20. **The reviewer works in a fresh context, and may run on any provider
+    and model, the writer's included.** The owner decided it, replacing PRD
+    01's rule that the reviewer's provider must differ: what a review needs
+    is a reader that does not share the writer's context; another provider
+    is one way to set that up, not a requirement.
+21. **The reviewer reviews the plan and every change; the implementer runs
+    on `claude -p` with `af-impl`, the reviewer on `agentkit-go`.** Kept
+    from PRD 01, where the owner decided it, as are: one daemon, one person and several repositories, an
     unanswered decision waits, fix forward once and then revert, one health
     command per workspace, API and command-line client in version 1, and
     forge write-back only for imported issues.
-21. **A third check, `nightshift-release`, reported at the moment of the
+22. **A third check, `nightshift-release`, reported at the moment of the
     land.** Chosen here: it is what makes a pause, a `red` or a `held`
     workspace hold on the hub too, for a land asked by other means than
     nightshift.
-22. **The policy must count the checks on the version itself
+23. **The policy must count the checks on the version itself
     (`fresh_checks`).** Chosen here: the hub otherwise carries a passed
     check over to a rebased version, which nightshift has not gated.
-23. **A session's token holds `git:write` only, and nightshift opens the
+24. **A session's token holds `git:write` only, and nightshift opens the
     change.** Chosen here: a session then cannot land, abandon or retarget
     its own change, and the approver token never shares a credential with
     a version.
-24. **A session is ended at 10,000,000 tokens.** Chosen here: with running
+25. **A session is ended at 10,000,000 tokens.** Chosen here: with running
     sessions allowed to finish at the daily limit, one session needs a
     bound of its own.
-25. **Repairs start although the daily limit is reached.** Chosen here: a
+26. **Repairs start although the daily limit is reached.** Chosen here: a
     `red` main branch should not wait for midnight.
-26. **A blocked path stops the item at the push; an approval is asked after
+27. **A blocked path stops the item at the push; an approval is asked after
     the gate and the review.** Chosen here: nothing can lift a block, so
     further spending is waste, while a person asked to approve should see
     reviewed work.
-27. **A diverged origin has the one option `retry`.** Chosen here:
+28. **A diverged origin has the one option `retry`.** Chosen here:
     resetting the hub's branch to origin would discard landed work, which
     a person should do by hand, knowing what is lost.
-28. **Every work item is carried by a spec package, a `lite` one for a
+29. **Every work item is carried by a spec package, a `lite` one for a
     defect.** Kept from PRD 01: one shape gives every item a gate and a
     text the person can approve, and the plan lands with the code in one
     change.
-29. **Open items a session reports become unplanned `defect` items.** Kept
+30. **Open items a session reports become unplanned `defect` items.** Kept
     from PRD 01.
-30. **The numbers** (3 parallel sessions, 3 review rounds, 2 attempts per
+31. **The numbers** (3 parallel sessions, 3 review rounds, 2 attempts per
     step, a 30-minute stall, 10,000,000 tokens per session, 50,000,000 per
     workspace and day, 24-hour reminders) are chosen here as starting
     values; each that the text calls configured can be changed without a
     new release.
-31. **Size.** This PRD covers 18 areas and is expected to be split into
+32. **Size.** This PRD covers 18 areas and is expected to be split into
     several packages: the daemon, its API and the credentials first; then
     workspaces with the policy commands; work items and the inbox;
     planning; sessions, scheduling, the daily limit and pausing;
@@ -974,8 +990,8 @@ missed.
   in the `tasks.json` of Parley's packages.
 - **`github.com/agent-fox-dev/agentkit-go`: unverified.** Parley's `go.mod`
   requires v0.11.0; its source was not available to read, so no signature
-  is given. Assumed: it runs a session against a model of a provider other
-  than Anthropic and reports the session's token usage.
+  is given. Assumed: it runs a session against a model of a named provider,
+  Anthropic among them, and reports the session's token usage.
 - **`claude -p`**: unverified in this revision. PRD 01 read, in
   `docs/specrun.md` of `agent-fox-dev/spec`: `claude -p "<prompt>"
   --output-format stream-json --verbose --permission-mode
@@ -996,8 +1012,8 @@ missed.
 - **Unread**: the view of threads with something new since the person last
   opened them.
 - **Action**: the view of threads with an open decision.
-- **role**: `planner`, `implementer` or `reviewer`; each has a model, and
-  the reviewer's is of another provider.
+- **role**: `planner`, `implementer` or `reviewer`; each has a model. The
+  reviewer's session shares no context with the others'.
 - **worker token, approver token**: the two Parley personal access tokens
   nightshift holds: one for its own actions, one for the person's
   approvals.
