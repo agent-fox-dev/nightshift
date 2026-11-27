@@ -361,23 +361,35 @@ For a `defect` or a `change_request`, nightshift creates a task fork of the
 workspace and starts a planner session in it. nightshift gives the planner
 the number of the package to write: one above the highest package number on
 the default branch and above every number it gave to an item of that
-workspace that is neither `done` nor `abandoned`. The planner writes one
-spec package on a branch of the fork, as `af-spec` writes one: for a
-`change_request`, a package of the profile the work needs; for a `defect`,
-a `lite` package with one requirement whose check is a test that fails on
-the default branch for the reason the defect describes. The session's
-result is accepted when the package has the number given, validates through
-`afspec` with no finding of severity error and, for a `defect`, the test
-was run and failed. A result that is not accepted counts as a failed
-session (see *Roles and sessions*).
+workspace that is neither `done` nor `abandoned`. The planner is `af-spec`, run
+unattended on a branch of the fork with the item's text, the number, and
+the instruction to leave the package a draft (`af-spec <text file>
+--unattended --number <NN> --no-activate --result <file>`, with `--defect`
+for a `defect`). It writes one spec package: for a `change_request`, a
+package of the profile the work needs; for a `defect`, a `lite` package
+with one requirement, the behaviour as it should be. A defect is not
+reproduced while planning: the failing test is written and recorded when
+the package is implemented. The session's result is accepted when its
+result file says `written`, and the package on the fork has the number
+given and validates through `afspec` with no finding of severity error. A
+result that is not accepted, or a session that left no result file, counts
+as a failed session (see *Roles and sessions*).
+
+When the planner reports that the work did not fit one package, the package
+holds its first part. Each remaining part becomes a new work item of the
+same kind in state `new`, linked to the item it came from and carrying the
+text the planner gave for it; like an open item of an implementation, it
+stays `new` until the person runs `nightshift item plan <N>`. The `plan`
+decision lists them.
 
 When the planner's branch is on the fork, nightshift opens the item's change
 on the hub as a draft, with the item's title and the package's intent.
 
 The reviewer then reviews the package against the item's source text. Its
-verdict is `agree` or `object`, with findings. On `object` the planner gets
-the findings and revises; after 3 rounds without `agree`, planning ends
-with the objections attached.
+verdict is `agree` or `object`, with findings. On `object` the planner is
+started again on the draft with the findings (`af-spec <package>
+--unattended --findings <file>`) and revises, answering each finding; after
+3 rounds without `agree`, planning ends with the objections attached.
 
 Planning ends in a decision of kind `plan` in `Action`. It shows the
 package's rendered text, a link to the draft change, the files its tasks
@@ -386,7 +398,9 @@ approval or blocks (`likely to need your approval under rule <name>`,
 `blocked by rule <name>`), the reviewer's last verdict and, when it
 objected to the end, each open finding with the planner's reply. Its
 options are `approve`, `revise` (with a comment, required; planning runs
-once more with it) and `abandon`. On `approve` the item is `ready`.
+once more with it, the comment as a finding the planner must follow) and
+`abandon`. On `approve` nightshift activates the package on the change's
+branch, which freezes its requirements and tasks, and the item is `ready`.
 
 nightshift keeps the text of every package a planner wrote in its own store
 until the item is `done` or `abandoned`.
@@ -483,14 +497,27 @@ paused.
 For a `ready` item nightshift creates the task fork and the draft change,
 unless planning created them, opens the change (it is a draft no longer),
 and starts an implementer session that implements the item's package with
-`af-impl`. The session commits on the change's branch and pushes it to the
-fork; it merges nothing. Every push records a version of the change.
+`af-impl`, told to stop at the pushed branch (`af-impl <package>
+--unattended --no-merge --result <file>`). The session commits on the
+change's branch and pushes it to the fork; it merges nothing and calls no
+forge. Every push records a version of the change.
 
 When the session ends, nightshift reads from the hub and the fork, not from
 the session's account: the change has a version newer than at the session's
 start, and the package on that version has no task `pending` or
 `in_progress`. When either does not hold, the session counts as failed with
-the reason (`no new version`, `tasks still open`).
+the reason (`no new version`, `tasks still open`). A session that left no
+result file counts as failed with the reason `no result`.
+
+**Sending work back.** Wherever this document says the implementer is
+started with something (a failed gate's verdict, the reviewer's findings,
+the person's comment, a conflict report, a failed health command's output),
+it is started as a rework of the package (`af-impl <package> --unattended
+--rework <findings file> --result <file>`), each of those written as a
+finding. A comment of the person, and a finding the person made binding,
+must be fixed, not answered. The session's replies, one per finding, are
+written to the thread. A rework that changed nothing, or failed, counts as
+a failed session.
 
 nightshift then runs the package's gate on the version (`speca`'s gate, on a
 clone of the fork at that version) and reports it to the hub as the check
@@ -508,7 +535,8 @@ After every new version nightshift reads the hub's evaluation of it:
   `touches` are listed in one thread entry, `outside the plan: <files>`
   (the first 50). Nothing is held back for them.
 
-Open items the session reports (what `af-impl` calls `unmet`) each become a
+Open items the session's result file lists (what `af-impl` calls `unmet`)
+each become a
 new work item of kind `defect` in state `new`, linked to the item they came
 from, and are listed in the thread. Unlike an item a person created, which
 is planned at once, such an item stays `new`, with no session, until the
@@ -903,6 +931,18 @@ missed.
     planning; sessions, scheduling, the daily limit and pausing;
     implementation and review; landing; the handling after a landing and
     publishing; the rules, the brief and the forge write-back.
+33. **A defect is proven when it is implemented, not when it is planned.**
+    The owner decided it: `af-spec` writes no test, and an active package
+    records each test failing before the fix.
+34. **A planned package is a draft until the plan is approved; nightshift
+    activates it then.** The owner decided it: activation freezes the
+    package, and a plan may be sent back with `revise`.
+35. **The parts of work too large for one package become new, unplanned
+    items.** The owner decided it for the planner; that they wait for
+    `item plan`, as an implementation's open items do, is chosen here.
+36. **Work is sent back through `af-impl`'s rework mode, and every session
+    reports through a result file.** The owner decided the first; the
+    second is chosen in PRD 09 of `agent-fox-dev/spec`.
 
 ## Dependencies
 
@@ -921,13 +961,14 @@ missed.
   `42_forge_writes` and `49_agent_sessions_and_usage`.
 - **`afspec`** (`github.com/agent-fox-dev/spec/afspec`), to load, validate
   and render packages and to tell whether one is finished.
-- **`af-spec` and `af-impl`** (`agent-fox-dev/spec`, `skills/`). `af-spec`
-  chooses its package's number itself; nightshift needs it to take a given
-  number. `af-impl` ends by merging into the base branch and pushing it,
-  and opens its open items as forge issues; nightshift needs a mode of it
-  that ends once the branch is pushed, merges nothing, and returns its
-  open items in its result. Both are new and not yet specified: a PRD for
-  `agent-fox-dev/spec`.
+- **`af-spec` and `af-impl`** (`agent-fox-dev/spec`, `skills/`), in the
+  modes that `docs/prd/09-run-af-spec-and-af-impl-under-a-controller.md` of
+  that repository specifies: `af-spec` unattended, with a given number,
+  left a draft, for a defect, and revised from findings; `af-impl` stopping
+  at the pushed branch, and reworking finished work from findings; each
+  with a result file. No package was generated from that PRD on
+  2026-11-27, so nightshift's planning and implementation cannot run
+  before it is implemented.
 - **`speca`** (`agent-fox-dev/spec`, `cmd/speca`), for the gate on a
   version.
 - **`specrun`** (`agent-fox-dev/spec`, `cmd/specrun`): superseded by
@@ -980,22 +1021,26 @@ missed.
     /api/v1/sessions/{id}/complete`.
   - The scopes named under *Credentials* are in the hub's scope list; one
     live API key per user, replaced at every sign-in.
-- **`github.com/agent-fox-dev/spec/afspec`**: unverified in this revision
-  (the repository was not available to read). PRD 01 read, in
-  `docs/generated/afspec.txt`: `func LoadSpec(dir string) (*Spec, error)`,
+- **`github.com/agent-fox-dev/spec/afspec`**, read in
+  `docs/generated/afspec.txt` of `agent-fox-dev/spec` at commit `e9081fa`: `func LoadSpec(dir string) (*Spec, error)`,
   `func (s *Spec) IsFinished() bool`,
   `func ValidateInRoot(specsDir string, spec *Spec) (ValidationResult, error)`,
   `func DiscoverSpecs(root string) ([]SpecMeta, error)`; the field
   `touches` of a task is in `afspec/schemas/tasks.v3.json`, and is present
   in the `tasks.json` of Parley's packages.
-- **`github.com/agent-fox-dev/agentkit-go`: unverified.** Parley's `go.mod`
-  requires v0.11.0; its source was not available to read, so no signature
+- **`github.com/agent-fox-dev/agentkit-go`: unverified.** The `go.mod` of
+  `agent-fox-dev/spec` requires v0.9.0 and Parley's v0.11.0; its source was
+  not available to read, so no signature
   is given. Assumed: it runs a session against a model of a named provider,
   Anthropic among them, and reports the session's token usage.
-- **`claude -p`**: unverified in this revision. PRD 01 read, in
-  `docs/specrun.md` of `agent-fox-dev/spec`: `claude -p "<prompt>"
-  --output-format stream-json --verbose --permission-mode
-  bypassPermissions`, whose last `result` event carries `is_error`.
+- **`claude -p`**, read in `docs/specrun.md` of `agent-fox-dev/spec` at
+  commit `e9081fa`: `claude -p "<prompt>" --output-format stream-json
+  --verbose --permission-mode bypassPermissions`, whose last `result` event
+  carries `is_error`.
+- **`af-spec` and `af-impl` arguments: NOT FOUND.** `--number`,
+  `--no-activate`, `--defect`, `--findings`, `--no-merge`, `--rework` and
+  `--result` do not exist in `skills/` at commit `e9081fa`; assumed as PRD
+  09 of that repository specifies them. `af-impl --unattended` exists.
 
 ## Glossary
 
