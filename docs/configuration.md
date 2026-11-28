@@ -10,13 +10,14 @@ configuration file; see [cli.md](cli.md) for its flags and environment.
 |---|---|---|
 | `listen` | the address the API listens on | `127.0.0.1:7878` |
 | `token_file` | where the client token is kept | `~/.nightshift/token` |
+| `clones_dir` | where the clones of the workspaces are kept, one directory per slug | `~/.nightshift/clones` |
 | `[store] path` | the daemon's store, one SQLite file | `~/.nightshift/store.db` |
 | `[hub] endpoint` | the Parley hub's base URL | none, required |
 | `[hub] worker_token` | the worker token | none, required |
 | `[hub] approver_token` | the approver token | none, required |
 
-A leading `~/` in `token_file` and `[store] path` is the home directory of
-the daemon's user. The parent directories of the store and the token file
+A leading `~/` in `token_file`, `clones_dir` and `[store] path` is the home
+directory of the daemon's user. The parent directories of the store and the token file
 are created with mode `0700` where they do not exist.
 
 ```toml
@@ -30,6 +31,16 @@ endpoint = "https://hub.example"
 worker_token = "parley_pat_<token_id>_<secret>"
 approver_token = "parley_pat_<token_id>_<secret>"
 ```
+
+## Clones of the workspaces
+
+The daemon runs a workspace's health command in a clone of it under
+`clones_dir/<slug>`, fetched from the hub's git endpoint with the worker
+token and brought to the commit in question, detached, with untracked and
+ignored files removed. The clone is kept between runs, and removed with the
+workspace. At start the daemon removes the directories under `clones_dir`
+that belong to no registered workspace. `git` and `sh` must be installed on
+the daemon's machine.
 
 ## The two hub tokens
 

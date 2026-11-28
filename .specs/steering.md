@@ -121,11 +121,30 @@ grepping for declarations.
   - `internal/hubtest`: the fake Parley hub (readyz, personal access tokens,
     the token route, a request log, `Stop`/`Start` on one address). Extend it
     with the hub routes a package needs, rather than faking the hub again.
+    It also holds:
+    - **workspaces**: `AddWorkspace(t, hubtest.Workspace{…})` answers
+      `GET /api/v1/workspaces/{slug}` (with `access` per caller and `hub_url`
+      pointing at its own git endpoint) and `POST …/sync` (a scripted result
+      or error); `UpdateWorkspace` changes one.
+    - **a git endpoint**: every workspace carries a real repository, served
+      by `git http-backend` at `/git/<org>/<slug>.git` behind HTTP Basic with
+      a token holding `git:read` or `git:write`; the repository fixture is
+      built once per test process and copied. `AddRepository`, `Repository`,
+      and on a `*Repository` `AddCommit`, `Head`, `Commits` and `SetAnswer`
+      (an error status or `Hang`); `Fetches()` counts a run of git requests
+      as one fetch.
+    - **the landing policy**: `GET`/`PUT /api/v1/workspaces/{slug}/policy`
+      with revisions from 0, `ETag`, `If-Match` (`412 revision_mismatch`) and
+      the format's validation (`400 invalid_policy` with `details`);
+      `Policy`, `SetPolicy`, `ReplacePolicy`, `OnPolicyGet`,
+      `FailNextPolicyPut` and `PolicyPuts`.
   - `internal/store/storetest`: `storetest.Path(t)` and `storetest.Open(t)`
     give a copy of a store migrated once per test process with every
     registered migration.
   - `startDaemon` in `internal/daemon/e2e_test.go`: the daemon run in-process
     on port 0 against a fake hub in a temporary directory, with `status`,
-    `signal`, `stop`, `openStream` and `appendEvents` on its handle.
+    `nightshift` (any client command against it), `signal`, `stop`,
+    `openStream` and `appendEvents` on its handle; `withWorkspace(t, slug)`
+    gives the files of a fake hub holding a workspace with a repository.
 - **Sandboxed runs.** Where the default Go build cache is not writable, set
   `GOCACHE` to a writable directory (for example `$TMPDIR/go-build`).
