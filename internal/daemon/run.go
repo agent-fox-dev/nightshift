@@ -4,12 +4,15 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/agent-fox-dev/nightshift/internal/config"
+	"github.com/agent-fox-dev/nightshift/internal/hub"
 )
 
 // Env is what Run takes from the process, so that tests run the daemon in
@@ -19,6 +22,9 @@ type Env struct {
 	// under which the default --config is found.
 	Home           string
 	Stdout, Stderr io.Writer
+
+	// HubTimeout bounds the hub start check; zero means 10 seconds.
+	HubTimeout time.Duration
 }
 
 // Run runs the daemon with the command-line arguments args (without the
@@ -40,11 +46,19 @@ func Run(args []string, env Env) int {
 		return 2
 	}
 
-	// The configuration is checked before anything else is touched: a
-	// daemon that starts half-configured fails later with a worse message.
-	if _, err := config.Load(*configPath, env.Home); err != nil {
-		fmt.Fprintf(env.Stderr, "config: %v\n", err)
+	// The checks come before anything else is touched: a daemon that starts
+	// half-configured fails later with a worse message.
+	d := &Daemon{env: env, configPath: *configPath}
+	if !d.runStartChecks(context.Background()) {
 		return 1
 	}
 	return 0
+}
+
+// Daemon is the state of one run of nightshiftd.
+type Daemon struct {
+	env        Env
+	configPath string
+	cfg        config.Config
+	hub        *hub.Client
 }

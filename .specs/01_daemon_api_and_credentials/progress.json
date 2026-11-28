@@ -3,7 +3,7 @@
   "spec_id": "01",
   "spec_name": "daemon_api_and_credentials",
   "schema_version": 3,
-  "updated_at": "2026-11-28T11:09:17Z",
+  "updated_at": "2026-11-28T11:18:03Z",
   "tasks": [
     {
       "id": 1,
@@ -72,7 +72,467 @@
     },
     {
       "id": 2,
-      "state": "pending"
+      "state": "done",
+      "evidence": [
+        {
+          "covers": "REQ-1.4",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestRun_ChecksRunInOrderAndStopAtTheFirstFailure",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-1.5",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestRun_HubCheckFailures",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-2.1",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_is_an_api_key",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_has_no_secret",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/approver_is_an_admin_key",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/approver_has_no_token_id",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/neither_is_a_personal_access_token",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/same_token",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/same_text_that_is_not_a_personal_access_token",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-2.2",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_revoked",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_unknown_to_the_hub",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/approver_revoked",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/both_revoked",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/approver_revoked_and_worker_bound",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-2.3",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_bound",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_object_names_a_workspace",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_bound_and_lacking_tokens:manage",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_bound_and_holding_changes:approve",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-2.4",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_holds_changes:approve",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_holds_changes:approve_and_lacks_workspaces:write",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_tokens:manage_and_holds_changes:approve",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-2.5",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_workspaces:write",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_git:write",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_git:read",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_changes:write",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_checks:write",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_tokens:manage",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_forge:write",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_sessions:write",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_audit:read",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_tokens:manage_and_workspaces:write",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_holds_tokens:read_instead_of_tokens:manage",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_lacks_sessions:write_and_git:write",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/approver_lacks_changes:read",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/approver_lacks_changes:approve",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/approver_lacks_both_scopes",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestCheckCredentials_Refusals/worker_and_approver_each_lack_a_scope",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-2.6",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestCheckCredentials_AcceptsGoodTokens",
+              "failed": {
+                "at": "2026-11-28T11:15:58Z",
+                "tree": "051ff20c3c3ba0c885048f2b9cb573c1730680b5"
+              },
+              "passed": {
+                "at": "2026-11-28T11:18:03Z",
+                "tree": "548cc7dfd3732704bdd252d616ae51d7dae19d3f"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 3,
