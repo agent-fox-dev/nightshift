@@ -115,3 +115,18 @@ grepping for declarations.
 ## Repository Specifics
 
 <!-- TBD -->
+- **Language and layout.** Go (the module `github.com/agent-fox-dev/nightshift`),
+  the programs in `cmd/`, everything else under `internal/`. `make check` runs
+  the gofmt check, `go vet` and every test; `make help` lists the targets.
+- **Shared test helpers.**
+  - `internal/hubtest`: the fake Parley hub (readyz, personal access tokens,
+    the token route, a request log, `Stop`/`Start` on one address). Extend it
+    with the hub routes a package needs, rather than faking the hub again.
+  - `internal/store/storetest`: `storetest.Path(t)` and `storetest.Open(t)`
+    give a copy of a store migrated once per test process with every
+    registered migration.
+  - `startDaemon` in `internal/daemon/e2e_test.go`: the daemon run in-process
+    on port 0 against a fake hub in a temporary directory, with `status`,
+    `signal`, `stop`, `openStream` and `appendEvents` on its handle.
+- **Sandboxed runs.** Where the default Go build cache is not writable, set
+  `GOCACHE` to a writable directory (for example `$TMPDIR/go-build`).
