@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,9 +23,6 @@ import (
 	"github.com/agent-fox-dev/nightshift/internal/hub"
 	"github.com/agent-fox-dev/nightshift/internal/store"
 )
-
-// shutdownTimeout bounds how long a stop waits for requests in flight.
-const shutdownTimeout = 5 * time.Second
 
 // pruneInterval is how often the event log drops the events older than
 // its retention, after the prune at start.
@@ -40,8 +38,9 @@ type Env struct {
 
 	// HubTimeout bounds the hub start check; zero means 10 seconds.
 	HubTimeout time.Duration
-	// Signals delivers the signals that stop the daemon. When nil, Run
-	// takes SIGTERM and SIGINT from the process.
+	// Signals delivers the signals: SIGTERM and SIGINT stop the daemon,
+	// SIGHUP reloads its hub tokens. When nil, Run takes them from the
+	// process.
 	Signals <-chan os.Signal
 	// Started, when set, is called once the API listens, with the running
 	// daemon.
@@ -49,12 +48,22 @@ type Env struct {
 	// Clock gives the time of events and of the event log's prune; nil
 	// means time.Now.
 	Clock func() time.Time
+	// ProbeInterval is how often /readyz is asked while the hub is
+	// unreachable; zero means 30 seconds.
+	ProbeInterval time.Duration
+	// StepDeadline is how long after a stop signal the shutdown steps'
+	// context is cancelled; zero means 25 seconds.
+	StepDeadline time.Duration
+	// ExitDeadline is how long after a stop signal Run returns at the
+	// latest; zero means 30 seconds.
+	ExitDeadline time.Duration
 }
 
 // Run runs the daemon with the command-line arguments args (without the
 // program name) and returns the process's exit code: 0 after a clean stop,
 // 1 when a start check fails or the daemon cannot serve, 2 for a usage
-// error. Once serving, it runs until SIGTERM or SIGINT.
+// error. Once serving, it runs until SIGTERM or SIGINT, reloading its hub
+// tokens on SIGHUP, and rides out an outage of the hub.
 func Run(args []string, env Env) int {
 	fs := flag.NewFlagSet("nightshiftd", flag.ContinueOnError)
 	fs.SetOutput(env.Stderr)
@@ -73,17 +82,18 @@ func Run(args []string, env Env) int {
 
 	// The checks come before anything else is touched: a daemon that starts
 	// half-configured fails later with a worse message.
-	d := &Daemon{env: env, configPath: *configPath}
+	d := &Daemon{env: env, configPath: *configPath, stderr: &lockedWriter{w: env.Stderr}}
 	if !d.runStartChecks(context.Background()) {
 		return 1
 	}
 
-	// Listen for the stop signals before serving, so that none sent once
-	// the daemon reports it listens is lost.
+	// Listen for the signals before serving, so that none sent once the
+	// daemon reports it listens is lost, and a SIGHUP does not end the
+	// process as it does by default.
 	signals := env.Signals
 	if signals == nil {
 		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
+		signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		defer signal.Stop(ch)
 		signals = ch
 	}
@@ -92,25 +102,16 @@ func Run(args []string, env Env) int {
 		fmt.Fprintln(env.Stderr, err)
 		return 1
 	}
-	defer d.store.Close()
 
-	// The event log is pruned before the API serves, then hourly until Run
-	// returns; the loop stops before the store is closed.
+	// The event log is pruned before the API serves, then hourly; the hub
+	// monitor probes while the hub is unreachable. Both loops, and any
+	// reload, run until the shutdown stops them, before the store closes.
 	d.prune(context.Background())
-	pruneCtx, stopPrune := context.WithCancel(context.Background())
-	pruned := make(chan struct{})
-	go func() {
-		defer close(pruned)
-		d.pruneLoop(pruneCtx, pruneInterval)
-	}()
-	defer func() {
-		stopPrune()
-		<-pruned
-	}()
+	loops, stopLoops := context.WithCancel(context.Background())
+	var background sync.WaitGroup
+	background.Go(func() { d.pruneLoop(loops, pruneInterval) })
+	background.Go(func() { d.hub.Monitor().Run(loops) })
 
-	// The event streams end when streams is cancelled, which comes before
-	// the server's shutdown, because the shutdown waits for every open
-	// connection and a stream never ends by itself.
 	streams, stopStreams := context.WithCancel(context.Background())
 	defer stopStreams()
 	d.api.HandleEvents(streams, d.log)
@@ -122,15 +123,11 @@ func Run(args []string, env Env) int {
 		env.Started(d)
 	}
 
-	waitForStop(signals)
-
-	stopStreams()
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		srv.Close()
-	}
-	<-served
+	d.awaitStop(loops, signals, &background)
+	d.shutdown(time.Now(), srv, served, stopStreams, func() {
+		stopLoops()
+		background.Wait()
+	})
 	return 0
 }
 
@@ -142,11 +139,7 @@ func (d *Daemon) open() error {
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
-	clock := d.env.Clock
-	if clock == nil {
-		clock = time.Now
-	}
-	log, err := event.Open(st, clock)
+	log, err := event.Open(st, d.clock())
 	if err != nil {
 		st.Close()
 		return fmt.Errorf("store: %w", err)
@@ -162,15 +155,34 @@ func (d *Daemon) open() error {
 		return fmt.Errorf("listen: %w", err)
 	}
 	d.store, d.log, d.ln = st, log, ln
-	d.api = api.New(token, reachableHub{endpoint: d.hub.Endpoint()}, api.WithErrorLog(d.env.Stderr))
+	d.api = api.New(token, api.HubReporterFunc(d.hubState), api.WithErrorLog(d.stderr))
 	return nil
+}
+
+// clock is the time source of the events and of the hub's first failure.
+func (d *Daemon) clock() func() time.Time {
+	if d.env.Clock == nil {
+		return time.Now
+	}
+	return d.env.Clock
+}
+
+// hubState is what the status reports about the hub, from the monitor.
+func (d *Daemon) hubState() api.HubState {
+	s := d.hub.Monitor().State()
+	return api.HubState{
+		Endpoint:         d.hub.Endpoint(),
+		Reachable:        s.Reachable,
+		UnreachableSince: s.UnreachableSince,
+		CredentialError:  s.CredentialError,
+	}
 }
 
 // prune drops the event log's expired events; a failure is reported and
 // the daemon goes on, since the events are only kept longer.
 func (d *Daemon) prune(ctx context.Context) {
 	if err := d.log.Prune(ctx); err != nil && ctx.Err() == nil {
-		fmt.Fprintln(d.env.Stderr, err)
+		fmt.Fprintln(d.stderr, err)
 	}
 }
 
@@ -188,23 +200,6 @@ func (d *Daemon) pruneLoop(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// waitForStop returns on SIGTERM or SIGINT, or when signals is closed.
-func waitForStop(signals <-chan os.Signal) {
-	for sig := range signals {
-		if sig == syscall.SIGTERM || sig == os.Interrupt {
-			return
-		}
-	}
-}
-
-// reachableHub reports the hub as reachable, which the start checks have
-// just shown, until the hub monitor takes its place.
-type reachableHub struct{ endpoint string }
-
-func (h reachableHub) HubState() api.HubState {
-	return api.HubState{Endpoint: h.endpoint, Reachable: true}
-}
-
 // Daemon is the state of one run of nightshiftd.
 type Daemon struct {
 	env        Env
@@ -215,6 +210,14 @@ type Daemon struct {
 	log        *event.Log
 	ln         net.Listener
 	api        *api.Server
+	// stderr is env.Stderr, safe for the daemon's goroutines to share.
+	stderr io.Writer
+
+	// reloading makes reloads run one at a time.
+	reloading sync.Mutex
+	// mu guards steps.
+	mu    sync.Mutex
+	steps []shutdownStep
 }
 
 // Addr is the host:port the API listens on.

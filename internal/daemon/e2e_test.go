@@ -1,10 +1,14 @@
 package daemon_test
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -13,6 +17,7 @@ import (
 	"github.com/agent-fox-dev/nightshift/internal/buildinfo"
 	"github.com/agent-fox-dev/nightshift/internal/cli"
 	"github.com/agent-fox-dev/nightshift/internal/daemon"
+	"github.com/agent-fox-dev/nightshift/internal/hub"
 	"github.com/agent-fox-dev/nightshift/internal/hubtest"
 )
 
@@ -49,9 +54,8 @@ type runningDaemon struct {
 	stdout  *syncBuffer
 	stderr  *syncBuffer
 	signals chan os.Signal
-	done    chan int
-
-	once sync.Once
+	// done is closed once Run returned, with its exit code in code.
+	done chan struct{}
 	code int
 }
 
@@ -66,28 +70,28 @@ func startDaemon(t *testing.T, f files, env daemon.Env) *runningDaemon {
 		stdout:  &syncBuffer{},
 		stderr:  &syncBuffer{},
 		signals: make(chan os.Signal, 1),
-		done:    make(chan int, 1),
+		done:    make(chan struct{}),
 	}
 	started := make(chan *daemon.Daemon, 1)
 	env.Home, env.Stdout, env.Stderr, env.Signals = f.dir, r.stdout, r.stderr, r.signals
 	env.Started = func(d *daemon.Daemon) { started <- d }
-	go func() { r.done <- daemon.Run([]string{"--config", f.config}, env) }()
+	go func() {
+		defer close(r.done)
+		r.code = daemon.Run([]string{"--config", f.config}, env)
+	}()
 
 	select {
 	case r.d = <-started:
-	case code := <-r.done:
-		t.Fatalf("the daemon returned %d before it listened; stderr %q", code, r.stderr.String())
+	case <-r.done:
+		t.Fatalf("the daemon returned %d before it listened; stderr %q", r.code, r.stderr.String())
 	case <-time.After(startTimeout):
 		t.Fatalf("the daemon did not listen within %v; stderr %q", startTimeout, r.stderr.String())
 	}
 	r.addr = r.d.Addr()
 	t.Cleanup(func() {
-		select {
-		case <-r.done:
-			return
-		default:
+		if !r.exited() {
+			r.stop(t)
 		}
-		r.stop(t)
 	})
 	return r
 }
@@ -95,16 +99,24 @@ func startDaemon(t *testing.T, f files, env daemon.Env) *runningDaemon {
 // signal sends sig to the daemon.
 func (r *runningDaemon) signal(sig os.Signal) { r.signals <- sig }
 
+// exited reports whether Run has returned.
+func (r *runningDaemon) exited() bool {
+	select {
+	case <-r.done:
+		return true
+	default:
+		return false
+	}
+}
+
 // wait waits for the daemon to return and gives its exit code.
 func (r *runningDaemon) wait(t *testing.T) int {
 	t.Helper()
-	r.once.Do(func() {
-		select {
-		case r.code = <-r.done:
-		case <-time.After(startTimeout):
-			t.Fatalf("the daemon did not return within %v; stderr %q", startTimeout, r.stderr.String())
-		}
-	})
+	select {
+	case <-r.done:
+	case <-time.After(startTimeout):
+		t.Fatalf("the daemon did not return within %v; stderr %q", startTimeout, r.stderr.String())
+	}
 	return r.code
 }
 
@@ -125,6 +137,121 @@ func (r *runningDaemon) status(args ...string) (int, string, string) {
 		Stderr: &stderr,
 	})
 	return code, stdout.String(), stderr.String()
+}
+
+// hubLine is the line of `nightshift status` that reports the hub.
+func (r *runningDaemon) hubLine(t *testing.T) string {
+	t.Helper()
+	code, stdout, stderr := r.status()
+	if code != 0 {
+		t.Fatalf("nightshift status exit code = %d (stderr %q)", code, stderr)
+	}
+	lines := strings.Split(stdout, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("nightshift status printed %q, want a hub line", stdout)
+	}
+	return lines[1]
+}
+
+// hubRequest sends a request with the token of cred through the daemon's
+// hub client, as any part of the daemon would, and returns its error.
+func (r *runningDaemon) hubRequest(t *testing.T, cred hub.Credential) error {
+	t.Helper()
+	c := r.d.Hub()
+	req, err := c.NewRequest(t.Context(), http.MethodGet, "/api/v1/elsewhere", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Do(t.Context(), cred, req)
+	if err == nil {
+		resp.Body.Close()
+	}
+	return err
+}
+
+// appendEvents appends n events to the daemon's event log, as the packages
+// that produce events do.
+func (r *runningDaemon) appendEvents(t *testing.T, n int) {
+	t.Helper()
+	for range n {
+		if _, err := r.d.Log().Append(t.Context(), "test.event", map[string]string{"k": "v"}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+}
+
+// eventStream is an open response of GET /api/v1/events, whose event ids
+// are read in the background.
+type eventStream struct {
+	ids chan string
+}
+
+// openStream requests the daemon's event stream, with Last-Event-ID set to
+// cursor unless it is empty, and fails the test unless it answers 200.
+func (r *runningDaemon) openStream(t *testing.T, cursor string) *eventStream {
+	t.Helper()
+	token, err := os.ReadFile(r.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+r.addr+"/api/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+	if cursor != "" {
+		req.Header.Set("Last-Event-ID", cursor)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/events: %v", err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/v1/events answered %d, want 200", resp.StatusCode)
+	}
+	s := &eventStream{ids: make(chan string, 1024)}
+	go func() {
+		defer close(s.ids)
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			if id, ok := strings.CutPrefix(sc.Text(), "id: "); ok {
+				s.ids <- id
+			}
+		}
+	}()
+	return s
+}
+
+// next returns the ids of the stream's next n events.
+func (s *eventStream) next(t *testing.T, n int) []string {
+	t.Helper()
+	var ids []string
+	for range n {
+		select {
+		case id, ok := <-s.ids:
+			if !ok {
+				t.Fatalf("the stream ended after ids %v, want %d", ids, n)
+			}
+			ids = append(ids, id)
+		case <-time.After(startTimeout):
+			t.Fatalf("no event within %v after ids %v", startTimeout, ids)
+		}
+	}
+	return ids
+}
+
+// ended reports whether the stream ends, with no further event, within
+// startTimeout.
+func (s *eventStream) ended() bool {
+	select {
+	case _, ok := <-s.ids:
+		return !ok
+	case <-time.After(startTimeout):
+		return false
+	}
 }
 
 func TestDaemon_FirstStartAnswersTheStatus(t *testing.T) {
@@ -166,5 +293,61 @@ func TestDaemon_FirstStartAnswersTheStatus(t *testing.T) {
 	}
 	if code := r.stop(t); code != 0 {
 		t.Errorf("the daemon returned %d after SIGTERM, want 0", code)
+	}
+}
+
+func TestDaemon_StreamResumesAfterARestart(t *testing.T) {
+	t.Parallel()
+	h := hubtest.New(t)
+	worker, approver := h.GoodTokens()
+	f := writeConfig(t, hubLines(h.URL(), worker, approver))
+
+	first := startDaemon(t, f, daemon.Env{})
+	s := first.openStream(t, "")
+	first.appendEvents(t, 3)
+	if ids := s.next(t, 3); !slices.Equal(ids, []string{"1", "2", "3"}) {
+		t.Errorf("the stream delivered ids %v, want 1 2 3", ids)
+	}
+	if code := first.stop(t); code != 0 {
+		t.Errorf("the first daemon returned %d after SIGTERM, want 0", code)
+	}
+	if !s.ended() {
+		t.Error("the stream did not end when the daemon stopped")
+	}
+
+	second := startDaemon(t, f, daemon.Env{})
+	second.appendEvents(t, 2)
+	resumed := second.openStream(t, "3")
+	if ids := resumed.next(t, 2); !slices.Equal(ids, []string{"4", "5"}) {
+		t.Errorf("the resumed stream delivered ids %v, want 4 5", ids)
+	}
+}
+
+func TestDaemon_RidesOutAHubOutage(t *testing.T) {
+	t.Parallel()
+	h := hubtest.New(t)
+	worker, approver := h.GoodTokens()
+	f := writeConfig(t, hubLines(h.URL(), worker, approver))
+	r := startDaemon(t, f, daemon.Env{ProbeInterval: 20 * time.Millisecond})
+
+	h.Stop()
+	if err := r.hubRequest(t, hub.Worker); err == nil {
+		t.Fatal("a request to the stopped hub succeeded")
+	}
+	if line := r.hubLine(t); !strings.HasPrefix(line, "hub: unreachable since ") {
+		t.Errorf("while the hub is down, nightshift status reports %q, want \"hub: unreachable since <time>\"", line)
+	}
+
+	h.Start(t)
+	want := "hub: " + h.URL() + " reachable"
+	deadline := time.Now().Add(startTimeout)
+	for line := r.hubLine(t); line != want; line = r.hubLine(t) {
+		if time.Now().After(deadline) {
+			t.Fatalf("after the hub came back, nightshift status reports %q, want %q", line, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.exited() {
+		t.Errorf("the daemon returned %d during the outage", r.code)
 	}
 }

@@ -26,6 +26,13 @@ type HubReporter interface {
 	HubState() HubState
 }
 
+// HubReporterFunc is a function that reports the hub's state as a
+// HubReporter.
+type HubReporterFunc func() HubState
+
+// HubState calls f.
+func (f HubReporterFunc) HubState() HubState { return f() }
+
 // StatusSource gives the value of one member of the status, such as the
 // running sessions or the workspaces.
 type StatusSource func(ctx context.Context) (any, error)

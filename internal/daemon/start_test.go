@@ -34,6 +34,14 @@ func writeConfig(t *testing.T, hub string) files {
 		token:  filepath.Join(dir, "token"),
 		store:  filepath.Join(dir, "store", "store.db"),
 	}
+	f.rewrite(t, hub)
+	return f
+}
+
+// rewrite writes f's configuration file again, with the [hub] table's lines
+// hub and the same listen address, token file and store.
+func (f files) rewrite(t *testing.T, hub string) {
+	t.Helper()
 	content := "listen = \"127.0.0.1:0\"\n" +
 		"token_file = \"" + f.token + "\"\n" +
 		"[store]\npath = \"" + f.store + "\"\n" +
@@ -41,7 +49,6 @@ func writeConfig(t *testing.T, hub string) files {
 	if err := os.WriteFile(f.config, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return f
 }
 
 // hubLines is a [hub] table naming endpoint and the two tokens.

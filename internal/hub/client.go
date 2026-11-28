@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Credential names which of nightshift's two hub tokens a request carries.
@@ -105,10 +108,17 @@ func TokenID(pat string) (string, bool) {
 	return id, true
 }
 
-// Client sends requests to one hub with nightshift's two tokens.
+// Client sends requests to one hub with nightshift's two tokens, and
+// reports the outcome of each to its monitor.
 type Client struct {
 	endpoint string
 	http     *http.Client
+	// monitor is nil for a client that checks tokens not yet in use, whose
+	// outcomes say nothing about the tokens the daemon holds.
+	monitor *Monitor
+
+	// mu guards the tokens, which a reload swaps while requests are sent.
+	mu       sync.RWMutex
 	worker   string
 	approver string
 }
@@ -128,6 +138,12 @@ func New(endpoint, worker, approver string, opts ...Option) *Client {
 		worker:   worker,
 		approver: approver,
 	}
+	c.monitor = &Monitor{
+		ready:    c.Ready,
+		clock:    time.Now,
+		interval: DefaultProbeInterval,
+		wake:     make(chan struct{}, 1),
+	}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -135,9 +151,21 @@ func New(endpoint, worker, approver string, opts ...Option) *Client {
 }
 
 // WithTokens returns a client of the same hub holding other tokens, for
-// checking tokens before they are taken into use.
+// checking tokens before they are taken into use. It has no monitor: a
+// refusal of those tokens is not an error of the ones in use.
 func (c *Client) WithTokens(worker, approver string) *Client {
 	return &Client{endpoint: c.endpoint, http: c.http, worker: worker, approver: approver}
+}
+
+// SetTokens takes worker and approver into use for every later request and
+// clears the credential errors, which were the previous tokens'.
+func (c *Client) SetTokens(worker, approver string) {
+	c.mu.Lock()
+	c.worker, c.approver = worker, approver
+	c.mu.Unlock()
+	if c.monitor != nil {
+		c.monitor.clearCredentials()
+	}
 }
 
 // Endpoint is the hub's endpoint.
@@ -145,6 +173,8 @@ func (c *Client) Endpoint() string { return c.endpoint }
 
 // token is the text of cred's token; every request takes it from here.
 func (c *Client) token(cred Credential) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if cred == Approver {
 		return c.approver
 	}
@@ -158,16 +188,29 @@ func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Re
 }
 
 // Do sends req with the token of cred, under ctx. An answer with a status of
-// 400 or more is returned as an *Error, its body read and closed.
+// 400 or more is returned as an *Error, its body read and closed. A request
+// that gets no answer marks the hub unreachable, and a 401 records cred's
+// token as refused.
 func (c *Client) Do(ctx context.Context, cred Credential, req *http.Request) (*http.Response, error) {
+	token := c.token(cred)
 	req = req.Clone(ctx)
-	req.Header.Set("Authorization", "Bearer "+c.token(cred))
-	return c.send(req)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.send(req)
+	var he *Error
+	// A 401 to a token a reload has replaced meanwhile is not the new
+	// token's error.
+	if c.monitor != nil && errors.As(err, &he) && he.Status == http.StatusUnauthorized && c.token(cred) == token {
+		c.monitor.refuse(cred)
+	}
+	return resp, err
 }
 
 func (c *Client) send(req *http.Request) (*http.Response, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if c.monitor != nil {
+			c.monitor.observe(err)
+		}
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {

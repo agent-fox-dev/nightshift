@@ -53,7 +53,8 @@ func (d *Daemon) checkConfig(context.Context) error {
 		return err
 	}
 	d.cfg = cfg
-	d.hub = hub.New(cfg.Hub.Endpoint, cfg.Hub.WorkerToken, cfg.Hub.ApproverToken)
+	d.hub = hub.New(cfg.Hub.Endpoint, cfg.Hub.WorkerToken, cfg.Hub.ApproverToken,
+		hub.WithClock(d.clock()), hub.WithProbeInterval(d.env.ProbeInterval))
 	return nil
 }
 
