@@ -3,7 +3,7 @@
   "spec_id": "02",
   "spec_name": "workspaces_and_policy",
   "schema_version": 3,
-  "updated_at": "2026-11-28T13:00:35Z",
+  "updated_at": "2026-11-28T13:02:32Z",
   "tasks": [
     {
       "id": 1,
@@ -808,7 +808,45 @@
     },
     {
       "id": 6,
-      "state": "pending"
+      "state": "done",
+      "evidence": [
+        {
+          "covers": "PATH-1",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestDaemon_RegistersAWorkspaceAndAdoptsItsPolicy",
+              "passed": {
+                "at": "2026-11-28T13:02:31Z",
+                "tree": "45f041985eef62916ed1e008e531b62b30fb1d53"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "PATH-2",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestDaemon_ProtectsAPathShowsItAndUnprotectsIt",
+              "passed": {
+                "at": "2026-11-28T13:02:31Z",
+                "tree": "45f041985eef62916ed1e008e531b62b30fb1d53"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "PATH-3",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestDaemon_RefusesARegistrationThenRegistersAndRemovesTheWorkspace",
+              "passed": {
+                "at": "2026-11-28T13:02:31Z",
+                "tree": "45f041985eef62916ed1e008e531b62b30fb1d53"
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }
