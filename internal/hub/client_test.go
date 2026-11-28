@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/agent-fox-dev/nightshift/internal/hub"
@@ -178,5 +179,36 @@ func TestClient_Ready(t *testing.T) {
 				t.Errorf("requests = %+v, want one GET /readyz without a credential", r)
 			}
 		})
+	}
+}
+
+func TestClient_KeepsTheErrorDetails(t *testing.T) {
+	t.Parallel()
+	h := hubtest.New(t)
+	worker, approver := h.GoodTokens()
+	c := hub.New(h.URL(), worker, approver)
+	h.FailNextPolicyPut("demo", http.StatusBadRequest, "invalid_policy", "glob is refused",
+		map[string]any{"rule": "docs", "index": 0, "field": "paths[0]"})
+
+	tests := []struct {
+		name, method, path string
+		want               string // the details as JSON, or empty for none
+	}{
+		{"with details", http.MethodPut, "/api/v1/workspaces/demo/policy", `{"field":"paths[0]","index":0,"rule":"docs"}`},
+		{"without details", http.MethodGet, "/api/v1/user/tokens/nosuch", ""},
+	}
+	for _, tt := range tests {
+		req, err := c.NewRequest(t.Context(), tt.method, tt.path, strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Do(t.Context(), hub.Worker, req)
+		var he *hub.Error
+		if !errors.As(err, &he) {
+			t.Fatalf("%s: Do = %v, want a *hub.Error", tt.name, err)
+		}
+		if got := strings.TrimSpace(string(he.Details)); got != tt.want {
+			t.Errorf("%s: Details = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }

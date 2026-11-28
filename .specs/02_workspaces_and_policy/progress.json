@@ -3,7 +3,7 @@
   "spec_id": "02",
   "spec_name": "workspaces_and_policy",
   "schema_version": 3,
-  "updated_at": "2026-11-28T12:15:23Z",
+  "updated_at": "2026-11-28T12:23:39Z",
   "tasks": [
     {
       "id": 1,
@@ -125,7 +125,41 @@
     },
     {
       "id": 2,
-      "state": "pending"
+      "state": "done",
+      "evidence": [
+        {
+          "covers": "REQ-2.1",
+          "tests": [
+            {
+              "test": "./internal/policy:TestMissing_NamesTheRequirementsLackingTheChecks",
+              "failed": {
+                "at": "2026-11-28T12:20:56Z",
+                "tree": "2aa12908309753c4c26e3b56bc6baf9bf5963335"
+              },
+              "passed": {
+                "at": "2026-11-28T12:23:39Z",
+                "tree": "ac7e42c50257af9c2788e54892ccb68de7b045d2"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-2.5",
+          "tests": [
+            {
+              "test": "./internal/policy:TestSensitive_NamesTheRulesThatNeedAnApprovalOrBlock",
+              "failed": {
+                "at": "2026-11-28T12:20:56Z",
+                "tree": "2aa12908309753c4c26e3b56bc6baf9bf5963335"
+              },
+              "passed": {
+                "at": "2026-11-28T12:23:39Z",
+                "tree": "ac7e42c50257af9c2788e54892ccb68de7b045d2"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 3,
