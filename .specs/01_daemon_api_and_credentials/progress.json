@@ -3,7 +3,7 @@
   "spec_id": "01",
   "spec_name": "daemon_api_and_credentials",
   "schema_version": 3,
-  "updated_at": "2026-11-28T11:43:39Z",
+  "updated_at": "2026-11-28T11:45:23Z",
   "tasks": [
     {
       "id": 1,
@@ -981,7 +981,48 @@
     },
     {
       "id": 6,
-      "state": "pending"
+      "state": "done",
+      "evidence": [
+        {
+          "covers": "PATH-1",
+          "no_red": "smoke check of a path whose components tasks 1-5 delivered; it was recorded failing as task 3's check of the first start and now runs the whole path unmocked",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestDaemon_FirstStartAnswersTheStatus",
+              "passed": {
+                "at": "2026-11-28T11:45:23Z",
+                "tree": "d6c85df336ce4c6c1ea7d3241b862134754fc5f1"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "PATH-2",
+          "no_red": "smoke check of a path whose components tasks 4-5 delivered; the integration task only extends it with the 410 end state, which the event log already answers",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestDaemon_StreamResumesAfterARestart",
+              "passed": {
+                "at": "2026-11-28T11:45:23Z",
+                "tree": "d6c85df336ce4c6c1ea7d3241b862134754fc5f1"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "PATH-3",
+          "no_red": "smoke check of a path whose components task 5 delivered; it was recorded failing with task 5's monitor tests and now runs the whole path unmocked",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestDaemon_RidesOutAHubOutage",
+              "passed": {
+                "at": "2026-11-28T11:45:23Z",
+                "tree": "d6c85df336ce4c6c1ea7d3241b862134754fc5f1"
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

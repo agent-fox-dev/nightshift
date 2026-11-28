@@ -321,6 +321,52 @@ func TestDaemon_StreamResumesAfterARestart(t *testing.T) {
 	if ids := resumed.next(t, 2); !slices.Equal(ids, []string{"4", "5"}) {
 		t.Errorf("the resumed stream delivered ids %v, want 4 5", ids)
 	}
+	if code := second.stop(t); code != 0 {
+		t.Errorf("the second daemon returned %d after SIGTERM, want 0", code)
+	}
+
+	// A start eight days later prunes every event, so the successor of the
+	// client's cursor is gone.
+	later := time.Now().Add(8 * 24 * time.Hour)
+	third := startDaemon(t, f, daemon.Env{Clock: func() time.Time { return later }})
+	status, body := third.getEvents(t, "3")
+	if status != http.StatusGone || body.ErrorType != "cursor_expired" || body.OldestSeq != 6 {
+		t.Errorf("a reconnect after the prune answered %d %q oldest_seq %d, want 410 cursor_expired oldest_seq 6",
+			status, body.ErrorType, body.OldestSeq)
+	}
+}
+
+// eventsRefusal is the error body of a refused GET /api/v1/events.
+type eventsRefusal struct {
+	ErrorType string `json:"error_type"`
+	OldestSeq int64  `json:"oldest_seq"`
+}
+
+// getEvents requests the daemon's event stream with Last-Event-ID cursor and
+// returns the status and, for a refusal, its error body; a stream that is
+// accepted is closed at once.
+func (r *runningDaemon) getEvents(t *testing.T, cursor string) (int, eventsRefusal) {
+	t.Helper()
+	token, err := os.ReadFile(r.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+r.addr+"/api/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+	req.Header.Set("Last-Event-ID", cursor)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/events: %v", err)
+	}
+	defer resp.Body.Close()
+	var body eventsRefusal
+	if resp.StatusCode != http.StatusOK {
+		json.NewDecoder(resp.Body).Decode(&body)
+	}
+	return resp.StatusCode, body
 }
 
 func TestDaemon_RidesOutAHubOutage(t *testing.T) {
