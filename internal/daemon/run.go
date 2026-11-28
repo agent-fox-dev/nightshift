@@ -18,10 +18,12 @@ import (
 	"time"
 
 	"github.com/agent-fox-dev/nightshift/internal/api"
+	"github.com/agent-fox-dev/nightshift/internal/command"
 	"github.com/agent-fox-dev/nightshift/internal/config"
 	"github.com/agent-fox-dev/nightshift/internal/event"
 	"github.com/agent-fox-dev/nightshift/internal/hub"
 	"github.com/agent-fox-dev/nightshift/internal/store"
+	"github.com/agent-fox-dev/nightshift/internal/workspace"
 )
 
 // pruneInterval is how often the event log drops the events older than
@@ -111,6 +113,7 @@ func Run(args []string, env Env) int {
 	// monitor probes while the hub is unreachable. Both loops, and any
 	// reload, run until the shutdown stops them, before the store closes.
 	d.prune(context.Background())
+	d.removeStrayClones(context.Background())
 	loops, stopLoops := context.WithCancel(context.Background())
 	var background sync.WaitGroup
 	background.Go(func() { d.pruneLoop(loops, orDefault(env.PruneInterval, pruneInterval)) })
@@ -136,7 +139,8 @@ func Run(args []string, env Env) int {
 }
 
 // open opens the store, ensures the client token and listens, in that
-// order. Its error is the line Run prints, named after the step that
+// order, then builds the API with the routes of the packages built on the
+// store. Its error is the line Run prints, named after the step that
 // failed; on an error nothing stays open.
 func (d *Daemon) open() error {
 	st, err := store.Open(d.cfg.Store.Path)
@@ -160,7 +164,21 @@ func (d *Daemon) open() error {
 	}
 	d.store, d.log, d.ln = st, log, ln
 	d.api = api.New(token, api.HubReporterFunc(d.hubState), api.WithErrorLog(d.stderr))
+	// One runner for every command the daemon runs, so that the identity
+	// another package gives it applies to all of them.
+	d.runner = &command.Runner{}
+	d.workspaces = workspace.New(st, d.hub, d.runner, d.cfg.ClonesDir)
+	d.workspaces.Mount(d.api)
 	return nil
+}
+
+// removeStrayClones removes the clones a registration cut off by a crash
+// left; a failure is reported and the daemon goes on, since such a clone
+// is only left in place.
+func (d *Daemon) removeStrayClones(ctx context.Context) {
+	if err := d.workspaces.RemoveStrayClones(ctx); err != nil {
+		fmt.Fprintf(d.stderr, "workspaces: %v\n", err)
+	}
 }
 
 // clock is the time source of the events and of the hub's first failure.
@@ -214,6 +232,8 @@ type Daemon struct {
 	log        *event.Log
 	ln         net.Listener
 	api        *api.Server
+	runner     *command.Runner
+	workspaces *workspace.Service
 	// stderr is env.Stderr, safe for the daemon's goroutines to share.
 	stderr io.Writer
 
@@ -232,3 +252,11 @@ func (d *Daemon) Hub() *hub.Client { return d.hub }
 
 // Log is the daemon's event log, which other packages append to.
 func (d *Daemon) Log() *event.Log { return d.log }
+
+// Runner runs every shell command of the daemon: the health commands and
+// git of the workspaces, and the commands of the packages built after
+// them.
+func (d *Daemon) Runner() *command.Runner { return d.runner }
+
+// Workspaces is the service of the registered workspaces.
+func (d *Daemon) Workspaces() *workspace.Service { return d.workspaces }

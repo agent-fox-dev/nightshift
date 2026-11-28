@@ -3,6 +3,7 @@
 // workspace binding and revocation, answers GET
 // /api/v1/user/tokens/{token_id} in the order Parley checks a request,
 // serves real git repositories over smart HTTP at /git/<org>/<slug>.git,
+// answers the workspace object and the sync of the workspaces it holds,
 // holds each workspace's landing policy behind GET and PUT
 // /api/v1/workspaces/{slug}/policy, and keeps a log of every request it saw.
 package hubtest
@@ -79,16 +80,17 @@ type Request struct {
 type Hub struct {
 	addr string
 
-	mu       sync.Mutex
-	srv      *http.Server
-	ln       net.Listener
-	quit     chan struct{}
-	ready    []int
-	tokens   map[string]*Token // by PAT
-	nextID   int
-	requests []Request
-	repos    map[string]*Repository  // by path, /git/<org>/<slug>.git
-	policies map[string]*policyState // by workspace slug
+	mu         sync.Mutex
+	srv        *http.Server
+	ln         net.Listener
+	quit       chan struct{}
+	ready      []int
+	tokens     map[string]*Token // by PAT
+	nextID     int
+	requests   []Request
+	repos      map[string]*Repository  // by path, /git/<org>/<slug>.git
+	policies   map[string]*policyState // by workspace slug
+	workspaces map[string]*Workspace   // by slug
 }
 
 // New starts a fake hub on a loopback address and stops it when the test
@@ -157,6 +159,8 @@ func (h *Hub) serve(ln net.Listener) {
 	mux.HandleFunc("GET /readyz", h.readyz)
 	mux.HandleFunc("GET /api/v1/user/tokens/{token_id}", h.userToken)
 	mux.HandleFunc("/git/", h.gitEndpoint)
+	mux.HandleFunc("GET /api/v1/workspaces/{slug}", h.getWorkspace)
+	mux.HandleFunc("POST /api/v1/workspaces/{slug}/sync", h.syncWorkspace)
 	mux.HandleFunc("GET /api/v1/workspaces/{slug}/policy", h.getPolicy)
 	mux.HandleFunc("PUT /api/v1/workspaces/{slug}/policy", h.putPolicy)
 	mux.HandleFunc("/api/v1/", h.unknownRoute)

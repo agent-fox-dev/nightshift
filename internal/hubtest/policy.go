@@ -176,7 +176,10 @@ func (h *Hub) putPolicy(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, http.StatusForbidden, "insufficient_scope", "the token lacks workspaces:write")
 		return
 	}
-	if caller.UserID != Owner {
+	h.mu.Lock()
+	owner := h.ownerOf(slug)
+	h.mu.Unlock()
+	if caller.UserID != owner {
 		h.fail(w, r, http.StatusForbidden, "forbidden", "only the workspace's owner may change its policy")
 		return
 	}

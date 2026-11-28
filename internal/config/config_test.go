@@ -31,6 +31,7 @@ func TestLoad_ReadsEveryKeyFromTheFile(t *testing.T) {
 	const content = `
 listen = "127.0.0.1:9999"
 token_file = "/var/lib/nightshift/token"
+clones_dir = "~/work/clones"
 
 [store]
 path = "~/x.db"
@@ -59,6 +60,7 @@ path = "~/x.db"
 			want := config.Config{
 				Listen:    "127.0.0.1:9999",
 				TokenFile: "/var/lib/nightshift/token",
+				ClonesDir: filepath.Join(home, "work", "clones"),
 				Store:     config.StoreConfig{Path: filepath.Join(home, "x.db")},
 				Hub: config.HubConfig{
 					Endpoint:      "http://hub.example:8080",
@@ -91,6 +93,9 @@ func TestLoad_DefaultsOmittedKeys(t *testing.T) {
 	}
 	if want := filepath.Join(home, ".nightshift", "store.db"); cfg.Store.Path != want {
 		t.Errorf("Store.Path = %q, want %q", cfg.Store.Path, want)
+	}
+	if want := filepath.Join(home, ".nightshift", "clones"); cfg.ClonesDir != want {
+		t.Errorf("ClonesDir = %q, want %q", cfg.ClonesDir, want)
 	}
 }
 
