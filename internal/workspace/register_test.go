@@ -658,16 +658,25 @@ func TestRoutes_AnswerUnavailableWhileTheHubIsDown(t *testing.T) {
 		// registered inserts demo into the store before the request, for a
 		// route of a registered workspace.
 		registered bool
+		// recorded records a rule of that name for demo before the request.
+		recorded string
 	}{
 		{method: http.MethodPost, path: "/api/v1/workspaces", body: `{"slug": "demo", "health_command": "true"}`},
 		{method: http.MethodGet, path: "/api/v1/workspaces/demo", registered: true},
+		{method: http.MethodPost, path: "/api/v1/workspaces/demo/policy/rules", body: `{"globs": ["deploy/**"]}`, registered: true},
+		{method: http.MethodDelete, path: "/api/v1/workspaces/demo/policy/rules/x", registered: true, recorded: "x"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t, nil)
+			wantRecorded := 0
 			if tt.registered {
 				f.insert(t, "demo")
+			}
+			if tt.recorded != "" {
+				f.recordRule(t, "demo", tt.recorded)
+				wantRecorded = 1
 			}
 			f.hub.Stop()
 
@@ -682,6 +691,9 @@ func TestRoutes_AnswerUnavailableWhileTheHubIsDown(t *testing.T) {
 			if !tt.registered {
 				f.assertNoneStored(t)
 				return
+			}
+			if n := f.recordedRules(t, "demo"); n != wantRecorded {
+				t.Errorf("%d rules are recorded for demo, want %d", n, wantRecorded)
 			}
 			// The list does not ask the hub, so it answers while the hub is
 			// down.

@@ -335,3 +335,29 @@ func TestWrite_ReportsTheHubsRefusal(t *testing.T) {
 		})
 	}
 }
+
+func TestNextName_IsOneAboveTheHighestNightshiftNumber(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		rules []string
+		want  string
+	}{
+		{"no rules", nil, "nightshift-1"},
+		{"nightshift-1", []string{"nightshift-1"}, "nightshift-2"},
+		{"the highest number counts, other names do not", []string{"nightshift-1", "nightshift-7", "docs"}, "nightshift-8"},
+		{"only a decimal number counts, by its value", []string{"nightshift-x", "nightshift-02"}, "nightshift-3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			doc := policy.Document{Default: complete()}
+			for _, name := range tt.rules {
+				doc.Rules = append(doc.Rules, rule(name, complete()))
+			}
+			if got := policy.NextName(doc); got != tt.want {
+				t.Errorf("NextName(%v) = %q, want %q", tt.rules, got, tt.want)
+			}
+		})
+	}
+}

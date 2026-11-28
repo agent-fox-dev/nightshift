@@ -364,6 +364,14 @@ func TestUnregisteredSlug_IsNotFoundWithoutAskingTheHub(t *testing.T) {
 				return err
 			},
 			"Remove": func() error { return f.svc.Remove(ctx, "nope") },
+			"Protect": func() error {
+				_, err := f.svc.Protect(ctx, "nope", []string{"x/**"}, false, "")
+				return err
+			},
+			"Unprotect": func() error {
+				_, err := f.svc.Unprotect(ctx, "nope", "x")
+				return err
+			},
 		}
 		for name, call := range calls {
 			if err := call(); !errors.Is(err, workspace.ErrNotFound) {
@@ -378,6 +386,8 @@ func TestUnregisteredSlug_IsNotFoundWithoutAskingTheHub(t *testing.T) {
 		{http.MethodGet, "/api/v1/workspaces/nope", ""},
 		{http.MethodPatch, "/api/v1/workspaces/nope", `{"daily_tokens": 9}`},
 		{http.MethodDelete, "/api/v1/workspaces/nope", ""},
+		{http.MethodPost, "/api/v1/workspaces/nope/policy/rules", `{"globs": ["x/**"]}`},
+		{http.MethodDelete, "/api/v1/workspaces/nope/policy/rules/x", ""},
 	}
 	for _, tt := range routes {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {

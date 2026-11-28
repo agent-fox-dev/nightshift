@@ -6,6 +6,8 @@ package policy
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
+	"strings"
 )
 
 // Checks are the checks nightshift reports on a version of a change, in the
@@ -175,3 +177,26 @@ func Sensitive(doc Document) []SensitiveRule {
 }
 
 func sensitive(req Requirement) bool { return req.Approvals >= 1 || req.Block }
+
+// namePrefix begins the name of a rule nightshift writes when it is given
+// none.
+const namePrefix = "nightshift-"
+
+// NextName is the name of a rule nightshift writes when it is given none:
+// nightshift-<n>, n one above the highest number among the rules named
+// nightshift-<decimal number>, and 1 when there is none. Only such names
+// count, by their value, so nightshift-02 counts as 2 and nightshift-x not
+// at all; the result is then never a name the document holds.
+func NextName(doc Document) string {
+	highest := 0
+	for _, r := range doc.Rules {
+		digits, ok := strings.CutPrefix(r.Name, namePrefix)
+		if !ok || digits == "" || strings.Trim(digits, "0123456789") != "" {
+			continue
+		}
+		if n, err := strconv.Atoi(digits); err == nil && n > highest {
+			highest = n
+		}
+	}
+	return namePrefix + strconv.Itoa(highest+1)
+}

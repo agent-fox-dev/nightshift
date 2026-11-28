@@ -564,3 +564,54 @@ func TestDaemon_RefusesARegistrationThenRegistersAndRemovesTheWorkspace(t *testi
 		t.Errorf("after the removal the hub's policy is %+v, want the adopted one %+v kept", p, adopted)
 	}
 }
+
+func TestDaemon_ProtectsAPathShowsItAndUnprotectsIt(t *testing.T) {
+	t.Parallel()
+	w := withWorkspace(t, "demo")
+	r := startDaemon(t, w.files, daemon.Env{})
+	if code, _, stderr := r.nightshift("workspace", "add", "demo", "--health", "true", "--adopt-policy"); code != 0 {
+		t.Fatalf("workspace add exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if rev := w.hub.Policy("demo").Revision; rev != 1 {
+		t.Fatalf("after the registration the hub's policy is at revision %d, want 1", rev)
+	}
+	show := func() string {
+		t.Helper()
+		code, stdout, stderr := r.nightshift("workspace", "show", "demo")
+		if code != 0 {
+			t.Fatalf("workspace show exit code = %d, want 0 (stderr %q)", code, stderr)
+		}
+		return stdout
+	}
+
+	code, stdout, stderr := r.nightshift("workspace", "protect", "demo", "deploy/**")
+
+	if want := "rule nightshift-1 (approval): deploy/**\npolicy revision 2\n"; code != 0 || stdout != want {
+		t.Fatalf("workspace protect = %d %q (stderr %q), want 0 %q", code, stdout, stderr, want)
+	}
+	p := w.hub.Policy("demo")
+	if p.Revision != 2 || len(p.Rules) == 0 || p.Rules[0].Name != "nightshift-1" ||
+		p.Rules[0].Require.Approvals != 1 || !slices.Equal(p.Rules[0].Require.Approvers, []string{"owner"}) ||
+		!slices.Equal(p.Rules[0].Require.Checks, policy.Checks) {
+		t.Errorf("after protect the hub's policy is %+v, want revision 2 with nightshift-1 first, requiring the owner's approval and the three checks", p)
+	}
+	if got := show(); !strings.Contains(got, "\n  nightshift-1 approval: deploy/**\n") {
+		t.Errorf("workspace show printed %q, want the line of nightshift-1", got)
+	}
+
+	code, stdout, stderr = r.nightshift("workspace", "unprotect", "demo", "nightshift-1")
+
+	if want := "removed rule nightshift-1\npolicy revision 3\n"; code != 0 || stdout != want {
+		t.Fatalf("workspace unprotect = %d %q (stderr %q), want 0 %q", code, stdout, stderr, want)
+	}
+	if p := w.hub.Policy("demo"); p.Revision != 3 || len(p.Rules) != 0 {
+		t.Errorf("after unprotect the hub's policy is %+v, want revision 3 with no rule", p)
+	}
+	if got := show(); !strings.HasSuffix(got, "\nsensitive paths: none\n") {
+		t.Errorf("workspace show printed %q, want it to end with \"sensitive paths: none\"", got)
+	}
+	code, stdout, stderr = r.nightshift("workspace", "unprotect", "demo", "nightshift-1")
+	if code != 1 || stdout != "" || stderr != "not a rule nightshift wrote\n" {
+		t.Errorf("a second unprotect = %d, stdout %q, stderr %q; want 1, nothing, \"not a rule nightshift wrote\\n\"", code, stdout, stderr)
+	}
+}

@@ -28,6 +28,8 @@ func (s *Service) Mount(srv *api.Server) {
 	srv.Handle("GET /api/v1/workspaces/{slug}", http.HandlerFunc(s.handleShow))
 	srv.Handle("PATCH /api/v1/workspaces/{slug}", http.HandlerFunc(s.handleSet))
 	srv.Handle("DELETE /api/v1/workspaces/{slug}", http.HandlerFunc(s.handleRemove))
+	srv.Handle("POST /api/v1/workspaces/{slug}/policy/rules", http.HandlerFunc(s.handleProtect))
+	srv.Handle("DELETE /api/v1/workspaces/{slug}/policy/rules/{name}", http.HandlerFunc(s.handleUnprotect))
 	srv.SetStatusSource("workspaces", s.statusWorkspaces)
 }
 
@@ -174,6 +176,50 @@ func (s *Service) handleRemove(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleProtect is POST /api/v1/workspaces/{slug}/policy/rules: a rule
+// at the top of the hub's policy for the globs of the body.
+func (s *Service) handleProtect(w http.ResponseWriter, r *http.Request) {
+	members, err := decodeObject(w, r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	var globs []string
+	if raw, ok := members["globs"]; !ok || json.Unmarshal(raw, &globs) != nil {
+		writeError(w, r, &invalidRequest{"globs must be a list of strings"})
+		return
+	}
+	var block bool
+	if raw, ok := members["block"]; ok && json.Unmarshal(raw, &block) != nil {
+		writeError(w, r, &invalidRequest{"block must be true or false"})
+		return
+	}
+	var name string
+	if raw, ok := members["name"]; ok && json.Unmarshal(raw, &name) != nil {
+		writeError(w, r, &invalidRequest{"name must be a string"})
+		return
+	}
+	out, err := s.Protect(r.Context(), r.PathValue("slug"), globs, block, name)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusCreated, map[string]any{
+		"rule":     map[string]any{"name": out.Rule.Name, "paths": out.Rule.Paths, "require": out.Rule.Require},
+		"revision": out.Revision,
+	})
+}
+
+// handleUnprotect is DELETE /api/v1/workspaces/{slug}/policy/rules/{name}.
+func (s *Service) handleUnprotect(w http.ResponseWriter, r *http.Request) {
+	rev, err := s.Unprotect(r.Context(), r.PathValue("slug"), r.PathValue("name"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, map[string]any{"revision": rev})
+}
+
 // handleRegister is POST /api/v1/workspaces. The request stays open until
 // the registration is decided; a client that goes away ends it, and its
 // health command with it.
@@ -277,12 +323,14 @@ func parseDailyTokens(raw json.RawMessage) (int64, error) {
 }
 
 // writeError answers err as the workspace routes do: 400 invalid_request
-// for a body that breaks the format, 404 not_found for the route's slug
+// for a body that breaks the format, 400 invalid_glob for a refused glob,
+// 404 not_found for the route's slug
 // when it is not registered, 409 conflict for a refusal with its output
 // where it has one, 503 hub_unavailable without the hub, and 500
 // otherwise. Nothing is answered to a client that went away.
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var invalid *invalidRequest
+	var glob *globError
 	var refusal *Refusal
 	switch {
 	case r.Context().Err() != nil:
@@ -290,6 +338,8 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		api.WriteError(w, http.StatusNotFound, "not_found", "workspace "+r.PathValue("slug")+" is not registered")
 	case errors.As(err, &invalid):
 		api.WriteError(w, http.StatusBadRequest, "invalid_request", invalid.message)
+	case errors.As(err, &glob):
+		api.WriteError(w, http.StatusBadRequest, "invalid_glob", glob.message)
 	case errors.As(err, &refusal):
 		var extra map[string]any
 		if refusal.Output != nil {

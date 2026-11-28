@@ -74,6 +74,18 @@ var workspaceCommands = []workspaceCommand{
 		summary:  "remove a workspace from nightshift, leaving it on the hub",
 		setup:    setupWorkspaceRemove,
 	},
+	{
+		name:     "protect",
+		synopsis: "protect <slug> <glob>... [--block] [--name <rule>]",
+		summary:  "mark paths sensitive with a rule at the top of the hub's policy",
+		setup:    setupWorkspaceProtect,
+	},
+	{
+		name:     "unprotect",
+		synopsis: "unprotect <slug> <rule>",
+		summary:  "remove a rule protect wrote from the hub's policy",
+		setup:    setupWorkspaceUnprotect,
+	},
 }
 
 // listColumns are the columns other packages add to the lines of
@@ -206,7 +218,8 @@ func (c *Call) sendJSON(method, path string, v any) ([]byte, int) {
 
 // workspaceRequest is Request for the workspace commands, which print an
 // error answer's output lines after its message, so that the person reads
-// what a refused health command wrote.
+// what a refused health command wrote, and exit 2 for a refused glob, as
+// for any other command line the person has to correct.
 func (c *Call) workspaceRequest(method, path string, body io.Reader) ([]byte, int) {
 	a, code := c.send(method, path, body)
 	if code != 0 {
@@ -216,6 +229,9 @@ func (c *Call) workspaceRequest(method, path string, body io.Reader) ([]byte, in
 		e := c.reportError(a)
 		for _, line := range e.Output {
 			fmt.Fprintln(c.Stderr, line)
+		}
+		if e.ErrorType == "invalid_glob" {
+			return nil, 2
 		}
 		return nil, 1
 	}
@@ -463,6 +479,77 @@ func setupWorkspaceRemove(*flag.FlagSet) func(*Call, []string) int {
 		if !c.JSON {
 			fmt.Fprintf(c.Stdout, "removed %s\n", slug)
 		}
+		return 0
+	}
+}
+
+// rulesPath is the route of the rules of the workspace slug's policy.
+func rulesPath(slug string) string { return workspacePath(slug) + "/policy/rules" }
+
+func setupWorkspaceProtect(fs *flag.FlagSet) func(*Call, []string) int {
+	block := fs.Bool("block", false, "refuse every change of the paths instead of waiting for your approval")
+	name := fs.String("name", "", "the rule's `name` (default nightshift-<n>, the next free number)")
+	return func(c *Call, args []string) int {
+		switch {
+		case len(args) == 0:
+			return c.UsageError("no slug given")
+		case len(args) == 1:
+			return c.UsageError("no glob given")
+		}
+		slug := args[0]
+		body := map[string]any{"globs": args[1:], "block": *block}
+		if *name != "" {
+			body["name"] = *name
+		}
+		answer, code := c.sendJSON(http.MethodPost, rulesPath(slug), body)
+		if code != 0 {
+			return code
+		}
+		var written struct {
+			Rule struct {
+				Name    string   `json:"name"`
+				Paths   []string `json:"paths"`
+				Require struct {
+					Block bool `json:"block"`
+				} `json:"require"`
+			} `json:"rule"`
+			Revision int `json:"revision"`
+		}
+		if code, text := c.printAnswer(answer, &written, "a rule"); !text {
+			return code
+		}
+		kind := "approval"
+		if written.Rule.Require.Block {
+			kind = "block"
+		}
+		fmt.Fprintf(c.Stdout, "rule %s (%s): %s\n", written.Rule.Name, kind, strings.Join(written.Rule.Paths, ", "))
+		fmt.Fprintf(c.Stdout, "policy revision %d\n", written.Revision)
+		return 0
+	}
+}
+
+func setupWorkspaceUnprotect(*flag.FlagSet) func(*Call, []string) int {
+	return func(c *Call, args []string) int {
+		switch {
+		case len(args) == 0:
+			return c.UsageError("no slug given")
+		case len(args) == 1:
+			return c.UsageError("no rule given")
+		case len(args) > 2:
+			return c.UsageError("unexpected argument %q", args[2])
+		}
+		slug, rule := args[0], args[1]
+		answer, code := c.sendJSON(http.MethodDelete, rulesPath(slug)+"/"+url.PathEscape(rule), nil)
+		if code != 0 {
+			return code
+		}
+		var removed struct {
+			Revision int `json:"revision"`
+		}
+		if code, text := c.printAnswer(answer, &removed, "a removal"); !text {
+			return code
+		}
+		fmt.Fprintf(c.Stdout, "removed rule %s\npolicy revision %d\n", rule, removed.Revision)
 		return 0
 	}
 }
