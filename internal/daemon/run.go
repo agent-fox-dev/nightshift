@@ -18,12 +18,17 @@ import (
 
 	"github.com/agent-fox-dev/nightshift/internal/api"
 	"github.com/agent-fox-dev/nightshift/internal/config"
+	"github.com/agent-fox-dev/nightshift/internal/event"
 	"github.com/agent-fox-dev/nightshift/internal/hub"
 	"github.com/agent-fox-dev/nightshift/internal/store"
 )
 
 // shutdownTimeout bounds how long a stop waits for requests in flight.
 const shutdownTimeout = 5 * time.Second
+
+// pruneInterval is how often the event log drops the events older than
+// its retention, after the prune at start.
+const pruneInterval = time.Hour
 
 // Env is what Run takes from the process, so that tests run the daemon in
 // the test process.
@@ -41,6 +46,9 @@ type Env struct {
 	// Started, when set, is called once the API listens, with the running
 	// daemon.
 	Started func(*Daemon)
+	// Clock gives the time of events and of the event log's prune; nil
+	// means time.Now.
+	Clock func() time.Time
 }
 
 // Run runs the daemon with the command-line arguments args (without the
@@ -86,6 +94,27 @@ func Run(args []string, env Env) int {
 	}
 	defer d.store.Close()
 
+	// The event log is pruned before the API serves, then hourly until Run
+	// returns; the loop stops before the store is closed.
+	d.prune(context.Background())
+	pruneCtx, stopPrune := context.WithCancel(context.Background())
+	pruned := make(chan struct{})
+	go func() {
+		defer close(pruned)
+		d.pruneLoop(pruneCtx, pruneInterval)
+	}()
+	defer func() {
+		stopPrune()
+		<-pruned
+	}()
+
+	// The event streams end when streams is cancelled, which comes before
+	// the server's shutdown, because the shutdown waits for every open
+	// connection and a stream never ends by itself.
+	streams, stopStreams := context.WithCancel(context.Background())
+	defer stopStreams()
+	d.api.HandleEvents(streams, d.log)
+
 	srv := &http.Server{Handler: d.api}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(d.ln) }()
@@ -95,6 +124,7 @@ func Run(args []string, env Env) int {
 
 	waitForStop(signals)
 
+	stopStreams()
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
@@ -112,6 +142,15 @@ func (d *Daemon) open() error {
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
+	clock := d.env.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	log, err := event.Open(st, clock)
+	if err != nil {
+		st.Close()
+		return fmt.Errorf("store: %w", err)
+	}
 	token, err := api.EnsureClientToken(d.cfg.TokenFile)
 	if err != nil {
 		st.Close()
@@ -122,9 +161,31 @@ func (d *Daemon) open() error {
 		st.Close()
 		return fmt.Errorf("listen: %w", err)
 	}
-	d.store, d.ln = st, ln
+	d.store, d.log, d.ln = st, log, ln
 	d.api = api.New(token, reachableHub{endpoint: d.hub.Endpoint()}, api.WithErrorLog(d.env.Stderr))
 	return nil
+}
+
+// prune drops the event log's expired events; a failure is reported and
+// the daemon goes on, since the events are only kept longer.
+func (d *Daemon) prune(ctx context.Context) {
+	if err := d.log.Prune(ctx); err != nil && ctx.Err() == nil {
+		fmt.Fprintln(d.env.Stderr, err)
+	}
+}
+
+// pruneLoop prunes the event log every interval until ctx is done.
+func (d *Daemon) pruneLoop(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			d.prune(ctx)
+		}
+	}
 }
 
 // waitForStop returns on SIGTERM or SIGINT, or when signals is closed.
@@ -151,6 +212,7 @@ type Daemon struct {
 	cfg        config.Config
 	hub        *hub.Client
 	store      *store.Store
+	log        *event.Log
 	ln         net.Listener
 	api        *api.Server
 }
@@ -160,3 +222,6 @@ func (d *Daemon) Addr() string { return d.ln.Addr().String() }
 
 // Hub is the daemon's client of the hub.
 func (d *Daemon) Hub() *hub.Client { return d.hub }
+
+// Log is the daemon's event log, which other packages append to.
+func (d *Daemon) Log() *event.Log { return d.log }
