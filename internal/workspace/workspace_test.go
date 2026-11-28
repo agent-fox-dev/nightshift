@@ -324,6 +324,13 @@ func TestSetState_StoresTheStateAcrossARestart(t *testing.T) {
 			if got := listed(t, r, "demo")["state"]; got != string(want.State) {
 				t.Errorf("the list's state = %v, want %s", got, want.State)
 			}
+			if r := f.do(context.Background(), http.MethodGet, "/api/v1/workspaces/demo", ""); r.body["state"] != string(want.State) {
+				t.Errorf("the workspace's state = %v (%d %s), want %s", r.body["state"], r.status, r.raw, want.State)
+			}
+			status := f.do(context.Background(), http.MethodGet, "/api/v1/status", "")
+			if got := listed(t, status, "demo")["state"]; got != string(want.State) {
+				t.Errorf("the status's state = %v, want %s", got, want.State)
+			}
 			if err := f.st.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -518,5 +525,114 @@ func TestRemove_IsRefusedByTheFirstGuard(t *testing.T) {
 	}
 	if _, err := os.Stat(clone); err != nil {
 		t.Errorf("the clone directory: %v, want it kept", err)
+	}
+}
+
+// A workspace has one clone, so its health runs take it one at a time: a
+// second run's checkout would otherwise change the tree the first one's
+// command is reading.
+func TestRunHealth_RunsOneAtATimeInTheClone(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, nil)
+	if r := f.register(t, map[string]any{"slug": "demo", "health_command": "true"}); r.status != http.StatusCreated {
+		t.Fatalf("registration answered %d %s, want 201", r.status, r.raw)
+	}
+	dir := t.TempDir()
+	log, gate := filepath.Join(dir, "log"), filepath.Join(dir, "gate")
+	health := "echo run >> '" + log + "'; while [ ! -f '" + gate + "' ]; do sleep 0.01; done"
+	if _, err := f.svc.Set(context.Background(), "demo", workspace.Settings{HealthCommand: &health}); err != nil {
+		t.Fatal(err)
+	}
+	commit := f.repo.Head(t)
+	runs := func() int {
+		data, _ := os.ReadFile(log)
+		return strings.Count(string(data), "run\n")
+	}
+	done := make(chan error, 2)
+	run := func() {
+		_, err := f.svc.RunHealth(context.Background(), "demo", commit, 10)
+		done <- err
+	}
+
+	go run()
+	for deadline := time.Now().Add(5 * time.Second); runs() < 1; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the first health run did not start")
+		}
+	}
+	go run()
+	time.Sleep(300 * time.Millisecond)
+	if n := runs(); n != 1 {
+		t.Errorf("%d health commands ran in the clone at once, want 1", n)
+	}
+	if err := os.WriteFile(gate, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Errorf("RunHealth: %v", err)
+		}
+	}
+	if n := runs(); n != 2 {
+		t.Errorf("%d health commands ran, want 2", n)
+	}
+}
+
+// A removal while a protection is being written waits for it, so that the
+// protection's record of its rule does not fail on a workspace removed under
+// it, and the removal then takes that record with it.
+func TestRemove_WaitsForAProtectionBeingWritten(t *testing.T) {
+	t.Parallel()
+	f := newPolicyFixture(t)
+	removed := make(chan error, 1)
+	f.hub.OnPolicyPut("demo", func() {
+		go func() { removed <- f.svc.Remove(context.Background(), "demo") }()
+		select {
+		case err := <-removed:
+			removed <- err
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
+
+	r := f.do(context.Background(), http.MethodPost, rulesPath, `{"globs": ["deploy/**"]}`)
+
+	if r.status != http.StatusCreated {
+		t.Errorf("the protection answered %d %s, want 201", r.status, r.raw)
+	}
+	if err := <-removed; err != nil {
+		t.Errorf("Remove: %v", err)
+	}
+	f.assertNoneStored(t)
+	if n := f.recordedRules(t, "demo"); n != 0 {
+		t.Errorf("%d rule names of demo are still recorded, want none", n)
+	}
+}
+
+// A clone that cannot be removed does not undo a removal: the workspace is
+// gone, and the clone is a stray one the next start removes.
+func TestRemove_SucceedsWhenTheCloneCannotBeRemoved(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root removes a directory whatever its parent's mode")
+	}
+	f := newFixture(t, nil)
+	if r := f.register(t, map[string]any{"slug": "demo", "health_command": "true"}); r.status != http.StatusCreated {
+		t.Fatalf("registration answered %d %s, want 201", r.status, r.raw)
+	}
+	var hooks hookLog
+	f.svc.OnRemoved(func(_ context.Context, slug string) { hooks.add(slug) })
+	if err := os.Chmod(f.clones, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(f.clones, 0o755) })
+
+	r := f.do(context.Background(), http.MethodDelete, "/api/v1/workspaces/demo", "")
+
+	if r.status != http.StatusNoContent {
+		t.Errorf("answer = %d %s, want 204", r.status, r.raw)
+	}
+	f.assertNoneStored(t)
+	if got := hooks.list(); !slices.Equal(got, []string{"demo"}) {
+		t.Errorf("the hooks ran for %v, want demo", got)
 	}
 }

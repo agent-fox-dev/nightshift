@@ -136,7 +136,7 @@ grepping for declarations.
     - **the landing policy**: `GET`/`PUT /api/v1/workspaces/{slug}/policy`
       with revisions from 0, `ETag`, `If-Match` (`412 revision_mismatch`) and
       the format's validation (`400 invalid_policy` with `details`);
-      `Policy`, `SetPolicy`, `ReplacePolicy`, `OnPolicyGet`,
+      `Policy`, `SetPolicy`, `ReplacePolicy`, `OnPolicyGet`, `OnPolicyPut`,
       `FailNextPolicyPut` and `PolicyPuts`.
   - `internal/store/storetest`: `storetest.Path(t)` and `storetest.Open(t)`
     give a copy of a store migrated once per test process with every

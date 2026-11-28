@@ -46,7 +46,8 @@ exit code. That is how the tests run both programs in-process.
    Then build the API, one `command.Runner` and the `workspace.Service`
    (store, hub client, runner, `clones_dir`), and mount the workspace
    routes and the `workspaces` status source.
-4. Prune the event log and remove the clones of no registered workspace
+4. Prune the event log and remove the clones (directories holding `.git`)
+   of no registered workspace
    (a failure prints `workspaces: <error>` and the daemon goes on), then
    start the hourly prune loop and the hub monitor's probe loop. Register
    the event stream and serve.
@@ -100,7 +101,18 @@ cut at 4,096 bytes as it is read. On the timeout or a cancelled context it
 kills the whole group. git runs through the same runner; the token reaches
 it only as an `http.extraHeader` in `GIT_CONFIG_*` variables of its
 environment, never on a command line, in the remote's URL or in the clone's
-configuration, and it is stripped from every error text.
+configuration, and it is stripped from every error text. Every git command
+runs with `core.hooksPath=/dev/null` and `core.fsmonitor=false`, and a kept
+clone's `.git/config` is written anew and its hooks removed before git
+reads them: a health command runs in the clone and may write into `.git`.
+
+Each request to the hub is bounded by `Service.HubTimeout` (30 seconds); a
+hub that gives no answer within it is unavailable (`503`). Once a
+registration's health command passed, or a protection is checked, the
+policy write and the store write after it run to their end without the
+client. A workspace's clone is taken by one health run at a time, and its
+record of rules by one protection, unprotection or removal at a time; a
+removal waits for both.
 
 ## Data
 

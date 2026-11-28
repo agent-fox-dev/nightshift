@@ -365,3 +365,23 @@ func TestUnprotect_RefusesARuleNightshiftDidNotWrite(t *testing.T) {
 		})
 	}
 }
+
+// Once the hub took the rule, its name is recorded though the client went
+// away: otherwise the rule could never be unprotected.
+func TestProtect_RecordsTheRuleOnceTheHubTookItThoughTheClientWentAway(t *testing.T) {
+	t.Parallel()
+	f := newPolicyFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.hub.OnPolicyPut("demo", cancel)
+
+	f.do(ctx, http.MethodPost, rulesPath, `{"globs": ["deploy/**"]}`)
+
+	if names := ruleNames(f.hub.Policy("demo")); !slices.Equal(names, []string{"nightshift-1", "docs"}) {
+		t.Fatalf("the hub's rules are %v, want nightshift-1 then docs", names)
+	}
+	f.hub.OnPolicyPut("demo", nil)
+	if r := f.unprotect("nightshift-1"); r.status != http.StatusOK {
+		t.Errorf("unprotect of the rule answered %d %s, want 200", r.status, r.raw)
+	}
+}

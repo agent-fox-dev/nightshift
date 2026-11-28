@@ -106,7 +106,7 @@ func (s *Service) sensitiveRules(ctx context.Context, slug string) ([]policy.Sen
 	if !s.hub.Available(hub.Worker) {
 		return nil, ErrHubUnavailable
 	}
-	doc, err := policy.Read(ctx, s.hub, slug)
+	doc, err := s.readPolicy(ctx, slug)
 	if err != nil {
 		return nil, s.hubFailure(ctx, err)
 	}

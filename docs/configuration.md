@@ -38,8 +38,11 @@ The daemon runs a workspace's health command in a clone of it under
 `clones_dir/<slug>`, fetched from the hub's git endpoint with the worker
 token and brought to the commit in question, detached, with untracked and
 ignored files removed. The clone is kept between runs, and removed with the
-workspace. At start the daemon removes the directories under `clones_dir`
-that belong to no registered workspace. `git` and `sh` must be installed on
+workspace. At start the daemon removes the clones under `clones_dir` (the
+directories holding a `.git` directory) that belong to no registered
+workspace; anything else there is left as it is. Before git works in a kept
+clone, its `.git/config` is written anew and its hooks are removed, so that
+nothing a health command wrote into `.git` runs with the token. `git` and `sh` must be installed on
 the daemon's machine.
 
 ## The two hub tokens

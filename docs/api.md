@@ -44,7 +44,7 @@ and the body:
 | 409 | `conflict` | a registration, protection, unprotection or removal that is refused; the reason is the `message` |
 | 410 | `cursor_expired` | the event stream's cursor is older than what is kept |
 | 500 | `internal` | the request failed inside the daemon |
-| 503 | `hub_unavailable` | a route that asks the hub, while the hub is unreachable or the worker token is refused |
+| 503 | `hub_unavailable` | a route that asks the hub while the hub is unavailable: unreachable, or its refusal of the worker token recorded, or a request that got no answer within 30 seconds |
 
 ## `GET /api/v1/status`
 
@@ -147,10 +147,12 @@ registered answers, before asking the hub:
 ```
 
 A route that asks the hub (registration, show, protect, unprotect) answers
-`503 hub_unavailable` while the hub is unreachable or refuses the worker
-token, and stores and writes nothing. `list`, `set`, `remove` and the
-status never ask the hub. An error answer of the hub to a registration
-check is refused as `hub answered <status> <error_type>: <message>`.
+`503 hub_unavailable`, and stores and writes nothing, while the hub is
+unavailable: unreachable, or once it has refused the worker token (the
+status's `credential_error`), or when a request to it gets no answer within
+30 seconds. A refusal the hub answers itself, a first `401` included, is
+`409 conflict` with `hub answered <status> <error_type>: <message>`. `list`, `set`, `remove` and the
+status never ask the hub.
 
 ### `POST /api/v1/workspaces`
 
@@ -205,7 +207,9 @@ A registration of a slug that is registered already is refused with `<slug>
 is registered already`, and one sent while another of the same slug runs
 with `registration of <slug> is in progress`; neither asks the hub. The
 request stays open until the registration is decided; a client that goes
-away ends the health command, and nothing is stored.
+away before the health command passed ends it, and nothing is stored. Once
+the health command passed, the policy's adoption and the storing of the
+workspace finish whether or not the client still waits.
 
 `201` answers the workspace object with two more members:
 
@@ -247,7 +251,10 @@ validate is `400 invalid_request`, and nothing changes.
 ### `DELETE /api/v1/workspaces/{slug}`
 
 Removes the workspace from nightshift: its record, the names of the rules
-`protect` wrote for it and its clone. Nothing on the hub changes. `204`. A
+`protect` wrote for it and its clone. Nothing on the hub changes. `204`.
+The removal waits for a protection or unprotection of the workspace being
+written, and for a health command running in its clone. A clone that cannot
+be removed does not fail it; the next start of the daemon removes it. A
 removal another package refuses (such as one for open work items) is `409
 conflict` with that package's reason.
 

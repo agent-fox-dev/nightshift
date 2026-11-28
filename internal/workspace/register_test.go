@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -395,6 +396,11 @@ func TestRegister_RejectsAnInvalidBody(t *testing.T) {
 	}{
 		{"not an object", `[]`, ""},
 		{"empty slug", `{"slug": "", "health_command": "true"}`, "slug"},
+		// The slug names the clone's directory, so it is one path element.
+		{"slug of the clones directory", `{"slug": ".", "health_command": "true"}`, "slug"},
+		{"slug of its parent", `{"slug": "..", "health_command": "true"}`, "slug"},
+		{"slug holding a slash", `{"slug": "a/b", "health_command": "true"}`, "slug"},
+		{"slug holding a backslash", `{"slug": "a\\b", "health_command": "true"}`, "slug"},
 		{"no health command", `{"slug": "demo"}`, "health_command"},
 		{"timeout not a duration", `{"slug": "demo", "health_command": "true", "health_timeout": "soon"}`, "health_timeout"},
 		{"timeout zero", `{"slug": "demo", "health_command": "true", "health_timeout": "0s"}`, "health_timeout"},
@@ -651,8 +657,39 @@ func TestRegister_WarnsWhenNoPathIsSensitive(t *testing.T) {
 	}
 }
 
+// silenceHub builds the fixture's service again over a hub that takes
+// connections and never answers, with a short HubTimeout.
+func (f *fixture) silenceHub(t *testing.T) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { conn.Close() })
+		}
+	}()
+	f.svc = workspace.New(f.st, hub.New("http://"+ln.Addr().String(), f.worker, f.approver), &command.Runner{}, f.clones)
+	f.svc.HubTimeout = 100 * time.Millisecond
+	f.srv = api.New(clientToken, api.HubReporterFunc(func() api.HubState { return api.HubState{} }))
+	f.svc.Mount(f.srv)
+}
+
 func TestRoutes_AnswerUnavailableWhileTheHubIsDown(t *testing.T) {
 	t.Parallel()
+	hubs := []struct {
+		name string
+		down func(t *testing.T, f *fixture)
+	}{
+		{"stopped", func(_ *testing.T, f *fixture) { f.hub.Stop() }},
+		{"silent", func(t *testing.T, f *fixture) { f.silenceHub(t) }},
+	}
 	tests := []struct {
 		method, path, body string
 		// registered inserts demo into the store before the request, for a
@@ -666,42 +703,48 @@ func TestRoutes_AnswerUnavailableWhileTheHubIsDown(t *testing.T) {
 		{method: http.MethodPost, path: "/api/v1/workspaces/demo/policy/rules", body: `{"globs": ["deploy/**"]}`, registered: true},
 		{method: http.MethodDelete, path: "/api/v1/workspaces/demo/policy/rules/x", registered: true, recorded: "x"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
-			t.Parallel()
-			f := newFixture(t, nil)
-			wantRecorded := 0
-			if tt.registered {
-				f.insert(t, "demo")
-			}
-			if tt.recorded != "" {
-				f.recordRule(t, "demo", tt.recorded)
-				wantRecorded = 1
-			}
-			f.hub.Stop()
+	for _, down := range hubs {
+		for _, tt := range tests {
+			t.Run(down.name+" "+tt.method+" "+tt.path, func(t *testing.T) {
+				t.Parallel()
+				f := newFixture(t, nil)
+				wantRecorded := 0
+				if tt.registered {
+					f.insert(t, "demo")
+				}
+				if tt.recorded != "" {
+					f.recordRule(t, "demo", tt.recorded)
+					wantRecorded = 1
+				}
+				down.down(t, f)
+				// Bounds the request, so that a hub that is never given up
+				// on fails the row rather than the whole test binary.
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
 
-			r := f.do(context.Background(), tt.method, tt.path, tt.body)
+				r := f.do(ctx, tt.method, tt.path, tt.body)
 
-			if r.status != http.StatusServiceUnavailable || r.body["error_type"] != "hub_unavailable" {
-				t.Fatalf("answer = %d %s, want 503 hub_unavailable", r.status, r.raw)
-			}
-			if msg, _ := r.body["message"].(string); msg == "" {
-				t.Error("the answer has no message")
-			}
-			if !tt.registered {
-				f.assertNoneStored(t)
-				return
-			}
-			if n := f.recordedRules(t, "demo"); n != wantRecorded {
-				t.Errorf("%d rules are recorded for demo, want %d", n, wantRecorded)
-			}
-			// The list does not ask the hub, so it answers while the hub is
-			// down.
-			list := f.do(context.Background(), http.MethodGet, "/api/v1/workspaces", "")
-			if list.status != http.StatusOK || !slices.Equal(slugsOf(t, list), []string{"demo"}) {
-				t.Errorf("the list answered %d %s while the hub is down, want 200 with demo", list.status, list.raw)
-			}
-		})
+				if r.status != http.StatusServiceUnavailable || r.body["error_type"] != "hub_unavailable" {
+					t.Fatalf("answer = %d %s, want 503 hub_unavailable", r.status, r.raw)
+				}
+				if msg, _ := r.body["message"].(string); msg == "" {
+					t.Error("the answer has no message")
+				}
+				if !tt.registered {
+					f.assertNoneStored(t)
+					return
+				}
+				if n := f.recordedRules(t, "demo"); n != wantRecorded {
+					t.Errorf("%d rules are recorded for demo, want %d", n, wantRecorded)
+				}
+				// The list does not ask the hub, so it answers while the hub is
+				// down.
+				list := f.do(context.Background(), http.MethodGet, "/api/v1/workspaces", "")
+				if list.status != http.StatusOK || !slices.Equal(slugsOf(t, list), []string{"demo"}) {
+					t.Errorf("the list answered %d %s while the hub is down, want 200 with demo", list.status, list.raw)
+				}
+			})
+		}
 	}
 }
 
@@ -741,6 +784,16 @@ func TestRemoveStrayClones_KeepsOnlyTheClonesOfRegisteredWorkspaces(t *testing.T
 	if err := os.MkdirAll(filepath.Join(ghost, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// What clones_dir holds besides clones is the person's, however the
+	// directory was chosen.
+	notes := filepath.Join(f.clones, "notes.txt")
+	src := filepath.Join(f.clones, "src")
+	if err := os.WriteFile(notes, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "project"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := f.svc.RemoveStrayClones(context.Background()); err != nil {
 		t.Fatalf("RemoveStrayClones: %v", err)
@@ -751,6 +804,11 @@ func TestRemoveStrayClones_KeepsOnlyTheClonesOfRegisteredWorkspaces(t *testing.T
 	}
 	if _, err := os.Stat(ghost); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the clone of an unregistered slug is left (stat error %v), want it removed", err)
+	}
+	for _, kept := range []string{notes, src} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("%s, which is no clone: %v, want it kept", kept, err)
+		}
 	}
 }
 
@@ -780,4 +838,25 @@ func TestRegister_EndsTheHealthCommandWhenTheClientGoesAway(t *testing.T) {
 		t.Errorf("the health command ran on after the client went away (stat error %v)", err)
 	}
 	f.assertNoneStored(t)
+}
+
+// Once the hub took the adopting write, the workspace is stored though the
+// client went away: otherwise the hub's policy would be adopted for a
+// workspace nightshift does not know.
+func TestRegister_FinishesOnceTheHubTookThePolicyThoughTheClientWentAway(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, nil)
+	f.hub.SetPolicy("demo", hubtest.Policy{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.hub.OnPolicyPut("demo", cancel)
+
+	f.do(ctx, http.MethodPost, "/api/v1/workspaces", `{"slug": "demo", "health_command": "true", "adopt_policy": true}`)
+
+	if p := f.hub.Policy("demo"); p.Revision != 1 {
+		t.Fatalf("the hub's policy is at revision %d, want the adopted 1", p.Revision)
+	}
+	if _, err := f.svc.Get(context.Background(), "demo"); err != nil {
+		t.Errorf("Get(demo) after the adoption: %v, want the workspace stored", err)
+	}
 }

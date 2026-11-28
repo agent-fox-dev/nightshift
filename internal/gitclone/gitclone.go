@@ -92,7 +92,7 @@ func (s *syncer) prepare(ctx context.Context) (fresh bool, err error) {
 		return true, nil
 	}
 	if s.isCloneOfURL(ctx) {
-		return false, nil
+		return false, s.reset()
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -111,6 +111,24 @@ func (s *syncer) isCloneOfURL(ctx context.Context) bool {
 	}
 	res, err := s.opts.Runner.Run(ctx, s.spec("git remote get-url origin"))
 	return err == nil && res.ExitCode == 0 && len(res.Tail) > 0 && res.Tail[len(res.Tail)-1] == s.opts.URL
+}
+
+// reset gives a kept clone back the configuration a fresh one has and no
+// hooks. A command that ran in the clone (a health command) may have
+// written into its .git: a hook, a filter, a proxy or a URL rewrite there
+// would run with, or send away, the credential the next git command
+// carries.
+func (s *syncer) reset() error {
+	gitDir := filepath.Join(s.opts.Dir, ".git")
+	if err := os.RemoveAll(filepath.Join(gitDir, "hooks")); err != nil {
+		return fmt.Errorf("gitclone: removing the clone's hooks: %w", err)
+	}
+	config := "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n" +
+		"[remote \"origin\"]\n\turl = " + s.opts.URL + "\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte(config), 0o644); err != nil {
+		return fmt.Errorf("gitclone: resetting the clone's configuration: %w", err)
+	}
+	return nil
 }
 
 // bring fetches into the clone, making one first in an empty directory,
@@ -171,7 +189,9 @@ func (s *syncer) git(ctx context.Context, line string) error {
 
 // spec is a git command line in the clone, with the credential in the
 // environment as an extra HTTP header, no credential helper that could
-// store or replace it, and no prompt that could wait for a person.
+// store or replace it, no hook and no file-system monitor that could run
+// with it, and no prompt that could wait for a person. These variables
+// take precedence over every configuration file.
 func (s *syncer) spec(line string) command.Spec {
 	return command.Spec{
 		Dir:       s.opts.Dir,
@@ -179,11 +199,15 @@ func (s *syncer) spec(line string) command.Spec {
 		Timeout:   s.opts.Timeout,
 		TailLines: tailLines,
 		Env: []string{
-			"GIT_CONFIG_COUNT=2",
+			"GIT_CONFIG_COUNT=4",
 			"GIT_CONFIG_KEY_0=http.extraHeader",
 			"GIT_CONFIG_VALUE_0=" + s.header,
 			"GIT_CONFIG_KEY_1=credential.helper",
 			"GIT_CONFIG_VALUE_1=",
+			"GIT_CONFIG_KEY_2=core.hooksPath",
+			"GIT_CONFIG_VALUE_2=" + os.DevNull,
+			"GIT_CONFIG_KEY_3=core.fsmonitor",
+			"GIT_CONFIG_VALUE_3=false",
 			"GIT_TERMINAL_PROMPT=0",
 			"GIT_ASKPASS=",
 		},

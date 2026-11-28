@@ -103,6 +103,9 @@ func TestRun_KillsTheProcessGroupOnTimeoutOrCancellation(t *testing.T) {
 				if !errors.Is(err, context.Canceled) {
 					t.Errorf("Run: %v, want the context's error", err)
 				}
+				if !slices.Equal(res.Tail, []string{"started"}) {
+					t.Errorf("the tail of a cancelled command = %q, want what it wrote, [started]", res.Tail)
+				}
 			} else {
 				if err != nil {
 					t.Fatalf("Run: %v", err)

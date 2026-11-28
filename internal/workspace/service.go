@@ -47,6 +47,9 @@ func (st State) valid() bool { return st == Green || st == Red || st == Held }
 // names none.
 const DefaultHealthTimeout = 30 * time.Minute
 
+// defaultHubTimeout is HubTimeout of a new service.
+const defaultHubTimeout = 30 * time.Second
+
 // defaultDailyTokens is DefaultDailyTokens of a new service.
 const defaultDailyTokens = 50_000_000
 
@@ -70,6 +73,9 @@ type Service struct {
 	// names none, as it is when the registration runs. Another package may
 	// set it before the daemon serves.
 	DefaultDailyTokens int64
+	// HubTimeout bounds each request to the hub: a hub that takes a
+	// connection and gives no answer within it counts as unavailable.
+	HubTimeout time.Duration
 
 	db        *sql.DB
 	hub       *hub.Client
@@ -80,6 +86,12 @@ type Service struct {
 	// mu guards registering, the slugs whose registration is running.
 	mu          sync.Mutex
 	registering map[string]bool
+	// clones takes a workspace's clone one user at a time: a health run, or
+	// the removal of the clone.
+	clones slugLocks
+	// rules takes a workspace's record of the rules protect wrote one user at
+	// a time: a protection, an unprotection, or the removal of the record.
+	rules slugLocks
 
 	// extMu guards what other packages register: the source of the tokens
 	// used today, the decorations of the workspace object, and the guards
@@ -105,6 +117,7 @@ type Settings struct {
 func New(st *store.Store, hc *hub.Client, runner *command.Runner, clonesDir string) *Service {
 	return &Service{
 		DefaultDailyTokens: defaultDailyTokens,
+		HubTimeout:         defaultHubTimeout,
 		db:                 st.DB(),
 		hub:                hc,
 		runner:             runner,
@@ -225,18 +238,20 @@ func (s *Service) Remove(ctx context.Context, slug string) error {
 			return &Refusal{Message: err.Error()}
 		}
 	}
+	// A protection being written finishes, its record included, before the
+	// records go; a health run in the clone finishes before the clone goes.
+	defer s.rules.lock(slug)()
 	if err := s.delete(ctx, slug); err != nil {
 		return err
 	}
-	// The workspace is gone once its row is, so the hooks run even when its
-	// clone could not be removed; such a clone is a stray one, which the
-	// next start removes.
-	cloneErr := os.RemoveAll(s.cloneDir(slug))
+	unlockClone := s.clones.lock(slug)
+	// The workspace is gone once its row is, so a clone that cannot be
+	// removed does not fail the removal: it is a stray one, which the next
+	// start removes.
+	os.RemoveAll(s.cloneDir(slug))
+	unlockClone()
 	for _, fn := range removed {
 		fn(ctx, slug)
-	}
-	if cloneErr != nil {
-		return fmt.Errorf("removing the clone of %s: %w", slug, cloneErr)
 	}
 	return nil
 }
@@ -277,6 +292,7 @@ func (e *startError) Error() string {
 }
 
 func (s *Service) runHealth(ctx context.Context, w Workspace, commit string, tailLines int) (command.Result, error) {
+	defer s.clones.lock(w.Slug)()
 	dir := s.cloneDir(w.Slug)
 	err := gitclone.Sync(ctx, gitclone.Options{
 		URL:    w.GitURL,
@@ -306,10 +322,40 @@ func (s *Service) runHealth(ctx context.Context, w Workspace, commit string, tai
 	return res, nil
 }
 
-// RemoveStrayClones removes every directory of the clones directory that is
-// not the clone of a registered workspace: what a registration cut off
-// before it was decided left behind. A registration running meanwhile
-// keeps its clone.
+// slugLocks hands out one mutex per slug.
+type slugLocks struct {
+	mu sync.Mutex
+	m  map[string]*sync.Mutex
+}
+
+// lock locks slug's mutex and returns its unlock.
+func (l *slugLocks) lock(slug string) (unlock func()) {
+	l.mu.Lock()
+	if l.m == nil {
+		l.m = map[string]*sync.Mutex{}
+	}
+	m, ok := l.m[slug]
+	if !ok {
+		m = &sync.Mutex{}
+		l.m[slug] = m
+	}
+	l.mu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
+// isClone reports whether dir holds a .git directory of its own.
+func isClone(dir string) bool {
+	info, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil && info.IsDir()
+}
+
+// RemoveStrayClones removes every clone in the clones directory that is not
+// the clone of a registered workspace: what a registration cut off before
+// it was decided left behind. A registration running meanwhile keeps its
+// clone. Only a directory holding a .git directory counts as a clone;
+// anything else there is the person's and stays, whatever the directory
+// is.
 func (s *Service) RemoveStrayClones(ctx context.Context) error {
 	entries, err := os.ReadDir(s.clonesDir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -333,9 +379,11 @@ func (s *Service) RemoveStrayClones(ctx context.Context) error {
 	}
 	var errs []error
 	for _, e := range entries {
-		if !keep[e.Name()] {
-			errs = append(errs, os.RemoveAll(filepath.Join(s.clonesDir, e.Name())))
+		dir := filepath.Join(s.clonesDir, e.Name())
+		if keep[e.Name()] || !e.IsDir() || !isClone(dir) {
+			continue
 		}
+		errs = append(errs, os.RemoveAll(dir))
 	}
 	return errors.Join(errs...)
 }

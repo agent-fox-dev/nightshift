@@ -61,6 +61,7 @@ type Protected struct {
 // returned when the hub cannot be asked, and an error wrapping ErrNotFound
 // for a slug that is not registered.
 func (s *Service) Protect(ctx context.Context, slug string, globs []string, block bool, name string) (Protected, error) {
+	defer s.rules.lock(slug)()
 	if _, err := s.get(ctx, slug); err != nil {
 		return Protected{}, err
 	}
@@ -74,7 +75,7 @@ func (s *Service) Protect(ctx context.Context, slug string, globs []string, bloc
 		return Protected{}, ErrHubUnavailable
 	}
 
-	doc, err := policy.Read(ctx, s.hub, slug)
+	doc, err := s.readPolicy(ctx, slug)
 	if err != nil {
 		return Protected{}, s.hubFailure(ctx, err)
 	}
@@ -86,7 +87,12 @@ func (s *Service) Protect(ctx context.Context, slug string, globs []string, bloc
 	rule := policy.Rule{Name: name, Paths: slices.Clone(globs), Exclude: []string{}, Require: protection(block)}
 	doc.Rules = append([]policy.Rule{rule}, doc.Rules...)
 
-	rev, err := policy.Write(ctx, s.hub, slug, doc, doc.Revision)
+	// The write and the record of the rule's name run to their end even
+	// when the client goes away meanwhile: a rule the hub took and nightshift
+	// did not record could never be unprotected. HubTimeout still bounds the
+	// write.
+	ctx = context.WithoutCancel(ctx)
+	rev, err := s.writePolicy(ctx, slug, doc)
 	if err != nil {
 		var invalid *policy.InvalidError
 		if errors.As(err, &invalid) && strings.HasPrefix(invalid.Field, "paths") {
@@ -165,6 +171,7 @@ func (s *Service) writeFailure(ctx context.Context, err error) error {
 // asked, so that a rule the person wrote is never removed. The other
 // errors are those of Protect.
 func (s *Service) Unprotect(ctx context.Context, slug, name string) (int, error) {
+	defer s.rules.lock(slug)()
 	if _, err := s.get(ctx, slug); err != nil {
 		return 0, err
 	}
@@ -179,7 +186,7 @@ func (s *Service) Unprotect(ctx context.Context, slug, name string) (int, error)
 		return 0, ErrHubUnavailable
 	}
 
-	doc, err := policy.Read(ctx, s.hub, slug)
+	doc, err := s.readPolicy(ctx, slug)
 	if err != nil {
 		return 0, s.hubFailure(ctx, err)
 	}
@@ -187,7 +194,7 @@ func (s *Service) Unprotect(ctx context.Context, slug, name string) (int, error)
 	rev := doc.Revision
 	if i >= 0 {
 		doc.Rules = slices.Delete(doc.Rules, i, i+1)
-		if rev, err = policy.Write(ctx, s.hub, slug, doc, doc.Revision); err != nil {
+		if rev, err = s.writePolicy(ctx, slug, doc); err != nil {
 			return 0, s.writeFailure(ctx, err)
 		}
 	}

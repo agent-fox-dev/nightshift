@@ -56,6 +56,7 @@ type policyState struct {
 	updatedAt string // empty until the policy is first written
 	updatedBy string
 	onGet     func()
+	onPut     func()
 	failNext  *scriptedError
 	puts      []PolicyPut
 }
@@ -122,6 +123,15 @@ func (h *Hub) OnPolicyGet(slug string, fn func()) {
 	h.policyOf(slug).onGet = fn
 }
 
+// OnPolicyPut runs fn on every PUT of the policy of the workspace slug,
+// before the hub looks at it, so that fn may act while the client waits for
+// the answer. A nil fn removes it.
+func (h *Hub) OnPolicyPut(slug string, fn func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.policyOf(slug).onPut = fn
+}
+
 // FailNextPolicyPut makes the next PUT of the policy of slug that passes
 // the credential checks answer status with the error name, message and,
 // when not nil, details, and change nothing.
@@ -166,7 +176,11 @@ func (h *Hub) putPolicy(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	h.mu.Lock()
 	h.policyOf(slug).puts = append(h.policyOf(slug).puts, PolicyPut{IfMatch: r.Header.Get("If-Match"), Body: raw})
+	onPut := h.policyOf(slug).onPut
 	h.mu.Unlock()
+	if onPut != nil {
+		onPut()
+	}
 
 	caller, ok := h.authenticate(w, r)
 	if !ok {

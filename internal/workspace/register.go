@@ -125,7 +125,7 @@ func (s *Service) register(ctx context.Context, r Registration, cloned *bool) (R
 	}
 	slug := r.Slug
 
-	ws, err := s.hub.Workspace(ctx, slug)
+	ws, err := withHub(ctx, s, func(ctx context.Context) (hub.Workspace, error) { return s.hub.Workspace(ctx, slug) })
 	var he *hub.Error
 	if errors.As(err, &he) && he.Status == http.StatusNotFound {
 		return Registered{}, refuse("workspace not found")
@@ -140,7 +140,7 @@ func (s *Service) register(ctx context.Context, r Registration, cloned *bool) (R
 	if !ws.Settings.SyncEnabled {
 		return Registered{}, refuse("sync is disabled for %s", slug)
 	}
-	synced, err := s.hub.Sync(ctx, slug)
+	synced, err := withHub(ctx, s, func(ctx context.Context) (hub.SyncResult, error) { return s.hub.Sync(ctx, slug) })
 	if err != nil {
 		return Registered{}, s.hubFailure(ctx, err)
 	}
@@ -149,7 +149,7 @@ func (s *Service) register(ctx context.Context, r Registration, cloned *bool) (R
 		return Registered{}, err
 	}
 
-	doc, err := policy.Read(ctx, s.hub, slug)
+	doc, err := s.readPolicy(ctx, slug)
 	if err != nil {
 		return Registered{}, s.hubFailure(ctx, err)
 	}
@@ -180,11 +180,17 @@ func (s *Service) register(ctx context.Context, r Registration, cloned *bool) (R
 	if err := s.checkHealth(ctx, w, commit); err != nil {
 		return Registered{}, err
 	}
+	// The registration is decided once the health command passed. The
+	// adopting write and the insert run to their end even when the client
+	// goes away meanwhile: a policy the hub took for a workspace that is not
+	// stored would be the person's to undo. HubTimeout still bounds the
+	// write.
+	ctx = context.WithoutCancel(ctx)
 
 	var out Registered
 	if len(missing) > 0 {
 		doc = policy.Adopt(doc)
-		rev, err := policy.Write(ctx, s.hub, slug, doc, doc.Revision)
+		rev, err := s.writePolicy(ctx, slug, doc)
 		switch {
 		case errors.Is(err, policy.ErrRevisionMismatch):
 			return Registered{}, refuse("policy changed meanwhile; run the command again")
@@ -255,6 +261,28 @@ func orEmpty(lines []string) []string {
 		return []string{}
 	}
 	return lines
+}
+
+// withHub sends one request to the hub through call, bounded by the
+// service's HubTimeout, so that a hub that takes the connection and never
+// answers fails the request as unavailable rather than holding it. The
+// bound is a context of its own: hubFailure, given the caller's ctx, tells
+// the hub's silence from the caller going away.
+func withHub[T any](ctx context.Context, s *Service, call func(context.Context) (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.HubTimeout)
+	defer cancel()
+	return call(ctx)
+}
+
+// readPolicy reads the workspace's policy from the hub, within HubTimeout.
+func (s *Service) readPolicy(ctx context.Context, slug string) (policy.Document, error) {
+	return withHub(ctx, s, func(ctx context.Context) (policy.Document, error) { return policy.Read(ctx, s.hub, slug) })
+}
+
+// writePolicy writes doc against the revision it was read at, within
+// HubTimeout, and returns the new revision.
+func (s *Service) writePolicy(ctx context.Context, slug string, doc policy.Document) (int, error) {
+	return withHub(ctx, s, func(ctx context.Context) (int, error) { return policy.Write(ctx, s.hub, slug, doc, doc.Revision) })
 }
 
 // hubFailure is the error of a hub request that failed: ctx's error when

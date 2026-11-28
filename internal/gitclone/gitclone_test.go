@@ -266,3 +266,78 @@ func write(t *testing.T, dir, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+// A command run in a kept clone, such as a health command, can write into
+// its .git; nothing it wrote there may run with the credential in its
+// environment, or send the credential elsewhere, at the next Sync.
+func TestSync_IgnoresTheHooksAndConfigurationAKeptCloneWasGiven(t *testing.T) {
+	t.Parallel()
+	hookNames := []string{"post-checkout", "reference-transaction", "pre-auto-gc", "post-merge"}
+	tests := []struct {
+		name  string
+		plant func(t *testing.T, dir, hook string, h *hubtest.Hub, url string)
+	}{
+		{"hooks in .git/hooks", func(t *testing.T, dir, hook string, _ *hubtest.Hub, _ string) {
+			for _, name := range hookNames {
+				writeExecutable(t, filepath.Join(dir, ".git", "hooks"), name, hook)
+			}
+		}},
+		{"hooks in a core.hooksPath", func(t *testing.T, dir, hook string, _ *hubtest.Hub, _ string) {
+			hooks := filepath.Join(dir, ".git", "planted-hooks")
+			for _, name := range hookNames {
+				writeExecutable(t, hooks, name, hook)
+			}
+			git(t, dir, "config", "core.hooksPath", hooks)
+		}},
+		{"an fsmonitor command", func(t *testing.T, dir, hook string, _ *hubtest.Hub, _ string) {
+			writeExecutable(t, filepath.Join(dir, ".git"), "monitor", hook)
+			git(t, dir, "config", "core.fsmonitor", filepath.Join(dir, ".git", "monitor"))
+		}},
+		{"a proxy for the hub's URL", func(t *testing.T, dir, _ string, _ *hubtest.Hub, url string) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ln.Close()
+			git(t, dir, "config", "http.proxy", "http://"+ln.Addr().String())
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := hubtest.New(t)
+			repo := h.AddRepository(t, "acme", "demo")
+			worker, _ := h.GoodTokens()
+			first := repo.Commits(t)[0]
+			dir := filepath.Join(t.TempDir(), "demo")
+			opts := gitclone.Options{URL: repo.URL(), Token: worker, Dir: dir, Commit: first, Runner: &command.Runner{}}
+			if err := gitclone.Sync(t.Context(), opts); err != nil {
+				t.Fatalf("Sync: %v", err)
+			}
+			leak := filepath.Join(t.TempDir(), "leak")
+			tt.plant(t, dir, "#!/bin/sh\nenv >> '"+leak+"'\n", h, repo.URL())
+			third := repo.AddCommit(t, map[string]string{"NEXT.md": "next\n"}, "Add the next file")
+
+			opts.Commit = third
+			if err := gitclone.Sync(t.Context(), opts); err != nil {
+				t.Fatalf("Sync of the kept clone: %v", err)
+			}
+
+			if head := git(t, dir, "rev-parse", "HEAD"); head != third {
+				t.Errorf("HEAD is %s, want %s", head, third)
+			}
+			if data, err := os.ReadFile(leak); err == nil {
+				t.Errorf("a command the clone was given ran during Sync (it saw the credential: %v)",
+					bytes.Contains(data, []byte("Authorization")))
+			}
+		})
+	}
+}
+
+func writeExecutable(t *testing.T, dir, name, content string) {
+	t.Helper()
+	write(t, dir, name, content)
+	if err := os.Chmod(filepath.Join(dir, name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
