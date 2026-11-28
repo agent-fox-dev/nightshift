@@ -1,0 +1,720 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "08",
+  "spec_name": "health_and_publishing",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "The health command after a landing",
+      "rationale": "A change that passed its gate and its review can still break the main branch once it sits on top of everything else; only a run on the landed commit shows it.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "event_driven",
+          "condition": "the scheduler calls the step of an item in `verifying` whose workspace is `green` and which belongs to no incident",
+          "action": "read the item's change (`change.Service.Get` of package 05 for its number, the hub client's `Change` for its `landed.sha`), run the workspace's health command on a clone of the workspace at the landed commit through `workspace.Service.RunHealth` with a tail of 200 lines, and, when the command exits 0 within the workspace's health timeout, append the entry `health` with the text `health command passed on <commit>` to the item's thread and move the item to `publishing`",
+          "contract": "`RunHealth` was called once, with the workspace's slug, the change's `landed.sha` and 200; the item is `publishing`; the workspace is still `green`; no incident is stored; no notification was sent",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a health service over a copy of the store template with the real item service and inbox, the fake hub holding change 7 of item 12 landed as commit C, a stub of package 05's `change.Service.Get` answering `Record{Workspace: 'demo', Change: 7}` for item 12, and a stub in place of `workspace.Service` that records `RunHealth` and `SetState`"
+            ],
+            "pseudocode": "new file internal/health/verify_test.go, fixtures in internal/health/helpers_test.go: stub.RunHealth returns {ExitCode: 0}; err = svc.VerifyStep(ctx, item12); assert err == nil; assert stub.healthCalls == [('demo', C, 200)]; assert items.Get(12).State == 'publishing'; assert the thread's entries hold {kind: 'health', text: 'health command passed on ' + C}; assert stub.state('demo') == 'green'; assert svc.Incident('demo') is none; assert notifier.events is empty"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "unwanted",
+          "condition": "the health command run on an item's landed commit exits with a code other than 0, or does not end within the workspace's health timeout",
+          "action": "set the workspace's state to `red` with `workspace.Service.SetState`, store an incident for the item in the phase `repairing` with the commit and the last 200 lines of the command's output, append the entry `health_failed` to the item's thread, call `Notify` of `internal/notify` with the event `workspace_red`, and leave the item `verifying`",
+          "contract": "the workspace's state is `red`; the item is still `verifying`; the incident holds the landed commit and at most 200 lines of output; the entry's text is `health command exited <N> on <commit>` or `health command timed out on <commit>`; exactly one notification was sent for the incident, with `event: workspace_red`, the workspace, the item's number and the item thread's URL path",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fixtures of the passing case, with a recording notifier"
+            ],
+            "pseudocode": "in internal/health/verify_test.go, a table over stub results {ExitCode 3 with 250 lines of tail -> entry 'health command exited 3 on C', TimedOut -> 'health command timed out on C'}: svc.VerifyStep(ctx, item12); assert stub.state('demo') == 'red'; assert items.Get(12).State == 'verifying'; inc = svc.Incident('demo'); assert inc.Phase == 'repairing' and inc.Item == 12 and inc.Commit == C and len(inc.Output) <= 200; assert the entry text; assert notifier.events == [{Event: 'workspace_red', Workspace: 'demo', Item: 12, Thread: the item thread's path}]; call VerifyStep again; assert still one notification and one health_failed entry"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "unwanted",
+          "condition": "the item's change cannot be read (package 05 holds no record, the hub does not answer), the change is not landed, or `RunHealth` returns an error instead of a result (the clone failed, the hub is not available, the command could not be started)",
+          "action": "decide nothing about the workspace and return the error from the step, so that the scheduler calls the step again",
+          "contract": "the step returns a non-nil error that names the cause; the workspace's state, the item's state and the item's thread are as before the call; no incident is stored and no notification is sent",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/health/verify_test.go, a table over {the fake hub answers the change read 502, the change's state is 'open' with landed null, stub.RunHealth returns an error 'cannot clone demo: …'}: err = svc.VerifyStep(ctx, item12); assert err != nil; assert stub.setStateCalls is empty; assert items.Get(12).State == 'verifying'; assert the thread has no entry of this package; assert svc.Incident('demo') is none; assert notifier.events is empty; then with the cause removed assert VerifyStep moves the item to 'publishing'"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "state_driven",
+          "condition": "a workspace is `red` and an item of it that is `verifying` is neither the item nor the repair item of the workspace's open incident",
+          "action": "run no health command for that item and leave it `verifying`, and, at the first call of its step after the workspace is `green` again, run its health command on the head of the default branch (`head_sha` of the hub's workspace object) instead of its own landed commit",
+          "contract": "no call of `RunHealth` for the item while the workspace is `red`; the first call afterwards carries the hub's `head_sha`; a result of that run is handled as REQ-1.1 and REQ-1.2 say, with that commit",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "items 12 and 13 of 'demo' both `verifying`; an open incident of item 12; the fake hub's `head_sha` of 'demo' is H, item 13's landed commit is D"
+            ],
+            "pseudocode": "in internal/health/verify_test.go: svc.VerifyStep(ctx, item13) three times; assert no RunHealth call for D or H and items.Get(13).State == 'verifying'; close the incident as REQ-2.3 does (workspace green); stub.RunHealth returns {ExitCode: 0}; svc.VerifyStep(ctx, item13); assert the last health call == ('demo', H, 200); assert items.Get(13).State == 'publishing'"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "ubiquitous",
+          "action": "for any incident, keep in the store its phase, the output of each failed health command, every commit a health command ran on with its result, the number of its repair item and the numbers of the reverting changes it opened, and continue the incident from that record when the step of its item or of its repair item is called after a pause or after a restart of nightshiftd, creating no second repair item and asking the hub for no second revert of a change",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a store file in a temporary directory, opened, used, closed and opened again with a new health service",
+              "the incident of item 12 stored in the phase `reverting` with the repair item 13, whose change 9 is reverted by change 10, which has landed"
+            ],
+            "pseudocode": "new file internal/health/revert_test.go: reopen the store; svc2.VerifyStep(ctx, item12); assert items.List('demo') holds no item beside 12 and its repair item 13; assert the fake hub saw no POST …/changes/9/revert; assert it saw exactly one POST …/changes/7/revert; assert svc2.Incident('demo').Phase == 'reverting' and its output and commits tried equal those stored before the restart"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "Fix forward: one repair",
+      "rationale": "Most breakages are small, and a fix on top keeps the work that landed; one attempt bounds what a broken main branch may cost.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "event_driven",
+          "condition": "an incident of an item is in the phase `repairing` and has no repair item",
+          "action": "create one repair item with the item service's `CreateLinked(ctx, <the item>, 'defect', <text>)`, the text naming the landed change and the commit; give it the package of the item it repairs with `(*impl.Service).UsePackageOf` (new in package 06's `internal/impl`, added by this package); ask for its sessions in the repair class with `SetClass(ctx, repair, sched.ClassRepair)`; mark it with `land.Service.SetRepair(ctx, repair, true)`; hand it one finding of the source `health` whose `Output` is the last 200 lines of the health command's output with `Rework`; move it from `new` to `ready`; and append once the entry `repair` with the text `workspace <slug> is red; repair started for change <n>` to the thread of the item whose landing failed, marking it unread",
+          "contract": "the incident stores the repair item's number before anything else is asked of it; the repair item is `ready`, a child of the item, of the kind `defect`; `Rework` received exactly one finding `{Source: 'health', Text: 'health command failed on <commit> after change <ref> landed', Output: <the tail>}`; a later call of the step for the same incident creates no second item, and repeats only the calls the record does not show as done; the thread holds exactly one `repair` entry and it is marked unread; the hub saw no revert request",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fixtures of REQ-1.2 with recording stubs of package 06's `Rework`, `SetClass` and `UsePackageOf` and of package 07's `SetRepair`"
+            ],
+            "pseudocode": "new file internal/health/repair_test.go: svc.VerifyStep(ctx, item12) with the failing health stub; inc = svc.Incident('demo'); r = inc.Repair; assert items.Get(r).State == 'ready' and its parent == 12 and its kind == 'defect'; assert impl.calls == [UsePackageOf(r, 12), SetClass(r, sched.ClassRepair), Rework(r, [{Source: 'health', Text: 'health command failed on ' + C + ' after change demo#7 landed', Output: the tail}])]; assert lander.calls == [SetRepair(r, true)]; make impl.Rework fail once in a second run of the case: the first step returns the error, the second calls Rework again and creates no second item; assert count(entries of kind 'repair' in item 12's thread) == 1 and the thread is unread; assert the fake hub saw no revert request"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "event_driven",
+          "condition": "the scheduler calls the step of a repair item in `verifying`, which packages 06 and 07 implemented, gated, reviewed and landed as any item although the workspace is `red`",
+          "action": "read the commit the repair item's change landed as, run the health command on it through `RunHealth` with a tail of 200 lines, and add the commit and its result to the incident's commits tried",
+          "contract": "`RunHealth` is called with the slug, the `landed.sha` of the repair item's change and 200; the workspace is `red` until the result is handled; a call of the step of the item whose landing failed, while the repair item is not yet `verifying` and waits on no decision, changes nothing and returns nil",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/health/repair_test.go: walk the repair item r to 'verifying' with its change 9 landed as R on the fake hub; svc.VerifyStep(ctx, item12) first: assert nil, no health call, nothing changed; stub.RunHealth for R returns {ExitCode: 0}; svc.VerifyStep(ctx, r); assert the health call == ('demo', R, 200); assert stub.setStateCalls == ['red', 'green']; assert items.Get(12).State == 'publishing' and items.Get(r).State == 'publishing'; assert lander.calls ends with SetRepair(r, false); assert svc.Incident('demo') is none; assert item 12's thread holds 'health command passed on ' + R and 'workspace demo is green again'; assert the fake hub saw no revert request"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "event_driven",
+          "condition": "the health command exits 0 within the health timeout on the commit a repair item's change landed as",
+          "action": "set the workspace's state to `green`, close the incident, remove the repair mark with `SetRepair(ctx, repair, false)`, append the entries `health` and `workspace_green` to the thread of the item whose landing failed, and move that item and the repair item to `publishing`",
+          "contract": "the workspace's state is `green`; both items are `publishing`; the incident's phase is `closed`; the hub saw no revert request; the `workspace_green` entry's text is `workspace <slug> is green again`",
+          "check": {
+            "same_as": "REQ-2.2"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "unwanted",
+          "condition": "the repair item of an incident in the phase `repairing` waits on a decision of a kind other than `approval` (`session_failed`, `review_disagreement`, `session_limit`, `blocked` or `conflict`), or is `abandoned`",
+          "action": "end the repair: close that decision with the inbox's `Close` and the reason `repair ended; the landing is reverted`, abandon the repair item with the item service's `Abandon` where it is not abandoned already, and go on to the revert of REQ-3.1 with the decision's kind as the reason",
+          "contract": "the repair item is `abandoned` and has no open decision; no second repair item is created; the incident's phase is `reverting` with the reason `session failed twice` for `session_failed`, `review disagreement` for `review_disagreement`, and `repair stopped: <kind>` or `repair abandoned` otherwise; a repair item that waits on an `approval` decision is left alone and the incident stays `repairing`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the decision kinds of packages 04, 06 and 07 declared in the test's inbox by name, with one option each"
+            ],
+            "pseudocode": "in internal/health/repair_test.go, a table over the repair item r {in 'implementing' with an open session_failed decision -> reason 'session failed twice'; in 'reviewing' with review_disagreement -> 'review disagreement'; in 'implementing' with blocked -> 'repair stopped: blocked'; abandoned by the person -> 'repair abandoned'; in 'landing' with an open approval decision -> untouched}: svc.VerifyStep(ctx, item12); for the first four assert inbox.OpenDecisions(r) is empty, the closed decision's reason == 'repair ended; the landing is reverted', items.Get(r).State == 'abandoned', inc.Phase == 'reverting' and inc.Reason; for the last assert the decision is still open, r is 'landing' and inc.Phase == 'repairing'"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "Revert, and a main branch that stays unhealthy",
+      "rationale": "A repair that did not help must not be followed by another: taking the landing back is the one step that is known to have been healthy before.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "event_driven",
+          "condition": "a repair ended as REQ-2.4 says, or the health command exits with a code other than 0 or times out on the commit the repair item's change landed as",
+          "action": "move the incident to the phase `reverting`, append once the entry `revert` to the thread of the item whose landing failed, marking it unread, and ask the hub with `POST …/changes/{number}/revert` to revert the repair item's change where it landed, and the item's change once the repair's reverting change has landed or where the repair's change did not land",
+          "contract": "the entry's text is `repair did not help (<reason>); reverting change <n>`, with ` and change <m>` for a landed repair, the reason one of those of REQ-2.4, `health command exited <N>` or `health command timed out`; a repair's change that did not land is not reverted; the revert of the item's change is not asked before the land of the repair's reverting change was answered `landed`; an answer `409 already_reverted` is taken as the change `error.details.reverted_by` names and no second revert is asked",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub extended with the revert route: a landed change gets a reverting change with `reverts` set, a second request answers 409 already_reverted with `reverted_by`",
+              "a recording stub of package 07's `LandChange`, `OpenApproval` and `OnApprovalAnswered`"
+            ],
+            "pseudocode": "in internal/health/revert_test.go, a table over {the repair ended with 'session failed twice' -> requests [revert 7], entry '… (session failed twice); reverting change 7'; the repair ended with 'review disagreement' -> [revert 7]; the repair item landed as R and health exits 2 on R -> [revert 9, then revert 7 only after LandChange answered 'landed' for the reverting change of 9], entry '… (health command exited 2); reverting change 9 and change 7'}: drive svc.VerifyStep of item 12 and of the repair item until both return; assert the fake hub's revert requests in order; assert count(entries of kind 'revert') == 1 and unread; one more row: the fake hub already holds reverting change 10 of change 7 -> assert the incident uses change 10 and one revert request was sent"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "event_driven",
+          "condition": "the hub answers a revert with the reverting change, or names it in `409 already_reverted`",
+          "action": "report the checks `nightshift-gate`, `nightshift-review` and `nightshift-release` as `passed` on the reverting change's version with the hub client's `ReportCheck`, each with the summary `revert after failed health command on <the landed commit of the item whose landing failed>`, and then ask `land.Service.LandChange(ctx, Request{Workspace, Change, Version})` of package 07 to land that version",
+          "contract": "three reports with the reverting change's number, its version, the status `passed` and that summary reach the hub before the land is asked; the land request names that change and version; the summary of the repair's reverting change names the same commit; an outcome `landed` stores `LandedSHA` with the incident; an error of `LandChange` (the hub could not be asked) is returned from the step and the land is asked again at its next call",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/health/revert_test.go: the case 'the repair item landed and health fails' of the table above; assert the fake hub's checks of change 10 == {nightshift-gate, nightshift-review, nightshift-release} each 'passed' on version 1 with the summary 'revert after failed health command on ' + C; assert each report precedes lander.calls' LandChange({Workspace: 'demo', Change: 10, Version: 1}); the same for the reverting change of 7 with the same summary; LandChange returns an error once -> the step returns it, and the next call asks the same land and reports no check twice"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "event_driven",
+          "condition": "package 07's `LandChange` answers the land of a reverting change with the kind `pending_approval`",
+          "action": "open an `approval` decision for the reverting change with `land.Service.OpenApproval(ctx, ApprovalRequest{Item, Workspace, Change, Version, Requirements, Owner: \"revert\"})`, mark it urgent with the inbox's `SetUrgent` (new in package 03's `internal/inbox`, added by this package), so that `GET /api/v1/decisions` lists it before every open decision that is not urgent, and ask for the same land again when the function registered with `OnApprovalAnswered(\"revert\", fn)` is called with the option `approve`",
+          "contract": "one `approval` decision on the thread of the item whose landing failed, answered with `urgent: true`; the open decisions are listed with the urgent ones first, oldest first among themselves, then the others oldest first; a decision opened through the inbox's `Open` with `Urgent: true` is urgent too, and one opened without it answers `urgent: false`; after `approve` the next call of the step asks `LandChange` with the same change and version and opens no second decision; `reject` and `abandon` are a refused land (REQ-3.5); the workspace stays `red` meanwhile",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/health/revert_test.go: lander.LandChange answers {Kind: 'pending_approval', Requirements: [rule nightshift-1]} and then 'landed'; svc.VerifyStep(ctx, item12); assert lander.calls hold OpenApproval({Item: 12, Workspace: 'demo', Change: 10, Version: 1, Requirements, Owner: 'revert'}); assert the decision is urgent; svc.VerifyStep again while it is open -> no second OpenApproval and no LandChange; call the registered fn with {Change: 10, Option: 'approve'}; svc.VerifyStep; assert LandChange was asked again for change 10. In internal/inbox/decision_test.go and internal/inbox/routes_test.go (package 03's files): open decisions A at T1, B at T2, C at T3 with Urgent true, D at T4 then inbox.SetUrgent(ctx, D, true); assert get('/api/v1/decisions') ids == [C, D, A, B] and items[0].urgent == true and items[2].urgent == false; answer C; assert ids == [D, A, B]; in internal/cli/inbox_test.go assert the Action section prints the served order"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "event_driven",
+          "condition": "every reverting change of an incident has landed and the health command exits 0 within the health timeout on the commit the last one landed as",
+          "action": "set the workspace's state to `green`, append the entries `health` and `workspace_green` to the item's thread, move a repair item that is `verifying` to `awaiting_approval` and abandon it with the item service's `Abandon`, call `plan.Service.Reopen(ctx, item, \"reverted after failed health command\", extra)` of package 05, which moves the item to `awaiting_approval` and has its `plan` decision opened, with the evidence `health command output` (the output of the health command that failed on the item's landed commit) and `failed on` (that commit), and close the incident",
+          "contract": "the workspace's state is `green`; the item is `awaiting_approval`; `Reopen` was called once with the item, the reason and the two pieces of evidence; the repair item is `abandoned`; the incident's phase is `closed`; a `Reopen` that returns another error than `plan.ErrNotFound` leaves the incident open and is asked again at the step's next call; for `plan.ErrNotFound` (an imported package, of which package 05 keeps no text) this package moves the item to `awaiting_approval` itself with that reason and appends an unread entry of the kind `revert` with the text `item <N> was reverted; its package was imported and has no plan to approve again: abandon it and import a corrected package`",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/health/revert_test.go: continue the case 'the repair item landed and health fails' with LandChange answering 'landed' as V for the last reverting change and stub.RunHealth for V returning {ExitCode: 0}; assert the health call == ('demo', V, 200); assert stub.state('demo') == 'green'; assert planner.calls == [Reopen(12, 'reverted after failed health command', [{Label: 'health command output', Text: the first tail}, {Label: 'failed on', Text: C}])]; assert items.Get(r).State == 'abandoned'; assert svc.Incident('demo') is none. Second case: Reopen fails once with a hub error -> the incident is not closed, and the next VerifyStep calls Reopen again and closes it. Third case: Reopen returns plan.ErrNotFound -> items.Get(12).State == 'awaiting_approval', the thread's last entry is of the kind 'revert' with the text above and unread, the incident is closed"
+          }
+        },
+        {
+          "id": "REQ-3.5",
+          "pattern": "unwanted",
+          "condition": "the health command exits with a code other than 0 or times out on the commit the last reverting change landed as, the hub refuses a revert with any answer other than `already_reverted`, `LandChange` answers the land of a reverting change with a kind other than `landed` and `pending_approval`, or the `approval` decision of a reverting change is answered `reject` or `abandon`",
+          "action": "leave the workspace `red` and the item `verifying`, move the incident to the phase `main_red`, and open one decision of the kind `main_red` on the item's thread, with the evidence `health command output` (the last output) and `commits tried` (every commit of the incident a health command ran on, with its result, and every refusal), whose only option is `resume`",
+          "contract": "the decision's `options` are exactly [`resume`], recommended, with `blocks` `workspace <slug>` and the question `Main branch of <slug> is unhealthy; resume when it is repaired?`; the workspace's state is `red`; no further repair, revert or land is asked while the decision is open; a second call of the step opens no second `main_red` decision",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "new file internal/health/mainred_test.go, a table over {health exits 1 on the revert's commit V, the fake hub answers the revert of 7 with 409 revert_conflict, the fake hub answers it 400 nothing_to_land, LandChange answers {Kind: 'blocked'} for the reverting change, LandChange answers {Kind: 'failed', Reason: 'land_failed: contention'}, the approval's fn is called with Option 'reject'}: drive svc.VerifyStep; d = the open decisions of item 12's thread; assert len(d) == 1 and d[0].kind == 'main_red' and keys(d[0].options) == ['resume']; assert its evidence 'commits tried' names C and, per row, V with its exit code or the refusal; assert stub.state('demo') == 'red'; assert items.Get(12).State == 'verifying'; call VerifyStep again; assert still one decision and no new hub request"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "Publishing to origin",
+      "rationale": "The hub's branch is not where the project lives: work is done when origin has it, and origin must only ever get a branch the health command passed on.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "event_driven",
+          "condition": "the scheduler calls the step of an item in `publishing` whose workspace is `green`, with no item of the workspace in `verifying` and no health run on a fast-forwarded tip pending, and the hub answers `POST …/branches/{default branch}/push` with the result `pushed` or `up_to_date`",
+          "action": "append the entry `push` to the item's thread, move the item to `done`, and append the entry `published` with the text `change <n> is on origin as <commit>; <N> tokens spent`, marking the thread unread, where the commit is the change's landed commit and N the sum of the input, cache-creation and output tokens of every session of the item",
+          "contract": "one push request, with the worker token and no `force`; the item is `done`; the thread is unread and holds `push of <branch> to origin: <result>` and the `published` entry; the hub saw no request that deletes, extends or otherwise changes the item's fork",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a publish service over a copy of the store template with the real item service, inbox and session table, the fake hub extended with a scriptable push route and an origin head per workspace, item 12 in `publishing` with change 7 landed as C and two sessions of 1,200 and 300 counted tokens"
+            ],
+            "pseudocode": "new file internal/publish/push_test.go, fixtures in internal/publish/helpers_test.go, a table over the fake hub's push result {'pushed', 'up_to_date'}: err = svc.PublishStep(ctx, item12); assert err == nil; assert the fake hub's push requests == [('demo', 'main', no force)]; assert items.Get(12).State == 'done'; assert entries hold {kind: 'push', text: 'push of main to origin: ' + result} and {kind: 'published', text: 'change 7 is on origin as ' + C + '; 1500 tokens spent'}; assert the thread is unread; assert the fake hub saw no request for the fork 'demo--i12'"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "event_driven",
+          "condition": "the hub answers the push with `409 non_fast_forward`",
+          "action": "sync the workspace from origin once through `land.Service.SyncOrigin` of package 07, handle the default branch's result as REQ-5 says, and, where that lets work go on, ask the push once more in the same call of the step",
+          "contract": "the hub sees a push, a sync and at most one more push in that order; a second `non_fast_forward` leaves the item `publishing` and the workspace `green`, opens no decision and is not counted as a failure; the next call of the step starts again with a push",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/publish/push_test.go, a table over {push 409 non_fast_forward, sync 'up_to_date', push 'pushed' -> item done and requests [push, sync, push]; push 409, sync 'ahead', push 409 again -> item 'publishing', workspace 'green', no decision, requests [push, sync, push]; push 409, sync 'diverged' -> requests [push, sync], workspace 'held' as REQ-5.4 says}: svc.PublishStep(ctx, item12); assert the fake hub's request log and the states"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "unwanted",
+          "condition": "the hub answers the push with `422 origin_rejected`, `502 origin_unauthenticated`, `502 origin_forbidden`, `502 origin_not_found`, or with any error answer other than `non_fast_forward`, `origin_unreachable`, `upstream_error` and `origin_timeout`",
+          "action": "set the workspace's state to `held`, call `Notify` with the event `workspace_held`, open a decision of the kind `origin` on the thread of the item whose push it was, with the hub's error type and message as the reason, whose only option is `retry`, and leave the item `publishing`",
+          "contract": "the workspace's state is `held`; the decision's `options` are exactly [`retry`], recommended, its question is `Origin refused the push of <branch> of <slug>: <message>; retry?`, its evidence `reason` holds `<error_type>: <message>` and `blocks` is `workspace <slug>`; one notification with `event: workspace_held`, the workspace, the item and the thread's path; the item is `publishing`; where the workspace has an open `origin` decision already, no second one is opened",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/publish/push_test.go, a table over the fake hub's push answers {422 origin_rejected 'protected branch hook declined', 502 origin_unauthenticated, 502 origin_forbidden, 502 origin_not_found, 404 branch_not_found}: svc.PublishStep(ctx, item12); assert ws.state('demo') == 'held'; d = open decisions of item 12's thread; assert len(d) == 1 and d[0].kind == 'origin' and keys(d[0].options) == ['retry']; assert d[0].question holds the hub's message; assert notifier.events == [{Event: 'workspace_held', Workspace: 'demo', Item: 12, Thread: path}]; assert items.Get(12).State == 'publishing'; svc.PublishStep(ctx, item13 of the same workspace); assert no second decision and no further push request"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "unwanted",
+          "condition": "the hub answers the push with `502 origin_unreachable`, `502 upstream_error` or `504 origin_timeout`",
+          "action": "ask the push again no earlier than 1 minute after that answer, at most 5 further times in a row for the workspace, and handle the sixth such answer in a row as a refused push with its error type and message",
+          "contract": "between two tries no push request is sent for the workspace, however often a step is called; the count is kept in the store, survives a restart and starts again at any other answer of the push; after the sixth answer in a row the workspace is `held` and an `origin` decision is open as REQ-4.3 says; until then the workspace stays `green`, the item `publishing` and no decision is opened",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an injected clock; the interval and the number of tries are parameters with the defaults 1 minute and 5"
+            ],
+            "pseudocode": "in internal/publish/push_test.go: the fake hub answers every push 504 origin_timeout; PublishStep at T0; assert 1 push request; PublishStep at T0+10s and T0+59s; assert still 1; advance to T0+60s; PublishStep; assert 2; repeat a minute apart until 6 requests; assert ws.state('demo') == 'held' and one 'origin' decision whose evidence 'reason' starts with 'origin_timeout'; second case: after 3 such answers reopen the store, answer the 4th push 'pushed'; assert the item is 'done' and the stored count is 0; assert the default interval is 1 minute and the default number of tries 5"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "state_driven",
+          "condition": "a workspace is `red` or `held`, an item of it is `verifying`, a health run on a fast-forwarded tip of it is pending, or the hub is not available to the worker token",
+          "action": "send no push request for any item of that workspace, count no failure, and leave its `publishing` items `publishing`",
+          "contract": "the step of a `publishing` item returns nil without a request to the hub's push route; the item's state and thread are unchanged; the first call after the condition ended sends the push",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/publish/push_test.go, a table over {workspace 'red', workspace 'held', item 13 of 'demo' in 'verifying', health.TipPending('demo') true, hub.Available(worker) false}: err = svc.PublishStep(ctx, item12); assert err == nil; assert the fake hub's push requests are empty; assert items.Get(12).State == 'publishing' and its thread has no new entry; end the condition; svc.PublishStep(ctx, item12); assert one push request"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "The results of a sync from origin",
+      "rationale": "Origin moves without nightshift: what it brings in may be broken, and what it holds may contradict what the hub landed.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "event_driven",
+          "condition": "a sync of a workspace, run by package 07 before a landing and handed to the function this package registers with `land.Service.OnSyncResult`, or run by this package through `land.Service.SyncOrigin`, reports the default branch as `up_to_date`, `ahead` or `created`",
+          "action": "change nothing and let the caller go on",
+          "contract": "`HandleSync` returns nil; the workspace's state, its threads and the store are unchanged; no health command runs",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a publish service with a stub of the health service's tip check"
+            ],
+            "pseudocode": "new file internal/publish/sync_test.go, a table over results {'up_to_date', 'ahead', 'created'}: err = svc.HandleSync(ctx, land.SyncResult{Workspace: 'demo', Result: result, LocalSHA: A, OriginSHA: A}); assert err == nil; assert ws.setStateCalls is empty; assert tipCheck.calls is empty; assert the workspace thread has no entry and no decision"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "event_driven",
+          "condition": "a sync reports the default branch as `fast_forward`",
+          "action": "store that the new tip (`local_sha`) awaits its health command, run the health command on that commit through `RunHealth` with a tail of 200 lines before returning, and, when it exits 0 within the health timeout, remove the stored mark, append the entry `health` to the workspace's thread and let the caller go on",
+          "contract": "`HandleSync` returns nil only after the command passed; `RunHealth` was called with the slug, `local_sha` and 200; while the mark is stored no push is sent for the workspace (REQ-4.5); a mark found in the store at the start of nightshiftd is run again before any push or landing of that workspace goes on",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the real health service over a store file and the recording stub of `workspace.Service`"
+            ],
+            "pseudocode": "in internal/publish/sync_test.go: stub.RunHealth blocks on a channel; go svc.HandleSync(ctx, {Workspace: 'demo', Result: 'fast_forward', LocalSHA: T, OriginSHA: T}); assert health.TipPending('demo') == true and HandleSync has not returned; release with {ExitCode: 0}; assert it returned nil; assert stub.healthCalls == [('demo', T, 200)]; assert TipPending == false; assert the workspace thread holds 'health command passed on ' + T. Second case: cancel the context while the command runs, reopen the store, call health.Recover(ctx); assert RunHealth is called for T again"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "unwanted",
+          "condition": "the health command exits with a code other than 0 or times out on a fast-forwarded tip",
+          "action": "set the workspace's state to `red`, call `Notify` with the event `workspace_red` and no item, store an incident without an item in the phase `main_red`, open a decision of the kind `main_red` on the workspace's thread with the output and the tip as the commit tried, create no repair item and ask for no revert, and return an error to the caller",
+          "contract": "`HandleSync` returns a non-nil error, so that package 07 lands nothing; the workspace's state is `red`; the decision is in the thread `WorkspaceThread` gives, with `options` exactly [`resume`] and no item; the notification has no `item`; no item is created and the hub sees no revert request",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/publish/sync_test.go, a table over {ExitCode 1, TimedOut}: err = svc.HandleSync(ctx, fast_forward to T); assert err != nil; assert ws.state('demo') == 'red'; d = open decisions of inbox.WorkspaceThread('demo'); assert len(d) == 1 and d[0].kind == 'main_red' and d[0].item == null and keys(d[0].options) == ['resume']; assert its evidence 'commits tried' names T; assert notifier.events == [{Event: 'workspace_red', Workspace: 'demo', Thread: the workspace thread's path}]; assert items.List('demo') is unchanged; assert the fake hub saw no revert request"
+          }
+        },
+        {
+          "id": "REQ-5.4",
+          "pattern": "unwanted",
+          "condition": "a sync reports the default branch as `diverged`",
+          "action": "set the workspace's state to `held`, call `Notify` with the event `workspace_held`, open a decision of the kind `origin` on the workspace's thread that names both heads, whose only option is `retry`, and return an error to the caller",
+          "contract": "`HandleSync` returns a non-nil error; the workspace's state is `held`; the decision's question is `Origin and the hub have diverged on <branch> of <slug>; retry when they are reconciled?`, its evidence holds `hub head` (`local_sha`) and `origin head` (`origin_sha`), its `options` are exactly [`retry`]; where the workspace has an open `origin` decision already, no second one is opened and no second notification is sent",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/publish/sync_test.go: err = svc.HandleSync(ctx, {Workspace: 'demo', Result: 'diverged', LocalSHA: L, OriginSHA: O}); assert err != nil; assert ws.state('demo') == 'held'; d = open decisions of the workspace thread; assert len(d) == 1 and d[0].kind == 'origin' and keys(d[0].options) == ['retry']; assert evidence == [{'hub head', L}, {'origin head', O}]; assert notifier.events == [{Event: 'workspace_held', Workspace: 'demo', Thread: path}]; HandleSync with 'diverged' again; assert still one decision and one notification"
+          }
+        },
+        {
+          "id": "REQ-5.5",
+          "pattern": "unwanted",
+          "condition": "a sync fails: the hub answers it with an error, or its answer reports the default branch as `reset` or `name_conflict` or does not report it",
+          "action": "return an error to the caller, run the sync again itself through `SyncOrigin` 1 minute later and at most 5 further times in a row, counting no failure that is handed over while such a try is pending, handle the result of a try that succeeds as REQ-5.1 to REQ-5.4 say, and handle the sixth failure in a row as a refused push: the workspace `held`, the notification `workspace_held` and an `origin` decision on the workspace's thread with the reason",
+          "contract": "`HandleSync` returns a non-nil error for the failure; the reason is `<error_type>: <message>` of the hub's error, `sync reported <result>` or `sync did not report <branch>`; one sync request per minute from this package while the tries last and none after a success or after the sixth failure; the tries end when nightshiftd stops and the count is in the store; after the sixth failure the workspace is `held` with one `origin` decision whose `options` are exactly [`retry`]",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an injected clock and timer; the interval and the number of tries are the parameters of REQ-4.4"
+            ],
+            "pseudocode": "in internal/publish/sync_test.go: the fake hub answers every sync 502 upstream_error 'origin gone'; err = svc.HandleSync(ctx, {Workspace: 'demo', Err: that error}); assert err != nil; hand over 3 more failures within the minute; fire the timer 5 times, a minute apart; assert the fake hub saw exactly 5 sync requests; assert ws.state('demo') == 'held' and one 'origin' decision on the workspace thread whose evidence 'reason' == 'upstream_error: origin gone'; second case: the 2nd try answers 'up_to_date' -> no decision, workspace 'green', no further sync request; third case, a table over results {'reset', 'name_conflict', branch missing} -> the error's text is 'sync reported reset', 'sync reported name_conflict', 'sync did not report main'"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-6",
+      "title": "The answers to `main_red` and `origin`",
+      "rationale": "Both decisions end with the person saying that they have put something right by hand; nightshift checks that before it goes on.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-6.1",
+          "pattern": "event_driven",
+          "condition": "a `main_red` decision is answered `resume` and the health command, run once on the head of the default branch (`head_sha` of the hub's workspace object) with a tail of 200 lines, exits 0 within the health timeout",
+          "action": "set the workspace's state to `green`, close the incident, append the entries `health` and `workspace_green` to the decision's thread, and, for an incident with an item, call `plan.Service.Reopen` as REQ-3.4 says where the reverting change of the item's change has landed, and move the item to `publishing` where it has not",
+          "contract": "one call of `RunHealth` with the hub's `head_sha`; the workspace's state is `green`; an incident without an item changes no item; the handler returns nil",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/health/mainred_test.go, a table over incidents in the phase main_red {no item (after a fast_forward) -> no item changes; item 12 whose change 7 has the landed reverting change 10 -> planner.Reopen called once for item 12; item 12 whose revert was refused with revert_conflict -> item 'publishing' and Reopen not called}: the fake hub's head_sha is H; stub.RunHealth returns {ExitCode: 0}; err = svc.Resume(ctx, decision, answer 'resume'); assert err == nil; assert stub.healthCalls == [('demo', H, 200)]; assert stub.state('demo') == 'green'; assert svc.Incident('demo') is none; assert the thread holds 'workspace demo is green again'"
+          }
+        },
+        {
+          "id": "REQ-6.2",
+          "pattern": "unwanted",
+          "condition": "the health command run for the answer `resume` exits with a code other than 0 or times out",
+          "action": "leave the workspace `red` and the incident in the phase `main_red`, add the commit and its result to the incident's commits tried, and open a new decision of the kind `main_red` on the same thread with the new output",
+          "contract": "the workspace's state is `red`; exactly one `main_red` decision is open in the thread, with a higher id than the answered one, whose evidence `health command output` is the new output and whose `commits tried` ends with the head and its result; the handler returns nil; no item changes its state",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/health/mainred_test.go: stub.RunHealth returns {ExitCode: 4, Tail: ['still broken']}; err = svc.Resume(ctx, decision, answer 'resume'); assert err == nil; assert stub.state('demo') == 'red'; d = open decisions of the thread; assert len(d) == 1 and d[0].id > decision.id; assert its evidence output == 'still broken' and its commits tried ends with H + ' exited 4'; assert items.Get(12).State == 'verifying'"
+          }
+        },
+        {
+          "id": "REQ-6.3",
+          "pattern": "event_driven",
+          "condition": "an `origin` decision is answered `retry`, the sync of the workspace through `SyncOrigin` reports the default branch as `up_to_date`, `ahead`, `created` or as a `fast_forward` whose tip passes the health command, and the push of the default branch is then answered `pushed` or `up_to_date`",
+          "action": "set the workspace's state to `green`, append the entry `push` and the entry `workspace_green` to the decision's thread, and wake the scheduler so that the step of every `publishing` item of the workspace is called",
+          "contract": "the hub sees one sync and then one push; the workspace's state is `green`; the handler returns nil; the item whose push was refused is `done` after the next call of its step, whose push the hub answers `up_to_date`",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "new file internal/publish/decision_test.go, a table over sync results {'up_to_date', 'ahead', 'fast_forward' with a passing tip check} x {decision on item 12's thread after a refused push, decision on the workspace thread after 'diverged'}: err = svc.Retry(ctx, decision, answer 'retry'); assert err == nil; assert the fake hub's requests == [sync, push]; assert ws.state('demo') == 'green'; assert sched.wakes >= 1; for the item case svc.PublishStep(ctx, item12); assert items.Get(12).State == 'done'"
+          }
+        },
+        {
+          "id": "REQ-6.4",
+          "pattern": "unwanted",
+          "condition": "the sync run for the answer `retry` fails or reports `diverged`, or the push that follows is answered with any error",
+          "action": "leave the workspace `held` and open a new decision of the kind `origin` on the same thread with the new reason, without the tries a minute apart of REQ-4.4 and REQ-5.5",
+          "contract": "the workspace's state is `held`; exactly one `origin` decision is open for the workspace, with a higher id than the answered one, whose reason is the new one (`<error_type>: <message>`, or both heads for `diverged`); no push is sent after a sync that failed or diverged; no second notification `workspace_held` is sent; the handler returns nil",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/publish/decision_test.go, a table over {sync 502 upstream_error -> requests [sync], reason 'upstream_error: …'; sync 'diverged' -> requests [sync], evidence holds both heads; sync 'up_to_date' and push 422 origin_rejected 'still protected' -> requests [sync, push], reason 'origin_rejected: still protected'; sync 'ahead' and push 504 origin_timeout -> requests [sync, push] and no retry timer}: err = svc.Retry(ctx, decision, answer 'retry'); assert err == nil; assert ws.state('demo') == 'held'; d = open 'origin' decisions of the workspace; assert len(d) == 1 and d[0].id > decision.id and its reason; assert notifier.events is empty"
+          }
+        },
+        {
+          "id": "REQ-6.5",
+          "pattern": "state_driven",
+          "condition": "the item of an answered `main_red` or `origin` decision is paused (`Scheduler.Paused`)",
+          "action": "store the answered decision, run no health command and send no sync and no push for it, and carry the answer out, as REQ-6.1 to REQ-6.4 say, when the item is resumed",
+          "contract": "the handler returns nil while the item is paused, and the hub and `RunHealth` see nothing; the function registered with `Scheduler.OnResume` carries the stored answer out once; a decision in a workspace's thread, which has no item, is carried out at once",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a stub of the scheduler's `Paused` and `OnResume`"
+            ],
+            "pseudocode": "in internal/health/mainred_test.go and internal/publish/decision_test.go, one table row each: sched.paused[12] = true; err = handler(ctx, decision of item 12, answer); assert err == nil; assert stub.healthCalls and the fake hub's sync and push requests are empty; sched.resume(12); assert the effect of the unpaused case happened once; resume again; assert nothing more happened"
+          }
+        },
+        {
+          "id": "REQ-6.6",
+          "pattern": "ubiquitous",
+          "action": "for any answer to a `main_red` or `origin` decision whose handler the inbox calls a second time, change nothing at the second call: no health command, no request to the hub, no entry and no further decision",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/health/mainred_test.go and internal/publish/decision_test.go: call the handler twice with the same decision and answer, once for a case that ends 'green' and once for a case that opens a new decision; assert stub.healthCalls, the fake hub's request log, the thread's entries and the open decisions after the second call equal those after the first"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "A healthy landing is published",
+      "steps": [
+        {
+          "actor": "hub",
+          "action": "has landed the change of item 12 on the default branch of workspace `demo`, as commit C"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "calls the step of item 12, in `verifying`, brings the workspace's clone to C and runs the health command as the session user"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reads exit code 0, moves the item to `publishing` and asks the hub to push the default branch"
+        },
+        {
+          "actor": "hub",
+          "action": "pushes the branch and answers `pushed`"
+        },
+        {
+          "actor": "origin",
+          "action": "holds C as the head of its default branch"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "moves the item to `done` and writes the `published` entry, which marks the thread unread"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift inbox --unread` and `nightshift thread show <id>` and reads the change, the commit and the tokens spent"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/health and internal/publish registered as the steps of `verifying` and `publishing` with the scheduler of package 04",
+          "package 02's workspace.Service with RunHealth, the command runner and gitclone",
+          "internal/item and internal/inbox on the store on disk",
+          "the hub client against the fake hub's change, push and git routes",
+          "the nightshift client's run function",
+          "git and sh as installed"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) with workspace `demo`, its repository and an origin head per workspace",
+          "workspace `demo` registered with the health command `git rev-parse HEAD > \"$OUT\"`",
+          "item 12 walked to `verifying` by the e2e helper, with change 7 landed as C on the fake hub and one session of 1,500 tokens in the session table",
+          "sessions unisolated"
+        ],
+        "end_state": [
+          "`nightshift item show 12` prints `state: done`",
+          "the file `$OUT` holds C",
+          "the fake hub's origin head of `demo` is C and it saw exactly one push request",
+          "`nightshift inbox --unread` lists the item's thread, and `nightshift thread show` prints the entries `health`, `push` and `published` with `change 7 is on origin as <C>; 1500 tokens spent`",
+          "`nightshift workspace show demo` prints `demo: green`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go (package 01's file, with its startDaemon helper): d = startDaemon(cfg unisolated); register demo; seedLanded(d, item 12, change 7, C); eventually cli item show 12 contains 'state: done'; assert read($OUT) == C; assert fakeHub.OriginHead('demo') == C; assert len(fakeHub.Pushes('demo')) == 1; assert cli inbox --unread lists the thread; assert cli thread show contains 'change 7 is on origin as ' + C + '; 1500 tokens spent'"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "A landing that breaks the main branch is repaired once and then reverted",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "runs the health command on the landed commit of item 12; it exits 1"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "sets workspace `demo` `red`, runs the notification command with `workspace_red`, and creates the repair item 13 with item 12's package, the repair class, the repair mark and the health command's output as a finding"
+        },
+        {
+          "actor": "implementer",
+          "action": "works in item 13's new fork as a rework with that finding and pushes a change that does not remove the cause"
+        },
+        {
+          "actor": "reviewer",
+          "action": "agrees with the repair's change"
+        },
+        {
+          "actor": "hub",
+          "action": "lands the repair's change although the workspace is `red`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "runs the health command on the repair's landed commit; it exits 1 again"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "asks the hub to revert the repair's change, reports the three checks as passed on the reverting change and asks its land, then does the same for item 12's change"
+        },
+        {
+          "actor": "hub",
+          "action": "opens and lands both reverting changes"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "runs the health command on the last revert's commit; it exits 0; sets the workspace `green`, abandons item 13 and has item 12 moved to `awaiting_approval` with its `plan` decision opened with the failure's output"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift inbox --action` and `nightshift decision show <id>` and reads the health command's output"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/health and internal/publish and, as daemon.Run wires them, package 05's change and plan services, package 06's implementing, gate and review steps with Rework, SetClass and UsePackageOf, and package 07's landing step with SetRepair and LandChange",
+          "package 04's scheduler and session service with the fake `claude` executable and agentkit-go's provider/faux",
+          "package 02's workspace.Service, command runner and gitclone",
+          "the hub client against the fake hub's revert, check, land, sync, push and git routes",
+          "a real notification command (a shell script)",
+          "the nightshift client's run function"
+        ],
+        "setup": [
+          "a fake Parley hub with workspace `demo`, whose repository holds the finished package of item 12 that package 05 planned and kept, and with the revert route",
+          "the health command `test ! -f BROKEN`, and item 12's landed change adding the file `BROKEN`",
+          "the fake `claude` script commits a file other than `BROKEN` and pushes; the fake `speca` of package 06 passes the gate; the faux provider answers the verdict `agree`",
+          "item 12 walked to `verifying` by the e2e helper; sessions unisolated"
+        ],
+        "end_state": [
+          "the fake hub holds the repair's change and two reverting changes, all landed, each reverting change with the three checks `passed` and the summary `revert after failed health command on <C>`",
+          "`nightshift workspace show demo` prints `demo: green`",
+          "`nightshift item show 12` prints `state: awaiting_approval` and `waiting on: plan decision <id>`, and `nightshift item show 13` prints `state: abandoned` and `parent: item 12`",
+          "`nightshift decision show <id>` prints an evidence line `health command output`",
+          "the item's thread holds one `repair` entry and one `revert` entry",
+          "the notification script's file holds one document with `event: workspace_red` and `item: 12`",
+          "the fake hub saw no push request while the workspace was `red`, and its one implementer session of item 13 was started although the workspace's daily limit was set to 1 token"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg with [notify].command, the fake claude and the fake speca); register demo with health 'test ! -f BROKEN' and --daily-tokens 1; seedLanded(d, item 12, change 7 adding BROKEN); eventually cli item show 12 contains 'state: awaiting_approval'; assert fakeHub.Changes('demo') holds 3 landed changes after 7, two with reverts set; assert their checks and summaries; assert cli workspace show contains 'demo: green'; assert cli item show 13 contains 'state: abandoned'; id = the plan decision of cli inbox --action; assert cli decision show id contains 'evidence: health command output'; assert count of 'repair' and 'revert' entries in item 12's thread == 1 each; assert the script's file; assert fakeHub.Pushes('demo') is empty"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "Origin refuses a push, and the person retries",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "asks the hub to push the default branch of `demo` for item 14, which is `publishing`"
+        },
+        {
+          "actor": "origin",
+          "action": "refuses the update by a branch rule"
+        },
+        {
+          "actor": "hub",
+          "action": "answers `422 origin_rejected` with origin's reason"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "sets the workspace `held`, runs the notification command with `workspace_held` and opens an `origin` decision on the item's thread"
+        },
+        {
+          "actor": "person",
+          "action": "reads the reason with `nightshift decision show <id>`, lifts the branch rule on the forge and runs `nightshift decide <id> --option retry`"
+        },
+        {
+          "actor": "nightshift",
+          "action": "sends the answer to `POST /api/v1/decisions/<id>/answer`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "syncs the workspace, reads `ahead`, pushes, reads `pushed`, sets the workspace `green`, and at the item's next step moves it to `done`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/publish and internal/health, package 07's SyncOrigin, the inbox's answer dispatch and the scheduler",
+          "the hub client against the fake hub's push and sync routes",
+          "a real notification command (a shell script)",
+          "the nightshift client's run function"
+        ],
+        "setup": [
+          "a fake Parley hub whose push route for `demo` answers 422 origin_rejected `protected branch hook declined` until the test lifts it",
+          "item 14 walked to `publishing` by the e2e helper, with its change landed"
+        ],
+        "end_state": [
+          "before the answer: `nightshift workspace show demo` prints `demo: held`, `nightshift inbox --action` lists one `origin` decision, `nightshift decision show` prints the reason and the one option `retry`, and the script's file holds one document with `event: workspace_held`",
+          "within 5 seconds of `nightshift decide` exiting 0: `nightshift workspace show demo` prints `demo: green` and `nightshift item show 14` prints `state: done`",
+          "the fake hub saw the requests push, sync, push, push in that order, the last answered `up_to_date`",
+          "no `origin` decision is open"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg with [notify].command); fakeHub.RefusePush('demo', 422, 'origin_rejected', 'protected branch hook declined'); seedLanded and walk item 14 to 'publishing'; eventually cli workspace show contains 'demo: held'; id = the origin decision of cli inbox --action; assert cli decision show id contains 'protected branch hook declined' and 'option retry'; fakeHub.AllowPush('demo'); assert cli.Run(['decide', id, '--option', 'retry']) == 0; eventually cli item show 14 contains 'state: done'; assert cli workspace show contains 'demo: green'; assert fakeHub.Requests('push','sync') == [push, sync, push, push]"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "POST /api/v1/workspaces/{slug}/changes/{number}/revert",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/revert",
+          "signature": "scope changes:write; the owner of {slug}; optional body {title, intent, draft, auto_land, session_id}; 201 with the new change {number, version, state, reverts, …}, opened from the branch revert/<number> into the original's target; 409 change_not_landed; 409 already_reverted with error.details.reverted_by; 400 nothing_to_land; 409 revert_conflict with error.details.conflict; 400 target_not_found; a refusal leaves no branch and no change"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/changes/{number}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}",
+          "signature": "scope changes:read; 200 the change {number, state: draft|open|landed|abandoned, version, head_sha, landed: null | {sha, at, by, land_id, commits}, reverts, reverted_by, …}"
+        },
+        {
+          "name": "PUT /api/v1/workspaces/{slug}/changes/{number}/checks/{name}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/checks/{name}",
+          "signature": "scope checks:write; body {status: pending|passed|failed, version, summary (at most 2,000 characters), url, details}; 200 with the check; one result per version and name, a report replaces the earlier one whole"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/changes/{number}/land",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/land",
+          "signature": "scope changes:write; optional body {expected_version, stack, override, session_id}; query wait 0..60; 200 the attempt with status landed and landed_sha; 202 still running; 409 land_conflict; 409 policy_blocked with blocked.status pending|blocked and blocked.requirements; 409 version_mismatch; 503 land_failed; the attempt in error.details"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/branches/{name}/push",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/branches/{name}/push",
+          "signature": "scope workspaces:write; optional body {force}; 200 {branch, sha, remote, remote_url, result: pushed|forced|up_to_date}; 409 non_fast_forward; 409 origin_moved (forced only); 422 origin_rejected (the message carries origin's reason); 502 origin_unauthenticated; 502 origin_forbidden, origin_not_found; 502 origin_unreachable, upstream_error; 504 origin_timeout; 404 branch_not_found; 400 fork_has_no_origin; 503 unavailable"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/sync",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/sync",
+          "signature": "scope workspaces:write; no body; 200 the workspace object plus branches: [{name, result: created|up_to_date|fast_forward|ahead|diverged|reset|name_conflict, local_sha (the hub's head after the sync), origin_sha}]; 400 fork_has_no_origin; 400 sync_disabled; 502 upstream_error; 500 internal"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}",
+          "signature": "200 the workspace object with default_branch and head_sha, the hub's head of the default branch"
+        }
+      ]
+    },
+    {
+      "package": "nightshift packages 05_planning, 06_implementation_and_review and 07_landing (read as drafts with specr on 2026-11-28)",
+      "version": "draft",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "change.Service.Get",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/change",
+          "signature": "Get(ctx, item) (Record, error); Record{Item, Workspace, Fork, GitURL, Branch, Generation, Change, ChangeRef, ChangeURL}; change.ErrNotFound for an item with no fork"
+        },
+        {
+          "name": "plan.Service.Reopen",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/plan",
+          "signature": "Reopen(ctx, item, reason string, extra []inbox.Evidence) error; moves the item to `awaiting_approval` through Transition with the reason and has a `plan` decision opened with the first decision's evidence followed by extra, `revise` recommended; plan.ErrNotFound for an item with no kept package (an imported spec package)"
+        },
+        {
+          "name": "impl.Service.Rework",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "(*impl.Service).Rework(ctx, item int, findings []impl.Finding) error; Finding{ID, Source: gate|review|person|health|conflict, Text, File, Line, Criterion, Output, Binding}; for an item in ready, implementing, reviewing or landing; ErrInvalid, ErrState"
+        },
+        {
+          "name": "impl.Service.SetClass",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "(*impl.Service).SetClass(ctx, item int, class sched.Class) error; every later implementer and reviewer session of the item is asked with the class"
+        },
+        {
+          "name": "hub.Client.Change, hub.Client.ReportCheck",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/hub",
+          "signature": "Change(ctx, slug, number, include...) answering the change with its version, heads, state, paths and landing requirements; ReportCheck: PUT …/checks/{name} with status, version and summary; both added by package 06 with the worker credential; `landed`, `reverts` and `reverted_by` are members this package adds to the change where they are missing"
+        },
+        {
+          "name": "land.Service.LandChange",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/land",
+          "signature": "LandChange(ctx, Request{Workspace, Change, Version, SessionID}) (Outcome, error); one land request sent at once, no condition checked, no check reported, no decision opened; Outcome.Kind landed (LandedSHA) | pending_approval (Requirements) | pending | blocked | conflict | version_mismatch | failed (Reason); an error when the hub could not be asked"
+        },
+        {
+          "name": "land.Service.SetRepair",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/land",
+          "signature": "SetRepair(ctx, item, on) error; a marked item lands although its workspace is `red`, through the same step as any item; item.ErrNotFound"
+        },
+        {
+          "name": "land.Service.OpenApproval, land.Service.OnApprovalAnswered",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/land",
+          "signature": "OpenApproval(ctx, ApprovalRequest{Item, Workspace, Change, Version, Requirements, Owner}) returns the decision, opened on the item's thread; OnApprovalAnswered(owner, fn): fn is called once per answer with Approval{Item, Workspace, Change, Version, Option, Comment}, after the verdict was recorded with the approver token for approve and reject; package 07 lands nothing for such a decision"
+        },
+        {
+          "name": "land.Service.OnSyncResult, land.Service.SyncOrigin",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/land",
+          "signature": "OnSyncResult(func(ctx, SyncResult) error) with SyncResult{Workspace, Branch, Result, LocalSHA, OriginSHA, Err}: called with the default branch's result of every sync before a landing, a failed one included; the landing goes on when it returns nil; SyncOrigin(ctx, slug) (SyncResult, error) runs the sync without calling that function"
+        }
+      ]
+    },
+    {
+      "package": "additions this package makes to the Go packages of packages 03 and 06 (new, specified here)",
+      "version": "new",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "impl.Service.UsePackageOf",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "(*impl.Service).UsePackageOf(ctx, item, of int) error: the item is implemented, gated and reviewed with the package directory of the item `of` (package 06 stores a package directory per item and resolves it from the item's source or package 05's kept text; a repair item has neither)"
+        },
+        {
+          "name": "inbox.SetUrgent",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/inbox",
+          "signature": "SetUrgent(ctx, decision, urgent bool) error: marks an open decision urgent after it was opened; beside OpenRequest.Urgent"
+        }
+      ]
+    }
+  ]
+}

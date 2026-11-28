@@ -1,0 +1,987 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "04",
+  "spec_name": "sessions_and_scheduling",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "Roles, the session user and running as it",
+      "rationale": "A session runs without permission prompts, so what it can reach has to be settled by the operating system before the first one starts.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "unwanted",
+          "condition": "the configuration gives no value for `roles.planner.model`, `roles.implementer.model` or `roles.reviewer.model`, gives none for `roles.reviewer.provider`, or gives a `roles.reviewer.provider` that, trimmed and compared without regard to case, is none of the providers `agentkit-go` lists",
+          "action": "fail the start check `roles`, which runs after `credentials`, and start nothing",
+          "contract": "exit code 1; exactly one line on stderr, the first that applies of `roles: planner names no model`, `roles: implementer names no model`, `roles: reviewer names no model`, `roles: reviewer names no provider`, `roles: unknown provider \"<name>\"`; the `sessions` check did not run; no listener is opened and no store file is created",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/session/roles_test.go, a table over {planner model empty, implementer model empty, reviewer model empty, reviewer provider empty, provider 'acme' -> 'unknown provider \"acme\"', two faults at once -> the first in the order, provider ' Anthropic ' with every model set -> nil, provider 'ollama' -> nil}: err = session.CheckRoles(cfg.Roles); assert err text == want. In internal/daemon/start_test.go (package 01's file): code, stderr = daemon.Run(config whose reviewer has no model, against a fake hub that passes the first three checks); assert code == 1; assert stderr == 'roles: reviewer names no model\\n'; assert no store file"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "unwanted",
+          "condition": "the configuration gives `sessions.max_parallel` a value outside 1 to 16, `items.max_sessions` a value outside 2 to 100, or `sessions.stall`, `sessions.max_tokens` or `limits.daily_tokens` a value that is not greater than zero",
+          "action": "fail the start check `config`, and take for each of these keys the file omits its default: 3, 12, 30 minutes, 10,000,000 and 50,000,000",
+          "contract": "exit code 1; one line on stderr: `config: sessions.max_parallel must be between 1 and 16`, `config: items.max_sessions must be between 2 and 100` or `config: <dotted key> must be greater than 0`; a file without the keys loads with the five defaults and `sessions.unisolated` false",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/config/config_test.go (package 01's file), a table over {max_parallel 0 and 17 -> refused, 1 and 16 -> loaded; max_sessions 1 and 101 -> refused, 2 and 100 -> loaded; stall '0s', max_tokens 0, daily_tokens -1 -> '<key> must be greater than 0'; none of the keys -> 3, 12, 30m, 10000000, 50000000}: cfg, err = config.Load(path, home); assert err text or the values"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "unwanted",
+          "condition": "the configuration has neither `sessions.user` nor `sessions.unisolated = true`, or names a `sessions.user` that does not exist on the machine, or names the user nightshiftd itself runs as",
+          "action": "fail the start check `sessions`, which runs after `roles`, without starting any process",
+          "contract": "exit code 1; one line on stderr: `sessions: no user configured; set [sessions].user or [sessions].unisolated`, `sessions: user \"<name>\" does not exist` or `sessions: user \"<name>\" is the daemon's user`; no process was started as another user; a configuration with both a user and `unisolated = true` is checked as one with the user alone",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "the check's 30 second timeout for `claude --version` is a parameter, set to 50 milliseconds for the timeout row"
+            ],
+            "pseudocode": "new file internal/session/usercheck_test.go, one table for every way the sessions check fails, over a stub user lookup and a stub of the run-as function that records what it is asked to run; these rows: {no user and unisolated false, user 'ghost' unknown to the lookup, user equal to the current user}: err = session.CheckUser(ctx, cfg, deps); assert err text == want; assert the stub ran nothing. Rows for the next criterion: {the probe fails with 'sudo: a password is required' -> 'cannot run as \"agent\": sudo: a password is required', the store file opens for reading as the user -> 'user \"agent\" can read <store path>', config and token both readable -> the config path is named, 'claude --version' exits 127 -> 'claude is not available to \"agent\": <first line of its error output>', claude does not answer within the timeout parameter -> the same reason with 'timeout'}; a last row where everything holds -> nil"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "unwanted",
+          "condition": "the configured session user exists and is not the daemon's, and a probe process cannot be started as that user, or the configuration file, the client token file or the store file can be opened for reading by a process running as that user, or `claude --version` run as that user does not exit 0 within 30 seconds",
+          "action": "fail the start check `sessions`, asking in that order and naming the first that fails, with the files in the order configuration, token, store",
+          "contract": "exit code 1; one line on stderr: `sessions: cannot run as \"<name>\": <first line of the error>`, `sessions: user \"<name>\" can read <path>` or `sessions: claude is not available to \"<name>\": <first line of the error>`; a file that does not exist yet, as the token file and the store file at a first start, counts as not readable",
+          "check": {
+            "same_as": "REQ-1.3"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "event_driven",
+          "condition": "nightshiftd starts with `sessions.unisolated = true` and no `sessions.user`",
+          "action": "pass the `sessions` check when `claude --version` exits 0 as the daemon's user, print one warning line to stderr, and run every session and every command of `internal/command` as the daemon's user",
+          "contract": "stderr holds `warning: sessions run as the daemon's user and can read its credentials` exactly once; `GET /api/v1/status` answers `\"isolation\": \"unisolated\"`, and `\"isolation\": \"user\"` with no warning line when a session user is configured; without a working `claude` the start fails with exit code 1 and `sessions: claude is not available to \"<daemon's user>\": <error>`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub that passes the first three checks",
+              "a fake `claude` (a script the test writes) that prints a version and exits 0"
+            ],
+            "pseudocode": "in internal/daemon/start_test.go, a table over {unisolated with a fake claude on PATH -> the daemon runs, stderr has the warning line once, status.isolation == 'unisolated'; unisolated with no claude on PATH -> code 1 and stderr starts with 'sessions: claude is not available to \"'}; the isolated case uses a run-as function injected into daemon.Run that starts the helper directly: assert status.isolation == 'user' and no warning line"
+          }
+        },
+        {
+          "id": "REQ-1.6",
+          "pattern": "ubiquitous",
+          "action": "for any process of a session and any command `internal/command` runs, start it as the session user by running `sudo -n -H -u <user> -- <the nightshiftd executable> session-helper`, or the helper alone when sessions are unisolated, and have the helper run the command in the directory given with an environment that holds `HOME`, `USER`, `LOGNAME` and `PATH` as the helper has them, the variables given with the command, and no other variable of the daemon",
+          "contract": "the command's output and exit code reach the caller; a variable set in the daemon's environment and not given with the command is absent from the command's environment; the command, its directory and its variables are sent to the helper on its standard input and appear in no argument list",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the helper is the test binary, re-executed through a TestMain that calls the helper's entry function when the first argument is `session-helper`",
+              "no `sudo` is run by any test"
+            ],
+            "pseudocode": "new file internal/session/runas_test.go: assert session.HelperArgv('agent', exe) == ['sudo','-n','-H','-u','agent','--',exe,'session-helper'] and session.HelperArgv('', exe) == [exe,'session-helper']. With the test binary re-executed as the helper and NIGHTSHIFT_TEST_SECRET=x set in the test's environment: res = runner.Run(ctx, {argv: ['sh','-c','pwd; env'], dir: tmp, env: {A: '1'}}); assert the first output line == tmp; assert output has 'A=1' and 'HOME='; assert output lacks 'NIGHTSHIFT_TEST_SECRET'; assert res.ExitCode == 0; a command 'exit 3' -> ExitCode 3. In internal/daemon/start_test.go: after a start, a command run through internal/command went through the injected run-as function"
+          }
+        },
+        {
+          "id": "REQ-1.7",
+          "pattern": "event_driven",
+          "condition": "nightshiftd ends a process it started through the helper, or the helper's standard input closes because nightshiftd's own process ended",
+          "action": "send SIGTERM to every process of the command's process group, send SIGKILL 10 seconds later to those that remain, and end the helper",
+          "contract": "no process of the group remains once the helper has ended; the caller's wait returns with the outcome `ended` and not with an exit code; a command that ignores SIGTERM is gone after the 10 seconds, which are a parameter",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the grace between SIGTERM and SIGKILL set to 200 milliseconds"
+            ],
+            "pseudocode": "in internal/session/runas_test.go, a table over {the caller cancels its context, the caller's end of the helper's standard input is closed as a dying daemon would} x {command 'sleep 600 & sleep 600 & wait' that writes its children's pids first, command with `trap '' TERM` in front}: start; read the pids; end; assert the wait returns within grace + 1s with outcome ended; assert kill(pid, 0) fails for every pid"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "A session, its token, its hub record and its stream",
+      "rationale": "A session is the unit that costs tokens and writes code, so each one is registered, confined to its item's fork and kept readable afterwards.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "event_driven",
+          "condition": "a session is started for an item",
+          "action": "give the session a UUID, create a session on the hub with the worker token (`POST /api/v1/sessions` with `id` that UUID, `workspace_slug` the item's workspace, `archetype` the role, `model` the role's model, `metadata` `{\"item\": <number>}`), mint a token bound to the item's fork (`POST /api/v1/workspaces/{fork}/tokens` with `permissions` `[\"git:write\"]` for a planner or an implementer and `[\"git:read\"]` for a reviewer, and `expires` 30), record the session as `running` in the store, and write a `session_started` entry with the role and the session id to the item's thread",
+          "contract": "the hub holds an `active` session with that id, archetype, model and metadata; the minted token is bound to the fork and holds exactly the one scope; the token's value is in no file, no store row and no log line; the event `session.started` is appended",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) extended with the session routes, the workspace token route and the token revocation, holding the workspace `demo` and its fork `demo--i7` with a git endpoint",
+              "an item 7 of `demo` created through internal/item",
+              "sessions unisolated, the helper being the re-executed test binary",
+              "a fake `claude` on PATH and, for the reviewer, a provider/faux client"
+            ],
+            "pseudocode": "new file internal/session/session_test.go, a table over the roles {planner, implementer, reviewer}: res = svc.Run(ctx, spec); assert fakeHub.Session(res.ID) == {workspace_slug: 'demo', archetype: role, model: cfg model of the role, metadata: {item: 7}}; assert the token minted for the fork has permissions == ['git:write'] (reviewer: ['git:read']) and expires 30; assert the store file, the stream and the daemon's log do not contain the token's value; assert the item's thread has a session_started entry"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "event_driven",
+          "condition": "a planner or implementer session starts",
+          "action": "bring the clone at `<sessions.dir>/items/<N>/clone` to the given branch of the item's fork as the session user (cloning the fork when the clone does not exist and fetching otherwise; creating the branch at the tip of the fork's default branch when neither side has it; setting the local branch to the fork's head when it does not contain that head; and leaving it as it is otherwise), write the session's input files to `<sessions.dir>/items/<N>/run/<session-id>/`, and run `claude -p <prompt> --model <the role's model> --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools ScheduleWakeup,CronCreate` in the clone, with `{result}` in the prompt replaced by the path `result.json` in that run directory and each `{input:<name>}` by the path of that input file, and with an environment in which git sends the session's token to the hub's URL, every push carries the option `parley.session=<session id>`, and `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` is the stall time in milliseconds",
+          "contract": "`claude` received exactly those arguments with the clone as its working directory; a `git push` it ran reached the hub authenticated with the session's token and carrying the push option; a file a first session left untracked in the clone, and a commit it did not push, are there for the item's second session; a local branch the fork's branch has moved away from is at the fork's head when the next session starts; the clone's `.git/config` holds neither the token nor an `extraheader`; a prompt naming an input that was not given fails the start with `unknown input \"<name>\"`",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/session/session_test.go: the fake claude records its arguments and working directory, reads the file named after '--findings' in its prompt, creates 'left.txt', commits and pushes a branch, and writes the result file. svc.Run(spec{Role: implementer, Branch: 'item-7', Prompt: 'af-impl x --rework {input:findings} --result {result}', Inputs: {findings: '[]'}}); assert the recorded argv == ['-p', <prompt with both paths>, '--model', 'm-impl', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', '--disallowedTools', 'ScheduleWakeup,CronCreate']; assert cwd == <dir>/items/7/clone and its checked-out branch == 'item-7'; assert fakeHub saw a push to demo--i7 bearing the session's token with option 'parley.session=' + res.ID; run a second session; assert its claude saw left.txt; push another commit to the fork's item-7 from outside and add an unpushed local commit; run a third session; assert its HEAD == the fork's head; assert read(clone/.git/config) contains neither the token nor 'extraheader'; a spec whose prompt names {input:nope} -> outcome failed, reason 'unknown input \"nope\"'"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "event_driven",
+          "condition": "a reviewer session starts",
+          "action": "make a clone of the item's fork at the given commit, detached, in a directory of that session alone, run as the session user an `agentkit-go` agent built with the provider and the model of `[roles.reviewer]`, the six file navigation tools over that clone and no other tool, no earlier message, and the prompt as its one user message, write each event of the run as one JSON line to the session's output, and remove that clone when the session ends",
+          "contract": "the provider's first request holds the prompt as its only user message and no message of any other session; the tools offered are exactly those `tools.FileNavigationTools()` names; a `read_file` call returns the file as it is at the commit; after the session its clone directory does not exist and the item's own clone is unchanged; a second review of the same item again starts with the prompt alone",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the helper's entry function takes the provider client as an option; the test's helper passes a provider/faux client scripted from a file the test writes"
+            ],
+            "pseudocode": "in internal/session/session_test.go: the faux provider is scripted with faux.ToolCall('1', 'read_file', {path: 'README.md'}) and then faux.Text('{\"verdict\":\"agree\",\"findings\":[]}'). res = svc.Run(spec{Role: reviewer, Commit: <commit>, Prompt: 'review this'}); reqs = faux.Requests(); assert the user messages of reqs[0] == ['review this']; assert the tool names of reqs[0] == tools.FileNavigationTools(); assert the tool result in reqs[1] holds README.md's content at the commit; assert res.Verdict.Verdict == 'agree'; assert the session's review directory is gone; run a second review with another prompt; assert its first request holds that prompt alone"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "event_driven",
+          "condition": "a session's process ends, and for a planner or implementer the last `result` event of its stream does not say `is_error` and `result.json` in its run directory holds one JSON document, or for a reviewer the last message holds one JSON object whose `verdict` is `agree`, or `object` with at least one finding that has a `text`, and the accept function given with the session returns no error",
+          "action": "record the session as `completed` and return to the caller its id, the outcome, its tokens, the path of its stream, and the result file's document or the verdict with its findings (`text`, and `file`, `line` and `criterion` where given)",
+          "contract": "the caller receives the outcome `completed` and a nil error; the result file's bytes are returned as written; the verdict object is taken from the first `{` to the last `}` of the last message, so text around it does not matter; the accept function was called once, after the process ended, with that result",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/session/session_test.go, a table over {implementer whose fake claude writes result.json {\"outcome\":\"written\"} and a last result event with is_error false -> res.Outcome == completed, res.ResultFile == those bytes; reviewer whose last message is 'Here: {\"verdict\":\"object\",\"findings\":[{\"text\":\"t\",\"file\":\"a.go\",\"line\":3}]} done' -> res.Verdict == {object, [{t, a.go, 3}]}}: assert err == nil; assert res.StreamPath names an existing file; assert the accept function saw the same result once"
+          }
+        },
+        {
+          "id": "REQ-2.5",
+          "pattern": "unwanted",
+          "condition": "a session cannot be started (the hub refuses its registration or its token, or the clone fails), or its process ends with a last `result` event that says `is_error`, or with no `result` event and an exit code other than 0, or a planner's or implementer's `result.json` is missing or is not one JSON document, or a reviewer's last message holds no valid verdict object, or the accept function returns an error",
+          "action": "record the session as `failed` with a reason, start no further process for it, and return that outcome to the caller",
+          "contract": "the caller receives the outcome `failed`, a nil error and the reason: the first line, cut at 200 characters, of the error that prevented the start, of the `result` event's text, of the process's standard error (`exit status <N>` when it is empty), `no result`, `no verdict`, or of the accept function's error; the accept function is not called for a session that failed before it",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/session/session_test.go, a table over {fake hub answers POST /sessions 403 forbidden -> reason is the hub's message; the token mint answers 403 insufficient_scope -> the hub's message, and no process ran; fork without git endpoint -> first line of git's error; fake claude emits a result event {is_error: true, result: 'API Error: overloaded\\nmore'} -> 'API Error: overloaded'; exits 2 writing 'not logged in' to stderr -> 'not logged in'; exits 1 silently -> 'exit status 1'; exits 0 without result.json -> 'no result'; result.json is 'x{' -> 'no result'; reviewer's last message 'looks fine' -> 'no verdict'; verdict 'maybe' -> 'no verdict'; verdict 'object' with no finding -> 'no verdict'; accept returns errors.New('tasks still open\\ndetail') -> 'tasks still open'}: res, err = svc.Run(ctx, spec); assert err == nil; assert res.Outcome == failed; assert res.Reason == want"
+          }
+        },
+        {
+          "id": "REQ-2.6",
+          "pattern": "event_driven",
+          "condition": "a session ends, whatever its outcome",
+          "action": "report its usage to the hub as one usage record (`model`, `input_tokens`, `output_tokens`, `cache_read_tokens`), complete it on the hub with `status` `completed` for a completed session and `failed` with the reason as `error_message` for any other, with the cache-creation tokens as `cache_creation_input_tokens`, revoke its token with `DELETE /api/v1/user/tokens/{token_id}`, and write a `session_ended` entry with the role, the outcome, the reason and the tokens to the item's thread",
+          "contract": "the hub holds one usage record for the session and its status; the token is revoked, so a fetch with it is refused; the event `session.ended` is appended; a report or a revocation the hub did not take, because it was unreachable or refused the worker token, is kept in the store and sent again at each scheduler pass until the hub answers, exactly once, and `409 session_not_active` ends the tries for that session",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/session/session_test.go: after a completed session whose stream reported input 100, cache creation 20, cache read 900, output 50: assert fakeHub.Usage(res.ID) == [{model, input_tokens: 100, output_tokens: 50, cache_read_tokens: 900}]; assert fakeHub.Session(res.ID).status == 'completed' and cache_creation_input_tokens == 20; assert the token's revoked_at is set; assert res.Tokens == 170. After a failed one: status 'failed', error_message == res.Reason. With fakeHub.Stop() before the session's end: the session still returns; fakeHub.Start(); svc.FlushReports(ctx); assert one usage record and status completed; FlushReports again; assert still one usage record"
+          }
+        },
+        {
+          "id": "REQ-2.7",
+          "pattern": "ubiquitous",
+          "action": "for any session, append every line its process writes to standard output to the file `<directory of store.path>/streams/<session-id>.jsonl` as the line arrives, keep its standard error beside it as `<session-id>.stderr`, answer `GET /api/v1/sessions/{id}/log` with the stream file's content, which `nightshift session log <session-id>` prints unchanged, and remove both files, at start and once a day, when the session ended more than 30 days ago",
+          "contract": "status 200 with `Content-Type: application/x-ndjson` and the lines in the order written, also for a session still running (the lines so far); the command exits 0 with the same bytes on stdout, with and without `--json`; a stream 29 days old is kept and one 31 days old is removed while the session's row stays",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "new file internal/session/stream_test.go: run a session whose fake claude prints three JSON lines; assert read(res.StreamPath) == those lines; r = get('/api/v1/sessions/' + res.ID + '/log') through the router; assert r.status == 200, the content type and r.body == the lines; code, out, _ = cli.Run(['session', 'log', res.ID]) against the same server; assert code == 0 and out == the lines. With an injected clock: sessions ended 29 and 31 days ago; svc.PruneStreams(); assert the first file exists and the second does not"
+          }
+        },
+        {
+          "id": "REQ-2.8",
+          "pattern": "unwanted",
+          "condition": "`GET /api/v1/sessions/{id}/log` names a session nightshiftd does not know, or one whose stream was removed after 30 days",
+          "action": "refuse the request",
+          "contract": "status 404 with body `{\"error_type\": \"not_found\", \"message\": <string>}`, the message of a removed stream being `the stream of session <id> is no longer kept`; `nightshift session log <id>` exits 1 with the message on stderr and nothing on stdout; `nightshift session log` without an id exits 2 and sends no request",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/session/stream_test.go, a table over {an unknown UUID, a text that is no UUID, the pruned session of the test above}: r = get(route); assert r.status == 404; assert r.json.error_type == 'not_found'. In internal/cli/cli_test.go (package 01's file): ['session','log',<unknown>] -> code 1, stderr == the message, stdout == ''; ['session','log'] -> code 2 and the server saw no request"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "Bounds on a session, failed steps and the limit per item",
+      "rationale": "Nobody watches a session, so it must end by itself, and a step that keeps failing must reach the person instead of spending the day's tokens.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "unwanted",
+          "condition": "a running session writes no line to its standard output or its standard error for `sessions.stall`",
+          "action": "end the session's process group and record the session as `failed`",
+          "contract": "the caller receives the outcome `failed` with the reason `stalled`; no process of the session remains; the hub's session is completed as `failed` with `error_message` `stalled`; a session that writes one line just before each stall time elapses is not ended",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "`sessions.stall` set to 100 milliseconds and `sessions.max_tokens` to 1000 for this test",
+              "the fake claude sleeps on request"
+            ],
+            "pseudocode": "new file internal/session/limits_test.go, one table for the two bounds; these rows: {fake claude prints one line and sleeps -> failed, 'stalled'; fake claude prints a line every 20ms for 200ms and then its result -> completed}; rows for the next criterion: {assistant events reporting input 600 + cache creation 300 + output 100 with max_tokens 1000 -> failed, 'token limit'; assistant events reporting cache read 5000 and input 10 -> completed; the same message id reported in two events with input 600 -> counted once, completed; reviewer whose faux turns carry Usage{InputTokens: 700, CacheWriteTokens: 200, OutputTokens: 100} -> failed, 'token limit'}: res = svc.Run(ctx, spec); assert res.Outcome and res.Reason; assert the session's process is gone; assert fakeHub.Session(res.ID).error_message == res.Reason"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "unwanted",
+          "condition": "the input tokens, cache-creation tokens and output tokens a running session has reported in its stream, cache-read tokens not counted, reach `sessions.max_tokens`",
+          "action": "end the session's process group and record the session as `failed`",
+          "contract": "the caller receives the outcome `failed` with the reason `token limit`; the session's tokens are the count at which it was ended; a planner's or implementer's count sums the `usage` of the stream's `assistant` events, each message id once, and a reviewer's the usage its agent reports after each turn",
+          "check": {
+            "same_as": "REQ-3.1"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "event_driven",
+          "condition": "a session asked for an item and a step ends `failed`, or a package records a failure for that item and step, and it is the first failure in a row for that item and step",
+          "action": "open no decision, and let the scheduler call the item's step function again, so that the step is started once more",
+          "contract": "no decision is open for the item; its step function is called again at the next pass; a session of that step that ends `completed` sets the item's count of failures in a row for the step to zero; a failure of another step of the item does not add to it",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/sched/failures_test.go, with a fake session runner whose outcomes the test scripts and a real inbox and item store: script {failed 'a', completed, failed 'b', failed 'c'} for step 'implement'; let the scheduler run its passes; assert no decision after the first and the third session; assert the step function was called four times; assert one session_failed decision after the fourth whose evidence names 'b' and 'c', not 'a'. Second case: failed for step 'implement' then failed for step 'review' -> no decision. Third case: sched.RecordFailure(item, 'implement', 'gate failed', '') after one failed session -> the decision opens"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "unwanted",
+          "condition": "a session ends `failed`, or a package records a failure, and it is the second failure in a row for that item and step",
+          "action": "open a decision of kind `session_failed` on the item's thread with the options `retry`, recommended, and `abandon`, whose evidence holds both reasons and the path of each session's stream, and start no further session for the item while the decision is open",
+          "contract": "`GET /api/v1/decisions` lists the decision with exactly the option keys `retry` and `abandon` and with both reasons and both stream paths in its evidence; the item's `waiting_on` names it; the item keeps its state; its step function is not called while the decision is open",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/sched/failures_test.go: after two failed sessions ('boom' and 'stalled'): d = the open decision of the item; assert d.kind == 'session_failed'; assert d.options keys == ['retry','abandon'] and the recommended one is 'retry'; assert d.evidence holds 'boom', 'stalled' and both sessions' stream paths; assert item.waiting_on.id == d.id; run three more passes; assert the step function's call count did not change"
+          }
+        },
+        {
+          "id": "REQ-3.5",
+          "pattern": "event_driven",
+          "condition": "a `session_failed` decision is answered `retry`, or a `session_limit` decision is answered `continue`",
+          "action": "for `retry`, set the count of failures in a row of the decision's step to zero; for `continue`, count the item's sessions from the time of the answer; and call the item's step function again",
+          "contract": "after `retry` the step's next session starts within one pass, and two further failures in a row open a new `session_failed` decision; after `continue` up to `items.max_sessions` further implementer and reviewer sessions start before a new `session_limit` decision opens; a handler called twice for one answer has the effect of one call",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "new file internal/sched/decisions_test.go, a table over the two kinds and their options through POST /api/v1/decisions/{id}/answer; these rows: {session_failed + retry -> the step function is called again, a third and fourth failed session open a second decision; session_limit + continue with max_sessions 2 -> two further sessions start and the third request opens a second decision}; rows for the abandon criterion: {session_failed + abandon, session_limit + abandon -> item.state == 'abandoned', the item's directory is gone, no further step call}; each handler is then invoked a second time directly and the assertions repeated"
+          }
+        },
+        {
+          "id": "REQ-3.6",
+          "pattern": "unwanted",
+          "condition": "an implementer or reviewer session is asked for an item, and the number of implementer and reviewer sessions started for that item since the later of the time it became `ready` and the time of the last answer to a decision of that item has reached `items.max_sessions`",
+          "action": "start no session, tell the asking step that none was started, and open a decision of kind `session_limit` on the item's thread with the options `continue`, recommended, and `abandon`, whose evidence lists each counted session with its role, its outcome and its tokens",
+          "contract": "the asking step receives the error `sched.ErrNotStarted`; exactly one `session_limit` decision is open for the item however often the step asks; its option keys are `continue` and `abandon`; planner sessions are neither counted nor refused; a session that ended `interrupted` is counted, since it was started; an answer to any decision of the item starts the count again",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/sched/limit_test.go, with max_sessions 3 and an injected clock, a table: {ready at T0, sessions implementer, reviewer, implementer started -> the fourth request returns ErrNotStarted and one session_limit decision lists three sessions with role, outcome and tokens; two planner sessions before T0 and three after -> a planner request still starts; three sessions, then a decision of the item answered at T1, then two sessions -> the next request starts; three sessions of which one interrupted -> refused; the refused step asks twice more -> still one decision}"
+          }
+        },
+        {
+          "id": "REQ-3.7",
+          "pattern": "event_driven",
+          "condition": "a `session_failed` or `session_limit` decision is answered `abandon`",
+          "action": "abandon the item through the abandon function of `internal/item`, which calls the abandon hooks",
+          "contract": "the item's state is `abandoned`; no step function is called for it afterwards",
+          "check": {
+            "same_as": "REQ-3.5"
+          }
+        },
+        {
+          "id": "REQ-3.8",
+          "pattern": "event_driven",
+          "condition": "an item becomes `done` or `abandoned`",
+          "action": "end the item's running sessions, recording each as `interrupted`, and remove the directory `<sessions.dir>/items/<N>` with the item's clone and its run directories",
+          "contract": "the directory does not exist; no process of a session of the item remains; the streams of the item's sessions are still served by `GET /api/v1/sessions/{id}/log`; the removal of an item that never had a session succeeds; the abandon hook registered with `internal/item` returns after the sessions ended",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/session/session_test.go, a table over {the item service's Abandon(7) while an implementer session of item 7 sleeps, a transition of item 8 to 'done' after one completed session, an abandon of item 9 that never had a session}: assert the session of item 7 returned with outcome interrupted and its process is gone; assert <dir>/items/<N> does not exist; assert the stream file of the ended session still exists"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "The scheduler and the daily limit",
+      "rationale": "Items are independent, so they should run at once; tokens are money, so a workspace must stop spending at a known point.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "ubiquitous",
+          "action": "for any item whose state has a registered step function, that is not paused, has no open decision and has no step running, call that function with the item in a goroutine of its own, at each pass, a pass being run once a second and whenever an item, a decision or a session changed",
+          "contract": "at most one step function runs for an item at a time; a function that returns without changing the item is called again at the next pass; a function that returns an error or panics is written to the daemon's log with the item's number and called again at the next pass, and the daemon keeps running; an item in a state without a function is left alone; a slow step of one item does not delay another item's step",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/sched/sched_test.go, with the pass triggered by the test instead of the one second timer: register a step for 'implementing' that counts its calls and blocks on a channel; items 1 and 2 implementing, item 3 in 'landing' with no function, item 4 implementing with an open decision; pass twice; assert calls == {1: 1, 2: 1} and none for 3 and 4; release item 1; pass; assert calls[1] == 2 while item 2 is still in its first call. A step that panics for item 5: assert the log line names item 5, the next pass calls it again, and items 1 and 2 are still served"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "ubiquitous",
+          "action": "run at most `sessions.max_parallel` sessions at once over all workspaces, a session asked for beyond that waiting until a running one has ended",
+          "contract": "with `max_parallel` 2 and five sessions asked for, never more than two run at the same moment and all five run; a waiting request whose context is cancelled returns that context's error and takes no place",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/sched/sched_test.go, with a fake session runner that records the number running at once and ends each session when the test says: ask for five sessions from five step functions with max_parallel 2; assert max concurrent == 2; end them one by one; assert five ran. Cancel the context of a sixth waiting request; assert it returns context.Canceled and the runner never saw it"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "event_driven",
+          "condition": "a place becomes free while several asked sessions wait",
+          "action": "start the waiting sessions in this order: those asked with the repair class; then those of items in `implementing` or `reviewing`, by the time each was asked; then those of items in `ready`, by the time each item became `ready`, oldest first; then those of items in any other state, by the item's creation time, oldest first",
+          "contract": "the order in which the sessions start is the order given, whatever the order in which they were asked",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/sched/sched_test.go, with max_parallel 1 and one session running: ask, in this order, for {item A in 'new' created at T1, item B ready since T5, item C ready since T3, item D reviewing asked at T9, item E implementing asked at T8, item F asked with sched.ClassRepair, item G in 'planning' created at T0}; end sessions one at a time; assert the start order == [F, E, D, C, B, G, A]"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "state_driven",
+          "condition": "a registered start guard refuses an item",
+          "action": "start no session for that item, start the waiting sessions of other items in their order, report the guard's reason as what the item waits for, and ask the guard again at each pass",
+          "contract": "the refused request keeps waiting and does not take a place; `Scheduler.Waiting(item)` returns the reason of the first refusing guard in registration order; once the guard allows the item its session starts at the next free place; a guard that returns an error is treated as refusing, with the error's first line as the reason",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/sched/sched_test.go: sched.RegisterGuard('dependency', g) where g refuses item B with 'waits for package 03' until a flag is set; ask for sessions of B (ready since T1) and C (ready since T2) with max_parallel 1; assert C starts and B does not; assert sched.Waiting(B) == 'waits for package 03'; set the flag; end C; assert B starts; assert the guard was asked at each pass"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "state_driven",
+          "condition": "the hub is unreachable or does not accept the worker token (`Available` of the hub client is false for the worker credential)",
+          "action": "start no session, let the sessions that run go on, and start the waiting ones in their order once the hub is available again",
+          "contract": "no request for a session reaches the hub while it is unavailable; a session that was running ends with its own outcome; `Scheduler.Waiting(item)` returns `the hub`; the waiting sessions start without a restart of the daemon",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/sched/sched_test.go, with a stub of the hub client's Available: one session running, two asked; Available = false; pass three times; assert the runner started nothing new and the running session is not ended; assert sched.Waiting(item) == 'the hub'; Available = true; pass; assert the next session starts"
+          }
+        },
+        {
+          "id": "REQ-4.6",
+          "pattern": "ubiquitous",
+          "action": "for any workspace, add the input tokens, cache-creation tokens and output tokens its items' sessions report, cache-read tokens not counted, to a count kept in the store for the day, in the daemon's time zone, on which each report is observed, and give the count of the current day as the workspace's tokens used today",
+          "contract": "`GET /api/v1/status` and `nightshift workspace show` report the count of the current day through the source package 02 offers; tokens a session reports before local midnight count for that day and those it reports after for the next; the count survives a restart; the tokens of a repair session are counted; the count holds a running session's tokens so far",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/sched/daily_test.go, with an injected clock in a zone two hours east of UTC: observe 100 tokens at 23:59 local and 40 at 00:01 local for workspace 'demo'; assert TokensToday('demo') == 40 and the count of the day before == 100; reopen the store; assert the same; observe 5 for a session asked with ClassRepair; assert 45. In internal/daemon/e2e_test.go (see the daily-limit flow): status.workspaces[0] reports the tokens of a session that is still running"
+          }
+        },
+        {
+          "id": "REQ-4.7",
+          "pattern": "state_driven",
+          "condition": "a workspace's count of tokens for the current day is at or above the workspace's daily limit",
+          "action": "start no session for an item of that workspace unless it was asked with the repair class, let the workspace's running sessions finish, and go on calling the step functions of its items",
+          "contract": "a session asked for an item of another workspace starts; a step function of the workspace that asks for no session is still called; `Scheduler.Waiting(item)` returns `the daily limit`; the waiting sessions start in their order, without a restart, at the first pass after local midnight or after the limit was set above the count; a repair-class session starts although the limit is reached",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/sched/daily_test.go, limit 1000 read through a stub of the workspace service: count 1000; ask for a session of an item of 'demo' and one of 'other'; assert only 'other' starts; assert the running session of 'demo' is not ended; assert a session-free step function of 'demo' was called at the pass; assert Waiting == 'the daily limit'; a ClassRepair request for 'demo' starts. Then a table over {clock moved past local midnight, limit raised to 2000}: pass; assert the waiting session starts"
+          }
+        },
+        {
+          "id": "REQ-4.8",
+          "pattern": "event_driven",
+          "condition": "a workspace's count of tokens for the current day reaches or passes the workspace's daily limit for the first time on that day",
+          "action": "write one entry `daily limit reached: <count> of <limit> tokens` to the workspace's thread, marking the thread unread",
+          "contract": "the workspace's thread holds exactly one such entry per local day, also when further tokens are counted, when the limit was raised and reached again on that day, and when the daemon was restarted in between; on the next day the limit being reached writes one again",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/sched/daily_test.go, with a real inbox: limit 1000; observe 600, then 500; assert the thread of 'demo' has one entry 'daily limit reached: 1100 of 1000 tokens' and is unread; observe 50; raise the limit to 2000 and observe 900; reopen the store and observe 10; assert still one entry; move the clock to the next day, observe 2000; assert two entries"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "Pausing and resuming",
+      "rationale": "A person who sees something going wrong must be able to stop it at once, and to let it go on later from where it was.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "event_driven",
+          "condition": "`POST /api/v1/items/{number}/pause` names an item that is neither `done` nor `abandoned` and that no pause flag holds, neither its own nor its workspace's",
+          "action": "set the item's pause flag, cancel its running step, end its running session and record that session as `interrupted`, keep the item's state, and append the event `item.updated`",
+          "contract": "status 200 with the item, whose `markers` hold `paused`; `nightshift item pause <N>` prints `paused item <N>` and exits 0, and with `--json` prints the item; the session's outcome is `interrupted`; the functions registered with `OnPause` were each called once with the item",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "new file internal/sched/pause_test.go, through the router with a real item store and a fake session runner: item 7 implementing with a session running; r = post('/api/v1/items/7/pause'); assert r.status == 200 and r.json.markers contains 'paused'; assert the session returned with outcome interrupted; assert item 7's state is still 'implementing'; assert the event log's last event is item.updated for item 7; assert the OnPause function saw item 7 once. In internal/cli/cli_test.go: ['item','pause','7'] -> code 0, stdout 'paused item 7\\n'"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "state_driven",
+          "condition": "an item's pause flag is set, or the pause flag of its workspace is set",
+          "action": "call no step function for the item, start no session for it, also not one asked with the repair class, keep its state, and report the marker `paused` for it",
+          "contract": "`nightshift item show <N>` and `nightshift item list` print `paused` for the item; `Scheduler.Paused(item)` is true; an item created in a paused workspace is held from its creation; the pause flags survive a restart",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/sched/pause_test.go: pause item 7; pass three times; assert its step function was not called and a ClassRepair request for it does not start; assert sched.Paused(7); pause workspace 'demo', create item 9 in it; pass; assert no step call for 9 and its markers hold 'paused'; reopen the store; assert both flags are still set"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "event_driven",
+          "condition": "`POST /api/v1/items/{number}/resume` names an item whose pause flag is set",
+          "action": "clear the flag, append the event `item.updated`, call the functions registered with `OnResume`, and, unless the item's workspace is paused, call the item's step function for its state at the next pass",
+          "contract": "status 200 with the item, whose `markers` no longer hold `paused`; `nightshift item resume <N>` prints `resumed item <N>` and exits 0; a new session for the step the interrupted one was for starts; no `session_failed` decision is opened for the interruption",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/sched/pause_test.go: after the pause of item 7 above: r = post('/api/v1/items/7/resume'); assert r.status == 200 and 'paused' not in r.json.markers; pass; assert the step function was called and the fake runner started a session with the same step name; assert no decision is open; assert the OnResume function saw item 7 once"
+          }
+        },
+        {
+          "id": "REQ-5.4",
+          "pattern": "event_driven",
+          "condition": "`POST /api/v1/workspaces/{slug}/pause` names a registered workspace whose pause flag is not set, or `POST /api/v1/workspaces/{slug}/resume` one whose flag is set",
+          "action": "set or clear the workspace's pause flag and append the event `workspace.updated`; at a pause, cancel the running step and end the running session, as `interrupted`, of every item of the workspace; at a resume, let every item of the workspace whose own flag is not set continue with the step of its state",
+          "contract": "status 200 with the workspace, whose `paused` is `true` after a pause and `false` after a resume; `nightshift workspace pause <slug>` prints `paused <slug>` and `resume` prints `resumed <slug>`; `nightshift workspace list` prints `paused` after the workspace's state; an item paused by itself before the workspace's pause stays paused after the workspace's resume",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/sched/pause_test.go: items 1 and 2 of 'demo' each with a running session, item 3 of 'other' running; post('/api/v1/workspaces/demo/pause'); assert status 200 and json.paused == true; assert both sessions of 'demo' ended interrupted and the one of 'other' still runs; post('/api/v1/workspaces/demo/resume'); assert json.paused == false; pass; assert the steps of items 1 and 2 are called again. Second case: item 2 is paused by itself first, then the workspace is paused and resumed; pass; assert item 1's step is called and item 2's is not, and item 2's markers still hold 'paused'. In internal/cli/cli_test.go: the two commands' lines and exit code 0"
+          }
+        },
+        {
+          "id": "REQ-5.5",
+          "pattern": "unwanted",
+          "condition": "a pause names an item that is `done` or `abandoned` or already held by a pause flag, a resume names an item that is not paused or that is held only by its workspace's flag, a workspace pause names a paused workspace, a workspace resume names one that is not paused, or any of the four routes names an item or a workspace nightshiftd does not know",
+          "action": "refuse the request and change nothing",
+          "contract": "status 409 with `error_type` `conflict` and the message `item <N> is done`, `item <N> is abandoned`, `item <N> is already paused`, `item <N> is not paused`, `item <N> is paused with its workspace <slug>`, `workspace <slug> is already paused` or `workspace <slug> is not paused`; status 404 `not_found` for an unknown item or workspace; the `nightshift` command exits 1 with the message on stderr; no flag changed and no event was appended; a command without its argument, or with a number that is no positive integer, exits 2",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/sched/pause_test.go, through the router, a table over {pause of a done item, of an abandoned item, of a paused item, of an item whose workspace is paused -> 'item <N> is already paused'; resume of an item that is not paused; resume of an item held only by its workspace; workspace pause twice; workspace resume of an unpaused one; item 999; workspace 'nope'}: r = post(route); assert r.status and r.json.message; assert the event log grew by nothing. In internal/cli/cli_test.go: ['item','pause','999'] -> code 1 with the message; ['item','pause'] and ['item','pause','x'] -> code 2"
+          }
+        },
+        {
+          "id": "REQ-5.6",
+          "pattern": "state_driven",
+          "condition": "an item is paused and its open `session_failed` or `session_limit` decision is answered",
+          "action": "accept the answer, keep it in the store, and carry it out only when the item is resumed, in the order of the answers",
+          "contract": "the answer route answers as for any decision; until the resume an item answered `abandon` is not `abandoned` and an item answered `retry` or `continue` starts no session; at the resume `abandon` leaves the item `abandoned`, and `retry` or `continue` lets its step start; an answer given before a restart of the daemon is still carried out at the resume after it",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/sched/decisions_test.go, a table over {session_failed + abandon, session_failed + retry, session_limit + continue}: open the decision, pause the item, answer through POST /api/v1/decisions/{id}/answer; assert status 200; pass three times; assert the item's state is unchanged and no session started; (in one row: close and reopen the store and build a new scheduler;) resume; pass; assert 'abandoned', or that the step function was called and a session started"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-6",
+      "title": "Stopping, restarting and the status",
+      "rationale": "The daemon is stopped for upgrades and dies with its machine; neither may cost an item its place or count against it.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-6.1",
+          "pattern": "event_driven",
+          "condition": "nightshiftd receives SIGTERM or SIGINT and runs the shutdown step `sessions`",
+          "action": "start no further session and call no further step function, end the process group of every running session, record each of those sessions as `interrupted`, and return from the step when all have ended",
+          "contract": "the daemon exits with code 0 within its 30 seconds; every session that was running is `interrupted` in the store; no process of a session remains; a session asked for after the signal is not started",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the grace between SIGTERM and SIGKILL of a session's group set to 200 milliseconds"
+            ],
+            "pseudocode": "in internal/daemon/lifecycle_test.go (package 01's file): a daemon in-process with two items whose fake claude sleeps; wait until two sessions run; deliver SIGTERM through the channel the signal handler feeds; assert wait(daemon) == 0; reopen the store; assert both sessions' outcome == 'interrupted'; assert neither fake claude process is alive; assert the step function's call count did not grow after the signal"
+          }
+        },
+        {
+          "id": "REQ-6.2",
+          "pattern": "event_driven",
+          "condition": "nightshiftd starts and its store holds a session recorded as `running`",
+          "action": "record that session as `interrupted`, revoke its token, complete it on the hub as `failed` with the `error_message` `interrupted`, and let the scheduler call the step function of the item's state, so that the item gets a new session for the same step",
+          "contract": "after the start no session is `running` in the store that has no process; the hub's session has ended; the old token is revoked; a session for the same item and step name is started; the same holds for a session that a shutdown recorded as `interrupted`, whose reports are sent at this start when the shutdown had no time for them",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/session/session_test.go: write a session row {running, item 7, step 'implement', token id T} into the store as a killed daemon leaves it; svc = session.New(store, …); svc.Recover(ctx); assert the row's outcome == 'interrupted'; assert fakeHub.Session(id).status == 'failed' with error_message 'interrupted'; assert token T is revoked. The new session for the same step is asserted by the restart flow in internal/daemon/e2e_test.go"
+          }
+        },
+        {
+          "id": "REQ-6.3",
+          "pattern": "ubiquitous",
+          "action": "for any session recorded as `interrupted`, whether by a pause, an abandon, a shutdown or the daemon's death, leave the count of failures in a row of its item and step as it was and open no `session_failed` decision",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/sched/failures_test.go, a table over the four causes {pause, abandon hook, shutdown step, recovery at start}: one failed session for step 'implement', then a session ended by the cause, then (where the item still lives) one more failed session; assert no decision opened at the interruption; assert the decision opens at the second failed session and its evidence names the two failed sessions and not the interrupted one"
+          }
+        },
+        {
+          "id": "REQ-6.4",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/status`, or the person runs `nightshift status`",
+          "action": "report each running session with its id, its item's number, its workspace, its role, its model, the time it started and its tokens so far, and report whether sessions are isolated",
+          "contract": "status 200 with `\"sessions\": [{\"id\", \"item\", \"workspace\", \"role\", \"model\", \"started_at\", \"tokens\"}]`, oldest first, an empty list when none runs, and `\"isolation\": \"user\"` or `\"unisolated\"`; `nightshift status` prints, after the hub's lines, `sessions: unisolated` when it is so and one line `session <id> item <N> <role> <model> <tokens> tokens` per running session",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/api/server_test.go (package 01's file), with the sessions source this package registers over a session service holding two running sessions: r = get('/api/v1/status'); assert r.json.sessions == the two, oldest first, each with the seven members; assert r.json.isolation == 'unisolated'. In internal/cli/cli_test.go, a table over {isolation user with no session -> no extra line, unisolated with one session -> the lines 'sessions: unisolated' and 'session <id> item 7 implementer m-impl 170 tokens'}"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "An implementer session and a review run from start to their record",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "starts `nightshiftd` with the three roles and a session setting configured"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "passes the start checks `roles` and `sessions`, and its scheduler calls the step function of an item in `implementing`, which asks for an implementer session"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "registers the session on the hub, mints a token bound to the item's fork, brings the item's clone to the ref and starts `claude -p` through the helper"
+        },
+        {
+          "actor": "hub",
+          "action": "stores the session, answers the token and serves the fork to git"
+        },
+        {
+          "actor": "implementer",
+          "action": "commits, pushes a branch with the session's token, writes its stream and its result file, and exits"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "returns the result to the step, reports the usage, completes the session on the hub, revokes the token and writes the thread entries"
+        },
+        {
+          "actor": "nightshift",
+          "action": "requests `GET /api/v1/sessions/{id}/log` for `nightshift session log <id>` and prints the stream"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "calls the step function of the item, now `reviewing`, which asks for a reviewer session; it runs in a clone of its own"
+        },
+        {
+          "actor": "reviewer",
+          "action": "reads a file of the clone and answers with the verdict `agree`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its start checks, scheduler, session service and store",
+          "the helper mode of the binary, started as a process",
+          "git, against the fake hub's git endpoint",
+          "the event log and the inbox",
+          "the nightshift client's run function"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) with the workspace `demo` registered through package 02's workspace.Service and a fork `demo--i1`",
+          "`sessions.unisolated = true`; the helper is the test binary re-executed",
+          "a fake `claude` on PATH: a script the test writes that prints stream-json lines with usage, commits, pushes and writes the result file",
+          "the reviewer's provider is a provider/faux client scripted with one `read_file` call and the verdict",
+          "two step functions the test registers, for `implementing` (asks for an implementer session, then moves the item to `reviewing`) and `reviewing` (asks for a reviewer session, then records the verdict), since packages 05 and 06 are not there yet"
+        ],
+        "end_state": [
+          "the fake hub holds two ended sessions, archetypes `implementer` and `reviewer`, each `completed` with one usage record and `metadata.item` 1",
+          "the push the fake claude made is on the fork, authenticated with a token that is now revoked",
+          "`nightshift session log <id>` exits 0 and prints the lines the fake claude wrote",
+          "the review step received the verdict `agree`",
+          "the item's thread holds two `session_started` and two `session_ended` entries",
+          "`nightshift status` printed `sessions: unisolated`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go (package 01's file, with its startDaemon helper): d = startDaemon(cfg with roles and unisolated); d.sched.RegisterStep('implementing', implStep); d.sched.RegisterStep('reviewing', reviewStep); seed item 1 in 'implementing'; eventually reviewStep saw res.Verdict.Verdict == 'agree'; assert fakeHub.Sessions() has two with status completed; assert fakeHub.Fork('demo--i1') has the pushed branch; code, out, _ = cli.Run(['session','log', implID, …]); assert code == 0 and out == the fake claude's lines"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "A step that fails twice asks the person, and a retry completes it",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "calls the step function of an item in `implementing`, which asks for an implementer session"
+        },
+        {
+          "actor": "implementer",
+          "action": "ends with an error, twice in a row"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "starts the step once more after the first failure, and after the second opens a `session_failed` decision with both reasons and both stream paths"
+        },
+        {
+          "actor": "person",
+          "action": "reads the decision in `nightshift inbox --action` and runs `nightshift decide <id> --option retry`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "sets the step's failures to zero and calls the step function again"
+        },
+        {
+          "actor": "implementer",
+          "action": "writes its result file and exits without an error"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "returns the completed result to the step"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its scheduler and session service",
+          "the inbox of package 03 with its decision routes and option handlers",
+          "the helper and a fake `claude` process",
+          "the nightshift client's run function"
+        ],
+        "setup": [
+          "the fake hub, workspace and fork of PATH-1",
+          "a fake `claude` that exits 1 with `boom` on stderr while a marker file is absent and completes once the test created it",
+          "a step function for `implementing` the test registers"
+        ],
+        "end_state": [
+          "exactly one `session_failed` decision was opened, with the option keys `retry` and `abandon`, and it is answered `retry`",
+          "three sessions of the item are on the fake hub: two `failed` with `error_message` `boom`, one `completed`",
+          "the step function received a completed result",
+          "the item never left `implementing` while it waited"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg); register implStep; seed item 1; eventually out of cli.Run(['inbox','--action', …]) names a session_failed decision; id = its id; assert cli.Run(['decision','show', id]) output holds 'boom' twice and two stream paths; create the marker file; assert cli.Run(['decide', id, '--option', 'retry']) == 0; eventually implStep saw outcome completed; assert fakeHub.Sessions() statuses == [failed, failed, completed]"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "The daily limit holds a workspace's sessions until the person raises it",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "starts a session for the first of three items of a workspace, in the start order"
+        },
+        {
+          "actor": "implementer",
+          "action": "reports more tokens than the workspace's daily limit and completes"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "counts the tokens, writes `daily limit reached: <count> of <limit> tokens` to the workspace's thread, and starts no session for the two other items"
+        },
+        {
+          "actor": "nightshift",
+          "action": "prints the workspace's tokens used today for `nightshift workspace show <slug>`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift workspace set <slug> --daily-tokens <N>` with a higher limit"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "starts the waiting sessions in their order"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its scheduler, session service and store",
+          "package 02's workspace service and its `workspace set` and `workspace show` commands",
+          "the inbox's workspace thread",
+          "the helper and a fake `claude` process"
+        ],
+        "setup": [
+          "the fake hub of PATH-1 with three forks",
+          "the workspace `demo` with a daily limit of 1,000 tokens",
+          "`sessions.max_parallel = 1`",
+          "a fake `claude` whose stream reports 1,200 input and output tokens and 5,000 cache-read tokens",
+          "a step function for `ready` the test registers, which asks for one session and then moves the item on",
+          "three items of `demo` in `ready`, made ready one second apart"
+        ],
+        "end_state": [
+          "after the first session exactly one session ran, and the two other items are still `ready`",
+          "the thread of `demo` holds one entry `daily limit reached: 1200 of 1000 tokens` and is in `nightshift inbox --unread`",
+          "`nightshift workspace show demo` prints `1200 used today`",
+          "after `workspace set demo --daily-tokens 100000` the two other sessions ran, the item that was ready earlier first",
+          "the thread still holds one such entry"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg max_parallel 1); register readyStep; seed items 1, 2, 3 ready at T, T+1s, T+2s; eventually fakeHub.Sessions() has 1 ended; wait five passes; assert still 1; assert cli workspace show output contains '1200 used today'; assert the workspace thread has the entry once; cli.Run(['workspace','set','demo','--daily-tokens','100000']); eventually fakeHub.Sessions() has 3; assert the second started was item 2's"
+      }
+    },
+    {
+      "id": "PATH-4",
+      "title": "The person pauses an item in the middle of a session and resumes it",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "runs an implementer session for an item"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item pause <N>`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "ends the session's processes, records the session as interrupted and marks the item `paused`"
+        },
+        {
+          "actor": "nightshift",
+          "action": "prints the item with the marker `paused` for `nightshift item show <N>`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item resume <N>`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "calls the item's step function again, which gets a new session for the same step"
+        },
+        {
+          "actor": "implementer",
+          "action": "completes"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its scheduler and session service",
+          "the pause and resume routes and commands",
+          "package 03's `item show`",
+          "the helper and a fake `claude` process"
+        ],
+        "setup": [
+          "the fake hub, workspace and fork of PATH-1",
+          "a fake `claude` that sleeps while a marker file is absent",
+          "a step function for `implementing` the test registers"
+        ],
+        "end_state": [
+          "`nightshift item pause 1` exited 0 and the first fake `claude` process is gone",
+          "`nightshift item show 1` printed `paused` and the state `implementing`",
+          "while the item was paused no second session was registered on the fake hub",
+          "after the resume a second session ran and completed",
+          "the fake hub's first session is `failed` with `error_message` `interrupted`",
+          "no decision was opened"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg); register implStep; seed item 1; eventually one session runs; assert cli.Run(['item','pause','1']) == 0; assert the claude pid is gone; assert cli item show output contains 'paused'; wait five passes; assert len(fakeHub.Sessions()) == 1; create the marker file; assert cli.Run(['item','resume','1']) == 0; eventually implStep saw outcome completed; assert no decision in GET /api/v1/decisions"
+      }
+    },
+    {
+      "id": "PATH-5",
+      "title": "The daemon is stopped in the middle of two sessions and started again",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "runs implementer sessions for two items"
+        },
+        {
+          "actor": "person",
+          "action": "sends SIGTERM to nightshiftd"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "ends both sessions, records each as interrupted and exits with code 0"
+        },
+        {
+          "actor": "person",
+          "action": "starts nightshiftd again"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "revokes the old sessions' tokens, completes them on the hub, and calls both items' step functions, each of which gets a new session for the same step"
+        },
+        {
+          "actor": "hub",
+          "action": "stores the two new sessions"
+        },
+        {
+          "actor": "implementer",
+          "action": "completes in both sessions"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function, started twice over one store file",
+          "the shutdown step `sessions` in package 01's shutdown sequence",
+          "the helper and fake `claude` processes"
+        ],
+        "setup": [
+          "the fake hub of PATH-1 with two forks",
+          "a fake `claude` that sleeps while a marker file is absent",
+          "a step function for `implementing` registered at both starts",
+          "two items in `implementing`"
+        ],
+        "end_state": [
+          "the first daemon exited with code 0 and no fake `claude` process of it is alive",
+          "the fake hub holds four sessions: two `failed` with `error_message` `interrupted` and two `completed`",
+          "the tokens of the first two sessions are revoked",
+          "no `session_failed` decision was opened",
+          "both items are in the state the step function moved them to"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d1 = startDaemon(cfg); register implStep; seed items 1 and 2; eventually two sessions run; d1.signal(SIGTERM); assert d1.wait() == 0; assert both claude pids are gone; create the marker file; d2 = startDaemon(cfg); register implStep; eventually both steps saw outcome completed; assert fakeHub session statuses sorted == [completed, completed, failed, failed]; assert no decision is open"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "POST /api/v1/sessions",
+          "import_path": "<hub.endpoint>/api/v1/sessions",
+          "signature": "scope sessions:write; body {workspace_slug (required: a repository or a task fork), id (a UUID; generated when absent), run_id, node_id, archetype, model (labels of at most 255 characters), metadata (any JSON value)}; 201 with the session object, status `active`; the same id again for the same workspace answers 200 with the stored session; 400 invalid_request, 403 forbidden, 404 not_found, 409 conflict, 409 workspace_archived"
+        },
+        {
+          "name": "POST /api/v1/sessions/{id}/usage",
+          "import_path": "<hub.endpoint>/api/v1/sessions/{id}/usage",
+          "signature": "scope sessions:write; body {model (required), id (a UUID, generated when absent), input_tokens, output_tokens, cache_read_tokens (integers from 0 to 2^40, default 0)}; increments, not running totals; 201 with the usage record; a replay of the same id answers 200; 409 session_not_active once the session has ended; 409 conflict"
+        },
+        {
+          "name": "POST /api/v1/sessions/{id}/complete",
+          "import_path": "<hub.endpoint>/api/v1/sessions/{id}/complete",
+          "signature": "scope sessions:write; body {status (required: completed, failed or timeout), error_message, duration_ms, cache_creation_input_tokens (default 0)}; 200 with the session; completing a session that has ended answers 200 with it as it is; 400 invalid_request"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/tokens",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/tokens",
+          "signature": "scope tokens:manage; the caller must own the workspace (a repository or a fork); body {name (required, 1 to 255 characters), permissions (required, registered scope names), paths, expires (days: 0, 30, 60 or 90; default 90)}; 201 with the Token object, `workspace` set to the slug and the secret in `token` (`parley_pat_<token_id>_<secret>`); a calling PAT can grant only scopes it holds by exact name (`git:write` does not allow minting `git:read`): 403 insufficient_scope; 403 token_bound; 409 workspace_archived"
+        },
+        {
+          "name": "DELETE /api/v1/user/tokens/{token_id}",
+          "import_path": "<hub.endpoint>/api/v1/user/tokens/{token_id}",
+          "signature": "scope tokens:manage; 200 with the Token object, `revoked_at` set; revoking a revoked token answers it unchanged; 404 not_found"
+        },
+        {
+          "name": "git over HTTP",
+          "import_path": "<hub.endpoint>/git/{org}/{slug}.git",
+          "signature": "HTTP Basic with any user name and the credential as the password; a PAT needs git:read to fetch and git:write to push (git:write includes git:read for git); the push option `parley.session=<id>` names the agent session of a push"
+        }
+      ]
+    },
+    {
+      "package": "github.com/agent-fox-dev/agentkit-go",
+      "version": "v0.11.0",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "Config",
+          "import_path": "github.com/agent-fox-dev/agentkit-go",
+          "signature": "type Config struct { Client core.ProviderClient; Provider string; Model string; Effort Effort; Env map[string]string; Getenv func(string) string; System string; Prefix []core.Message; Toolset Toolset; MaxTurns int; MaxCostUSD float64; Timeout time.Duration; Prune PruneOptions; MaxTokens int }"
+        },
+        {
+          "name": "New",
+          "import_path": "github.com/agent-fox-dev/agentkit-go",
+          "signature": "func New(cfg Config) (*Agent, error)"
+        },
+        {
+          "name": "Agent.Run",
+          "import_path": "github.com/agent-fox-dev/agentkit-go",
+          "signature": "func (a *Agent) Run(ctx context.Context, prompt string) (core.RunResult, error)"
+        },
+        {
+          "name": "Agent.Stream",
+          "import_path": "github.com/agent-fox-dev/agentkit-go",
+          "signature": "func (a *Agent) Stream(ctx context.Context, prompt string) (*core.EventStream, error)"
+        },
+        {
+          "name": "Agent.Usage",
+          "import_path": "github.com/agent-fox-dev/agentkit-go",
+          "signature": "func (a *Agent) Usage() core.Usage"
+        },
+        {
+          "name": "Toolset",
+          "import_path": "github.com/agent-fox-dev/agentkit-go",
+          "signature": "type Toolset = runner.Toolset; struct { Tools []core.Tool; Policy core.ToolPolicy; Guard core.BeforeToolCall; After core.AfterToolCall; Events func(core.Event) }"
+        },
+        {
+          "name": "Providers",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/catalog",
+          "signature": "func Providers() []string // anthropic, openrouter, ollama"
+        },
+        {
+          "name": "Select",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/catalog",
+          "signature": "func Select(provider, model string, effort core.Effort) (Selection, error) // an empty provider means anthropic; errors.Is(err, catalog.ErrUnknownProvider), catalog.ErrNoModel"
+        },
+        {
+          "name": "Usage",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/core",
+          "signature": "type Usage struct { InputTokens int64 /* net of cache reads and writes */; OutputTokens int64; ReasoningTokens int64; CacheReadTokens int64; CacheWriteTokens int64; CacheWrite1hTokens int64; TotalTokens int64; Requests int64; CostUSD float64; BilledModel string; Unpriced bool; … }"
+        },
+        {
+          "name": "RunResult",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/core",
+          "signature": "type RunResult struct { Messages Messages; StopReason RunStopReason; LastReason StopReason; Usage Usage; TurnCount int; Error error }; func (r RunResult) FinalText() string"
+        },
+        {
+          "name": "EventStream",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/core",
+          "signature": "func (s *EventStream) Events() iter.Seq[Event]; func (s *EventStream) RunResult() (RunResult, error); TurnEndEvent{TurnIndex int; Message AssistantMessage; ToolResults []ToolResultMessage; Usage Usage}; AgentDoneEvent{Result RunResult; Usage Usage}"
+        },
+        {
+          "name": "ToolPolicy",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/core",
+          "signature": "type ToolPolicy struct { Tools []Tool; ToolNames []string; ExcludeTools []string; NoTools NoToolsMode; CustomTools []Tool }"
+        },
+        {
+          "name": "For",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/tools",
+          "signature": "func For(ws *workspace.Workspace, opts Options) ([]core.Tool, error)"
+        },
+        {
+          "name": "FileNavigationTools",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/tools",
+          "signature": "func FileNavigationTools() []string"
+        },
+        {
+          "name": "Open",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/workspace",
+          "signature": "func Open(root string, opts Options) (*Workspace, error)"
+        },
+        {
+          "name": "faux",
+          "import_path": "github.com/agent-fox-dev/agentkit-go/provider/faux",
+          "signature": "func New(turns ...Turn) *Provider; func Text(s string) Turn; func ToolCall(id, name, args string) Turn; type Turn struct { Blocks []core.ContentBlock; StopReason core.StopReason; RawStopReason string; ErrorMessage string; Usage core.Usage; Err error; Delay time.Duration }; func (p *Provider) Requests() []core.Request; func (p *Provider) Calls() int"
+        }
+      ]
+    },
+    {
+      "package": "Claude Code command line (claude), as docs/specrun.md of agent-fox-dev/spec states it",
+      "version": "commit e9081fa",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "claude -p",
+          "import_path": "claude",
+          "signature": "claude -p \"<prompt>\" --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools ScheduleWakeup,CronCreate; one JSON event per line on stdout; the last event of type `result` carries `is_error` and the final text in `result`; the environment variable CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS bounds how long the session waits on its subagents"
+        }
+      ]
+    },
+    {
+      "package": "Claude Code command line (claude), parts docs/specrun.md does not state",
+      "version": "commit e9081fa",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "--model",
+          "import_path": "claude",
+          "signature": "claude -p … --model <model id or alias>"
+        },
+        {
+          "name": "usage in stream-json events",
+          "import_path": "claude",
+          "signature": "an event {\"type\":\"assistant\",\"message\":{\"id\":…,\"usage\":{\"input_tokens\",\"output_tokens\",\"cache_creation_input_tokens\",\"cache_read_input_tokens\"}}}, repeated with the same message id for each content block; the last event {\"type\":\"result\",…,\"usage\":{the same four members, totals of the session}}"
+        },
+        {
+          "name": "claude --version",
+          "import_path": "claude",
+          "signature": "prints the version and exits 0 without a login"
+        }
+      ]
+    },
+    {
+      "package": "sudo",
+      "version": "the version installed on the daemon's machine",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "sudo -n -H -u",
+          "import_path": "sudo",
+          "signature": "sudo -n -H -u <user> -- <command> [args]: runs the command as the user, never prompts for a password (exits 1 with `sudo: a password is required`), sets HOME to the user's home directory, passes its standard input, output and error through"
+        }
+      ]
+    }
+  ]
+}

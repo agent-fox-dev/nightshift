@@ -1,0 +1,227 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "05",
+  "spec_name": "planning",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/change/... ./internal/plan/... ./internal/hub/... ./internal/cli/... ./internal/daemon/... -count=1"
+  },
+  "dependencies": [
+    {
+      "spec": "01",
+      "reason": "uses the hub client with Available and its typed error, the fake hub, the API server's Handle, the client's Register, the store's migrations and the e2e helper"
+    },
+    {
+      "spec": "02",
+      "reason": "uses command.Runner, gitclone.Sync, the clones directory and the hub client's Workspace"
+    },
+    {
+      "spec": "03",
+      "reason": "moves items with Transition, Abandon and CreateLinked, registers with OnChange and OnAbandon, and declares the decision kind `plan` in the inbox's registry"
+    },
+    {
+      "spec": "04",
+      "reason": "registers its step functions with the scheduler and runs planner and reviewer sessions through RunSession"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Create the item's task fork, open its draft change and abandon it",
+      "criteria": [
+        "REQ-1"
+      ],
+      "steps": [
+        "Extend internal/hubtest: `POST /api/v1/workspaces/{slug}/forks` (the name's format, `409 conflict` for a name the parent has, a scriptable error, the fork sharing its parent's repository and served at a git endpoint of its own, reusing what package 04 added for a seeded fork), `GET …/scm/refs/{name}` answering from the repository with `404 ref_not_found`, `POST …/changes` (draft changes, `400 source_not_found` for a branch the fork lacks, `409 change_exists` with details), `POST …/changes/{number}/abandon` (`409 change_closed`), and accessors Fork, Ref, Change and Changes for tests",
+        "Add the change behaviours to internal/change/change_test.go and confirm they fail; keep the fixtures (a change service over a copy of the store template of internal/store with a real item service and inbox, the fake hub with the workspace `demo`) in internal/change/helpers_test.go, the one helpers file of the package",
+        "Add to the hub client of internal/hub, each sent with the worker credential and returning Parley's error envelope as the typed error package 01 defines: CreateFork(ctx, parent, name, purpose) sending auto_change false, Ref(ctx, slug, name), OpenChange(ctx, slug, request) and AbandonChange(ctx, slug, number, reason); cover the request bodies in internal/hub/client_test.go",
+        "Add internal/change with a store migration registered with internal/store: per item the workspace, the generation, and for the current generation the fork's slug, its git URL, the branch, the change's number and its ref; construct the service with change.New over the store, the hub client, the item service and the inbox, with no package-level state",
+        "Add EnsureFork: return the stored record without a request; otherwise refuse with ErrHubUnavailable while Available of the worker credential is false, create the fork `i<N>` (or `i<N>-<g>` from generation 2 on) with the purpose `nightshift item <N>: <title>` cut to 1,024 characters, take a `409 conflict` as the item's own fork by reading its workspace object with the hub client's Workspace, store the record and write the `fork_created` entry through the inbox's Append without the unread mark",
+        "Add Get (ErrNotFound for an item with no fork), Head (the branch's sha, ErrNoBranch for `404 ref_not_found`) and Forget (drop the fork and the change of the current generation, keep the generation, send nothing)",
+        "Add OpenDraft: return the stored record when the item has a change; otherwise open the change as a draft from the fork's branch into the workspace with the title cut to 200 characters, the intent cut to 16,000 and the session id where one is given, take a `409 change_exists` as the item's own change from its details, store the number and the ref, build ChangeURL from the hub's endpoint, and write the `change_opened` entry",
+        "Add Abandon: nothing to do and nil for an item with no fork or no change; otherwise abandon the change with the reason, treat `409 change_closed` as done, and write the `change_abandoned` entry",
+        "Return the hub client's error unchanged from all four for any other answer, store nothing and write no entry in that case",
+        "Create the change service in daemon.Run after the item service and register its Abandon with the item service's OnAbandon under the name `change`, after the hook of package 04, so that an item's sessions are ended before its change is abandoned; hand the service to the end-to-end helper of internal/daemon/e2e_test.go",
+        "Name the fake hub's fork, ref and change routes under Repository Specifics in .specs/steering.md, and add internal/change to docs/architecture.md with what later packages call: EnsureFork, OpenDraft, Head, Get, Abandon, Forget and the names of the fork and the branch"
+      ],
+      "touches": [
+        "internal/hubtest",
+        "internal/hub/client.go",
+        "internal/hub/client_test.go",
+        "internal/change/change.go",
+        "internal/change/change_test.go",
+        "internal/change/helpers_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        ".specs/steering.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Start the planning of an item and give it its package number",
+      "criteria": [
+        "REQ-2"
+      ],
+      "steps": [
+        "Add the start behaviours to internal/plan/start_test.go, the route behaviours to internal/plan/routes_test.go, the number behaviours to internal/plan/number_test.go and the command's rows to internal/cli/item_test.go and confirm they fail; keep the fixtures (a plan service over a copy of the store template with a real item service, inbox and change service, a fake scheduler that records the requests of RunSession and returns scripted results, the fake hub, a stub for the default branch's tree) in internal/plan/helpers_test.go, the one helpers file of the package",
+        "Add internal/plan with a store migration registered with internal/store: one plan per item holding whether it was asked for, whether `no_plan_approval` was given, the package number, the package's directory, the accepted head, the phase (`draft`, `review`, `revise` or `ended`), the round, the verdict, the findings with their replies, the pending findings of the person, the split parts, the open decision's id, a stored answer and further evidence; later tasks fill the members they own",
+        "Construct the service with plan.New over the store, the item service, the inbox, the change service, the hub client, a session runner (the RunSession of package 04's Scheduler, an interface here), a command.Runner, the clones directory and the number of rounds (default 3); keep no package-level state, and expose Get(ctx, item) returning the plan as a value for tests and later packages",
+        "Add StepNew, the step function of the state `new`: a `spec` item moves to `ready` with the reason `imported package`; a `defect` or `change_request` whose source type is not `item`, or whose plan was asked for, moves to `planning` with the reason `planning started`; any other item is left as it is, with nil returned",
+        "Add Request(ctx, item, noPlanApproval) with the refusals ErrNotFound, a conflict naming the state for an item that is not `new`, and a conflict for a `spec` item; it stores that the plan was asked for and sets `no_plan_approval` when true, never back to false; add NeedsApproval(ctx, item): the item's `plan_approval` and not the stored option",
+        "Register `POST /api/v1/items/{number}/plan` through the API server's Handle: decode the optional body refusing a non-object, an unknown member and a non-boolean with 400 invalid_request, map the refusals to 404 not_found and 409 conflict with their messages through the error helper, and answer 200 with the item as package 03's routes serialise it",
+        "Add the command `nightshift item plan <N> [--no-plan-approval]` to the item commands package 03 registered in internal/cli: the flag accepted before and after the number, the usage errors with exit code 2 before any request, `planning item <N>` on stdout or the item's JSON with --json",
+        "Add Number(ctx, item): return the stored number; otherwise, under one lock per workspace, read the `head_sha` of the workspace with the hub client's Workspace, bring the item's clone `<clones directory>/<fork slug>.plan` to it with gitclone.Sync (the fork's git URL from the change service, the worker token, the Runner), list `.specs` and `.specs/archive` with afspec.ListSpecDirs and take the highest prefix through ParseSpecDirName, a missing directory counting as none; take the highest number stored for another item of the workspace that is neither `done` nor `abandoned`; store one above the greater of the two in the same transaction that read the others; format it with two digits, three from 100 on",
+        "Make the reading of the default branch's tree a function the service is constructed with, so that the number tests replace it with a directory",
+        "Create the plan service in daemon.Run after the scheduler and the change service, and register StepNew with Scheduler.RegisterStep for `new`; give the end-to-end helper of internal/daemon/e2e_test.go a switch that starts the daemon without this package's steps, and set it in the flows of packages 03 and 04 that create or seed items without planning them",
+        "Describe the route with its refusals in docs/api.md and the command in docs/cli.md, and add internal/plan with the three states it drives and the rule for the package number to docs/architecture.md"
+      ],
+      "touches": [
+        "internal/plan/plan.go",
+        "internal/plan/start.go",
+        "internal/plan/number.go",
+        "internal/plan/routes.go",
+        "internal/plan/start_test.go",
+        "internal/plan/number_test.go",
+        "internal/plan/routes_test.go",
+        "internal/plan/helpers_test.go",
+        "internal/cli/item.go",
+        "internal/cli/item_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Run the planner, accept its package from the fork and keep its text",
+      "criteria": [
+        "REQ-3"
+      ],
+      "steps": [
+        "Add the planner behaviours to internal/plan/planner_test.go and the acceptance behaviours to internal/plan/accept_test.go and confirm they fail; build the fixture packages through afspec itself (CreateSpec, the artefacts filled, Save) once per test process and copy them per test: a valid draft `greeting`, one with a validation warning, one whose task names an unknown criterion, one without a `## Intent` section; let the fake scheduler run a scripted function as the session, which may push to the fake hub's fork, calls the Spec's Accept with the scripted result, and returns `completed`, or `failed` with the first line of Accept's error",
+        "Add StepPlanning, the step function of the state `planning`, and register it with Scheduler.RegisterStep; it does one thing per call and returns, so that the scheduler calls it again: ensure the fork, give the number, then act on the plan's phase; the phase of a new plan is `draft`",
+        "At the phase `draft`, first look at the fork: when Head finds the branch and the package with the item's number is there and passes the acceptance, take it as accepted without a session; otherwise ask RunSession for the planner session with the step name `plan`, the branch `item-<N>`, the input `text` and the prompt with `--number`, ` --defect` for a defect, and no class",
+        "Build the item's text from its source: the stored text, or for an issue the title, the body and each comment under `## Comment by <author>`",
+        "Add the acceptance function given as the Spec's Accept: parse the result document, refuse a missing outcome and any outcome but `written` with its reason, read the branch's head with the change service's Head, bring the `.plan` clone to it with gitclone.Sync, find the directory under `.specs` whose prefix equals the number as a number, load it with afspec.LoadSpec and validate it with ValidateInRoot over `.specs` of the clone; return the reasons of the criterion as errors and ignore warnings",
+        "After a `completed` result, in one store transaction: record the directory, the head and the phase `review`, and store the kept text, every regular file under the package's directory read from the clone, with the number, the directory and the head; then write the `plan_written` entry",
+        "Create the split parts from `remaining_scopes` of the result with the item service's CreateLinked, in the order listed, of the item's kind, with the scope's text or its summary, skipping a name the plan already holds, and record each new item's number with the name",
+        "Open the draft change with the change service's OpenDraft when the item has none: the item's title, the `## Intent` section of the package's PRD body without its heading, and the session's id (empty for a package taken without a session)",
+        "Return from the step without changing the plan for a result that is not `completed` and for sched.ErrNotStarted, and return the context's error for a cancelled context",
+        "Add Kept(ctx, item), returning the text stored last or ErrNotFound, and register with the item service's OnChange a hook that, when an item becomes `done` or `abandoned`, deletes every kept text and the plan's clone directory `<clones directory>/<fork slug>.plan`, the latter through the Runner so that it works for a clone the session user owns",
+        "Add to docs/architecture.md the planner's prompt, the acceptance order with its reasons, the kept text with Kept, and the clone nightshift reads the fork through"
+      ],
+      "touches": [
+        "internal/plan/planning.go",
+        "internal/plan/accept.go",
+        "internal/plan/kept.go",
+        "internal/plan/planner_test.go",
+        "internal/plan/accept_test.go",
+        "internal/plan/helpers_test.go",
+        "internal/daemon/run.go",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Have every plan reviewed, for up to three rounds",
+      "criteria": [
+        "REQ-4"
+      ],
+      "steps": [
+        "Add the review behaviours to internal/plan/review_test.go and confirm they fail",
+        "At the phase `review`, ask RunSession for a reviewer session with the step name `plan_review`, the fork and the accepted head as the commit; build its prompt, the review brief, from the item's text, the package's directory, the verdict object package 04 requires (`{\"verdict\": \"agree\" | \"object\", \"findings\": [{\"text\", \"file\"?, \"line\"?, \"criterion\"?}]}`) and, where the plan has findings of earlier reviews, each with its id, its text and its reply; give it no inputs and no Accept",
+        "On the verdict `agree`: add one to the round, store the verdict and write the `plan_review` entry `reviewer: agree`; with no pending finding of the person set the phase `ended`, otherwise set the phase `revise` with no reviewer finding",
+        "On the verdict `object`: add one to the round, replace the plan's findings by the verdict's with the ids `r<round>.<n>`, store the verdict, write the entry `reviewer: object, <n> findings` and set the phase `revise`",
+        "At the phase `revise`, ask for a planner session with the step name `plan`, the branch, the input `findings` (the JSON array: the plan's reviewer findings as `{id, source: \"review\", text, criterion?}`, then the pending findings of the person as `{id, source: \"person\", text}`) and the prompt with `--findings` and the package's directory, with the acceptance function of the planner run",
+        "After a `completed` revision: keep the text as after a first result, store each reply of `replies` with the finding of its id and `no reply` for a finding without one, mark the findings of the person it carried as delivered, create split parts for scope names not seen before, and set the phase `review`, or `ended` when the verdict is `object` and the round has reached the number of rounds",
+        "Add AddFinding(ctx, item, text) with its refusals ErrInvalid and ErrNotPlanning; a finding of the person gets the next id `p<n>` of the item and stays pending until a revision carried it",
+        "Describe the rounds, the findings file, the ids and AddFinding in docs/architecture.md"
+      ],
+      "touches": [
+        "internal/plan/planning.go",
+        "internal/plan/review.go",
+        "internal/plan/review_test.go",
+        "internal/plan/helpers_test.go",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Ask the person with the plan decision and activate an approved package",
+      "criteria": [
+        "REQ-5",
+        "REQ-6.6",
+        "REQ-6.7"
+      ],
+      "steps": [
+        "Add the decision behaviours to internal/plan/decision_test.go and the activation behaviours to internal/plan/activate_test.go and internal/daemon/start_test.go and confirm they fail; extend internal/hubtest with `POST …/policy/evaluate` answering a scripted list of requirements or a scripted error and recording the paths; add a TestMain to internal/plan that calls plan.ActivateMain when the test binary's first argument is `activate-package`",
+        "Declare the decision kind `plan` with the inbox's RegisterKind while daemon.Run wires the packages: `approve` (`activates the package and makes the item ready`), `revise` (`sends the plan back to the planner with your comment`, comment required) and `abandon` (`ends the item without landing`); register with OnAnswer one handler per option that stores the option and the comment with the plan, once, and returns nil",
+        "At the phase `ended` in StepPlanning, for a plan that needs an approval or whose verdict is `object`, move the item to `awaiting_approval` with the reason `plan ready for approval`",
+        "Add StepAwaiting, the step function of the state `awaiting_approval`, and register it: with a stored answer, carry it out; with no open decision recorded, open one; otherwise return nil",
+        "Add EvaluatePaths(ctx, slug, paths) to the hub client with the worker credential, and build the decision's evidence in the order of the criterion: the render of the package loaded from the `.plan` clone at the accepted head (from the kept text written to a temporary directory when the fork is gone), the change's URL, the distinct `touches`, the `policy` entries from EvaluatePaths over those paths, the verdict, the open findings of a plan that ended as objected, the split parts with their titles from the item service, and any further evidence the plan holds",
+        "Open the decision with the inbox's Open on the item's thread, `approve` recommended for the verdict `agree` and `revise` otherwise, and record its id with the plan in the same call; an error of the evaluation returns from the step before anything is opened",
+        "Add RegisterPrepare(name, fn) and call the functions in order before `approve` and `revise` are carried out; return `prepare <name>: <error>` for the first that fails and leave the answer stored",
+        "Add plan.ActivateMain(args, stderr): load the package with afspec.LoadSpec, call Transition to `active` on its directory, print `activate-package: <error>` and return 1 on an error, the usage and 2 for wrong arguments; have daemon.Run call it when its first argument is `activate-package`, before it reads a configuration",
+        "Add the activation: bring the `.plan` clone to the branch's head; when the package there is a draft, run the executable with `activate-package <directory>` in the clone through the Runner, then `git add` of the package's directory, a commit with the message `chore: activate package <NN_name>` and the author and committer `nightshift <nightshift@localhost>` given through the environment, and a push of HEAD to `refs/heads/item-<N>` of the fork's git URL with the worker token in an `http.extraHeader` given through GIT_CONFIG_COUNT, as internal/gitclone gives it; a package that is active already skips all of it",
+        "Carry out `approve` (activation, the `plan_approved` entry, the move to `ready` with `plan approved`), `revise` (through Revise: the comment as a pending finding of the person, the round zero, the phase `revise`, the reviewer findings cleared, the move to `planning` with `plan sent back`) and `abandon` (the item service's Abandon with `plan abandoned`); clear the stored answer and the decision's id when it was carried out",
+        "When the activation command exits other than 0, write the `activation_failed` entry, add the evidence `activation failed` with the last 50 lines of its output to the plan, move the item to `awaiting_approval` where it is not there, and let the next call open a new decision with `revise` recommended; return a failed push or hub request as the step's error without opening anything",
+        "Describe the kind `plan`, its options and its evidence in docs/api.md, the `activate-package` mode in docs/cli.md, and RegisterPrepare, Revise and the activation in docs/architecture.md"
+      ],
+      "touches": [
+        "internal/hubtest",
+        "internal/hub/client.go",
+        "internal/plan/decision.go",
+        "internal/plan/activate.go",
+        "internal/plan/planning.go",
+        "internal/plan/decision_test.go",
+        "internal/plan/activate_test.go",
+        "internal/plan/helpers_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/start_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Go on without an approval, re-open a plan decision and survive a restart",
+      "criteria": [
+        "REQ-6.1",
+        "REQ-6.2",
+        "REQ-6.3",
+        "REQ-6.4",
+        "REQ-6.5"
+      ],
+      "steps": [
+        "Add the behaviours to internal/plan/plan_test.go and confirm they fail",
+        "At the phase `ended` in StepPlanning, for a plan with the verdict `agree` that needs no approval: activate the package as an approval does, write the `plan_approved` entry `plan approved at creation: <the change's URL>` and move the item to `ready` with the reason `plan approved at creation`, opening no decision",
+        "Add Reopen(ctx, item, reason, extra): refuse an item with no kept text with ErrNotFound, move the item to `awaiting_approval` through the item service's Transition with the reason and return its error unchanged, store `extra` as the plan's further evidence, clear the recorded decision and mark the plan as needing a decision with `revise` recommended, so that StepAwaiting opens it",
+        "Have both StepPlanning and StepAwaiting return nil at once, before any request or session, while Available of the hub client is false for the worker credential",
+        "Make every write of a plan one store transaction that holds the phase and what belongs to it, so that a daemon that stops between two steps continues from the stored phase; cover each stopping point with the table of the restart check, a store file opened by two services",
+        "Add the three flows to internal/daemon/e2e_test.go with a fake `claude` script that writes, revises, commits and pushes a fixture package and writes the result file its prompt names, recording its prompts and findings files, and a provider/faux reviewer scripted per flow",
+        "Update README.md with how a defect or a change request is planned and approved and what `--no-plan-approval` does; complete docs/architecture.md with the path of an item from `new` to `ready` and with Reopen; state in docs/configuration.md that this package adds no key; run `make doc`"
+      ],
+      "touches": [
+        "internal/plan/planning.go",
+        "internal/plan/decision.go",
+        "internal/plan/reopen.go",
+        "internal/plan/plan_test.go",
+        "internal/plan/helpers_test.go",
+        "internal/daemon/e2e_test.go",
+        "README.md",
+        "docs/architecture.md",
+        "docs/configuration.md",
+        "docs/generated"
+      ],
+      "done_when": [
+        "`make check` passes on the whole tree"
+      ]
+    }
+  ]
+}

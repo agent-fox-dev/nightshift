@@ -1,0 +1,700 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "01",
+  "spec_name": "daemon_api_and_credentials",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "Configuration and start checks",
+      "rationale": "A daemon that starts half-configured fails later, in the middle of someone's work, with a worse message.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "event_driven",
+          "condition": "nightshiftd is started",
+          "action": "read its configuration from the file `--config` names, or from `~/.nightshift/config.toml` when the flag is absent, expanding a leading `~/` of every path value to the home directory of the daemon's user",
+          "contract": "the loaded configuration holds `listen`, `token_file`, `store.path`, `hub.endpoint`, `hub.worker_token` and `hub.approver_token` as the file gives them",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a temporary home directory given to the loader as a parameter, not through the process environment"
+            ],
+            "pseudocode": "new file internal/config/config_test.go, a table over {no flag -> <home>/.nightshift/config.toml is read, --config <path> -> <path> is read}: cfg = config.Load(path, home); assert every key equals the file's value; assert a store.path of '~/x.db' loads as <home>/x.db"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "ubiquitous",
+          "action": "for any key among `listen`, `token_file` and `store.path` that the configuration file omits, use the default `127.0.0.1:7878`, `~/.nightshift/token` and `~/.nightshift/store.db` respectively",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/config/config_test.go: cfg = config.Load(file with only the three [hub] keys, home); assert cfg.Listen == '127.0.0.1:7878'; assert cfg.TokenFile == home + '/.nightshift/token'; assert cfg.Store.Path == home + '/.nightshift/store.db'"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "unwanted",
+          "condition": "the configuration file is missing or unreadable, is not valid TOML, holds a key nightshiftd does not know, or lacks `hub.endpoint`, `hub.worker_token` or `hub.approver_token`",
+          "action": "fail the start check `config` and start nothing",
+          "contract": "exit code 1; exactly one line on stderr, `config: <reason>`, where the reason names the file for a missing or malformed one, is `unknown key \"<dotted key>\"` for an unknown key and `<dotted key> is not set` for a missing one; no request is sent to the hub, no listener is opened, and neither the token file nor the store file is created",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/config/config_test.go, a table over {missing file, 'listen = ' (malformed), 'hub.endpont' present, each of the three required keys absent}: _, err = config.Load(path, home); assert err.Error() == the expected reason. In internal/daemon/start_test.go: code, stderr = daemon.Run(args with a config lacking hub.endpoint); assert code == 1; assert stderr == 'config: hub.endpoint is not set\\n'; assert the fake hub saw no request; assert token file and store file do not exist"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "event_driven",
+          "condition": "nightshiftd is started",
+          "action": "run the start checks in the order `config`, `hub`, `credentials`, and run no check after the first one that fails",
+          "contract": "on a failure: exit code 1 and exactly one line on stderr that begins with the failed check's name and a colon",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) whose /readyz answers 503 and which answers every token 401"
+            ],
+            "pseudocode": "in internal/daemon/start_test.go: code, stderr = daemon.Run(valid config pointing at the fake hub); assert code == 1; assert stderr has one line and it starts with 'hub: '; assert the fake hub saw no request under /api/v1"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "unwanted",
+          "condition": "`GET <hub.endpoint>/readyz` is not answered with status 200 within 10 seconds",
+          "action": "fail the start check `hub` and start nothing",
+          "contract": "exit code 1; one line on stderr: `hub: connection refused` for a refused connection, `hub: readyz answered <status>` for another status, `hub: timeout` when no answer came within 10 seconds; no listener is opened and neither the token file nor the store file is created",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the check's timeout is a parameter the test sets to 50 milliseconds for the timeout case"
+            ],
+            "pseudocode": "in internal/daemon/start_test.go, a table over {endpoint of a closed listener -> 'hub: connection refused', fake hub with readyz 503 -> 'hub: readyz answered 503', fake hub that never answers -> 'hub: timeout'}: code, stderr = daemon.Run(cfg); assert code == 1; assert stderr == want + '\\n'; assert no token file, no store file"
+          }
+        },
+        {
+          "id": "REQ-1.6",
+          "pattern": "event_driven",
+          "condition": "every start check passed",
+          "action": "open the store at `store.path`, creating the file and its parent directory where they do not exist, and serve the API on the `listen` address",
+          "contract": "the process keeps running; `GET /api/v1/status` on the listen address with the client token answers 200",
+          "check": {
+            "same_as": "PATH-1"
+          }
+        },
+        {
+          "id": "REQ-1.7",
+          "pattern": "unwanted",
+          "condition": "after the start checks passed, the store cannot be opened, the client token file cannot be written, or the listen address cannot be bound",
+          "action": "end the process without serving the API",
+          "contract": "exit code 1; one line on stderr, `store: <error>`, `token: <error>` or `listen: <error>`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub that passes the hub and credentials checks"
+            ],
+            "pseudocode": "in internal/daemon/start_test.go, a table over {store.path inside a file that is not a directory -> prefix 'store: ', token_file inside a read-only directory -> prefix 'token: ', listen on an address a test listener already holds -> prefix 'listen: '}: code, stderr = daemon.Run(cfg); assert code == 1; assert stderr is one line with the prefix"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "Hub credentials",
+      "rationale": "The hub counts an approval only from a credential that created no version of the change, so the token that works must never be the token that approves.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "unwanted",
+          "condition": "a configured token is not of the form `parley_pat_<token_id>_<secret>`, or the worker token and the approver token are the same string",
+          "action": "fail the start check `credentials` without sending either token to the hub",
+          "contract": "exit code 1; one line on stderr: `credentials: worker token is not a personal access token`, `credentials: approver token is not a personal access token` or `credentials: worker and approver are the same token`; the fake hub saw no request under /api/v1",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a fake hub (internal/hubtest) holding two tokens with the scopes the PRD names; each case changes one thing"
+            ],
+            "pseudocode": "new file internal/daemon/credentials_test.go, one table for every way the credentials check fails; these rows: {worker = an API key 'parley_ab_cd', approver = 'parley_admin_…', worker == approver}: err = daemon.CheckCredentials(ctx, hubClient, worker, approver); assert err.Error() == the expected reason; assert fake hub request count == 0"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "unwanted",
+          "condition": "the hub answers a request carrying the worker token or the approver token with 401",
+          "action": "fail the start check `credentials`",
+          "contract": "exit code 1; one line on stderr: `credentials: worker token: 401 unauthenticated` or `credentials: approver token: 401 unauthenticated`",
+          "check": {
+            "same_as": "REQ-2.1"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "unwanted",
+          "condition": "the hub answers the worker token's read of its own Token object with `403 token_bound`, or the Token object's `workspace` is not null",
+          "action": "fail the start check `credentials`",
+          "contract": "exit code 1; one line on stderr: `credentials: worker token is bound to a workspace`",
+          "check": {
+            "same_as": "REQ-2.1"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "unwanted",
+          "condition": "the `permissions` of the worker token hold `changes:approve`",
+          "action": "fail the start check `credentials`",
+          "contract": "exit code 1; one line on stderr: `credentials: worker token must not hold changes:approve`",
+          "check": {
+            "same_as": "REQ-2.1"
+          }
+        },
+        {
+          "id": "REQ-2.5",
+          "pattern": "unwanted",
+          "condition": "the `permissions` of the worker token lack, by exact name, one of `workspaces:write`, `git:write`, `git:read`, `changes:write`, `checks:write`, `tokens:manage`, `forge:write`, `sessions:write`, `audit:read`, or those of the approver token lack `changes:read` or `changes:approve`",
+          "action": "fail the start check `credentials`, naming the first missing scope in the order given here, the worker token's before the approver token's",
+          "contract": "exit code 1; one line on stderr: `credentials: worker token lacks <scope>` or `credentials: approver token lacks <scope>`; a worker token the hub answers `403 insufficient_scope` when it reads its Token object is reported as `credentials: worker token lacks tokens:manage`",
+          "check": {
+            "same_as": "REQ-2.1"
+          }
+        },
+        {
+          "id": "REQ-2.6",
+          "pattern": "event_driven",
+          "condition": "both tokens are personal access tokens, differ, are accepted by the hub, and hold the scopes named in REQ-2.5 with the worker token unbound and without `changes:approve`",
+          "action": "pass the start check `credentials`, having read both tokens' `permissions` with the worker token from `GET /api/v1/user/tokens/{token_id}` and having taken any answer but 401 to the approver token's own request on that route as its acceptance",
+          "contract": "the check returns no error; the approver token was sent in exactly one request",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/daemon/credentials_test.go: err = daemon.CheckCredentials(ctx, hubClient, worker, approver) against the fake hub's two good tokens; assert err == nil; assert the fake hub saw one request bearing the approver token and answered it 403 insufficient_scope"
+          }
+        },
+        {
+          "id": "REQ-2.7",
+          "pattern": "event_driven",
+          "condition": "the hub answers 401 to a request carrying the worker token or the approver token while nightshiftd is running",
+          "action": "keep running, record the credential error `worker token: 401 unauthenticated` or `approver token: 401 unauthenticated`, and from then on answer \"not available\" to every part of nightshift that asks whether the hub can be used with that token",
+          "contract": "`GET /api/v1/status` answers `hub.credential_error` with the recorded text; the hub client's availability for that token is false; the process has not exited",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a daemon started in-process against a fake hub; after the start the fake hub revokes the worker token"
+            ],
+            "pseudocode": "new file internal/daemon/lifecycle_test.go: hubClient.Do(any request as worker) -> 401; assert hub.Available(worker) == false; assert hub.Available(approver) == true; assert get('/api/v1/status').json.hub.credential_error == 'worker token: 401 unauthenticated'"
+          }
+        },
+        {
+          "id": "REQ-2.8",
+          "pattern": "event_driven",
+          "condition": "nightshiftd receives SIGHUP",
+          "action": "read `hub.worker_token` and `hub.approver_token` from the configuration file again and run the `credentials` check on them; where it passes, use them for every later hub request and clear the credential error; where it fails or the file cannot be loaded, keep the tokens in use and write one line `credentials: <reason>` or `config: <reason>` to its log on stderr",
+          "contract": "after a passing reload `GET /api/v1/status` answers `hub.credential_error: null` and the next hub request carries the new token; after a failing one the next hub request carries the previous token and the process has not exited",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the daemon of REQ-2.7 with its worker token revoked; the reload is triggered through the function the SIGHUP handler calls"
+            ],
+            "pseudocode": "in internal/daemon/lifecycle_test.go, a table over {config rewritten with a new good worker token -> credential_error null and the fake hub's next request bears the new token, config rewritten with worker == approver -> log line 'credentials: worker and approver are the same token' and the next request bears the old token}; plus one case sending a real SIGHUP to a daemon run as a subprocess of the test binary and asserting the reload happened"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "The client token and the API envelope",
+      "rationale": "The API can start work and answer decisions, so only the person who can read the daemon's files may call it.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "event_driven",
+          "condition": "nightshiftd starts and no file exists at `token_file`",
+          "action": "write a client token of 64 lowercase hexadecimal characters, from 32 bytes of the operating system's random source, to that file with mode 0600, creating its parent directory with mode 0700 where it does not exist",
+          "contract": "the file holds the token and a trailing newline; its mode is 0600; two first starts in different directories produce different tokens",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/api/token_test.go: tok = api.EnsureClientToken(path); assert tok matches ^[0-9a-f]{64}$; assert stat(path).mode == 0600; assert read(path) == tok + '\\n'; assert EnsureClientToken(otherPath) != tok"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "event_driven",
+          "condition": "nightshiftd starts and a file exists at `token_file`",
+          "action": "use the token the file holds and leave the file unchanged",
+          "contract": "the file's content and modification time are as before the start; requests bearing that token are accepted",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/api/token_test.go: first = EnsureClientToken(path); mtime = stat(path).mtime; second = EnsureClientToken(path); assert second == first; assert stat(path).mtime == mtime"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "unwanted",
+          "condition": "a request to any path under `/api/v1` carries no `Authorization: Bearer` header, or carries a value other than the client token",
+          "action": "reject the request before looking at its route, comparing the token in constant time",
+          "contract": "status 401 with body `{\"error_type\": \"unauthorized\", \"message\": <string>}`; no handler ran; the same answer for an existing route and for a path that names none",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/api/server_test.go, through the router, a table over {no header, 'Bearer wrong', 'Basic <token>', token in a query parameter} x {'/api/v1/status', '/api/v1/nope'}: r = do(req); assert r.status == 401; assert r.json.error_type == 'unauthorized'; assert r.json.message != ''"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "ubiquitous",
+          "action": "for any request it answers with a 4xx or 5xx status, send `Content-Type: application/json` and a body `{\"error_type\", \"message\"}`, with `404` and `not_found` for an authenticated request whose path names no route, `405` and `method_not_allowed` for one whose route lacks the method, and `500` and `internal` for a handler that panicked",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/api/server_test.go, a table over {GET /api/v1/nope -> 404 not_found, POST /api/v1/status -> 405 method_not_allowed, a test route whose handler panics -> 500 internal}, each with the client token: assert r.status; assert r.header['Content-Type'] starts with 'application/json'; assert r.json.error_type == want; assert r.json.message != ''; assert the server answers the next request after the panic"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "Status and the client's base",
+      "rationale": "The first thing a person asks a daemon is whether it runs and whether it reaches the hub.",
+      "system": "nightshift",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/status`",
+          "system": "nightshiftd",
+          "action": "report the daemon's version, the hub's endpoint, whether the hub is reachable with the time of the first failure when it is not, the credential error when there is one, the running sessions and the workspaces",
+          "contract": "status 200 with body `{\"version\": string, \"hub\": {\"endpoint\": string, \"reachable\": bool, \"unreachable_since\": RFC 3339 string or null, \"credential_error\": string or null}, \"sessions\": [], \"workspaces\": []}`; `sessions` and `workspaces` are empty lists while no other package registered a source for them; no token value appears in the body",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a server over a hub monitor stub in the state reachable"
+            ],
+            "pseudocode": "in internal/api/server_test.go: r = get('/api/v1/status'); assert r.status == 200; assert r.json.version == buildinfo.Version; assert r.json.hub == {endpoint: cfg endpoint, reachable: true, unreachable_since: null, credential_error: null}; assert r.json.sessions == []; assert r.json.workspaces == []; assert r.body contains neither token"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift status`",
+          "action": "request `GET /api/v1/status` with the client token and print `nightshiftd <version>` and then `hub: <endpoint> reachable`, or `hub: unreachable since <time>` while the hub is unreachable, followed by one line with the credential error when there is one; with `--json`, print the response body instead",
+          "contract": "exit code 0; the lines on stdout; with `--json` stdout parses as the JSON the API answered",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an httptest server standing in for the daemon, answering a fixed status document"
+            ],
+            "pseudocode": "new file internal/cli/cli_test.go, a table over {reachable -> second line 'hub: https://hub.example reachable', unreachable since T -> 'hub: unreachable since ' + T, credential_error set -> third line equals it, --json -> stdout parses to the served document}: code, stdout, stderr = cli.Run(['status', …], env); assert code == 0; assert stdout"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "ubiquitous",
+          "action": "for any command, send its requests to the address `--addr` gives, else to `$NIGHTSHIFT_ADDR`, else to `127.0.0.1:7878`, bearing the token read from the file `--token-file` names, else from `~/.nightshift/token`",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/cli_test.go, a table over {--addr and env both set -> the flag's server got the request, env only -> the env's server, neither -> the resolved address is '127.0.0.1:7878'} and {--token-file -> that file's token is the bearer, absent -> <home>/.nightshift/token}: assert the httptest server saw 'Authorization: Bearer <token>'"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "unwanted",
+          "condition": "the daemon cannot be reached at the address, or the client token file cannot be read",
+          "action": "end the command without output on stdout",
+          "contract": "exit code 1; stderr is `cannot reach nightshiftd at <address>` or `cannot read the client token at <path>`; stdout is empty",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/cli_test.go, a table over {--addr of a closed listener -> 'cannot reach nightshiftd at <addr>', --token-file naming no file -> 'cannot read the client token at <path>'}: code, stdout, stderr = cli.Run(['status', …]); assert code == 1; assert stderr == want + '\\n'; assert stdout == ''"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "unwanted",
+          "condition": "the daemon answers a command's request with a 4xx or 5xx status",
+          "action": "end the command, printing the `message` of the error body",
+          "contract": "exit code 1; stderr is the error's `message`; stdout is empty, or with `--json` holds the error body",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/cli_test.go: the httptest server answers 401 {error_type: 'unauthorized', message: 'the client token is missing or wrong'}; code, stdout, stderr = cli.Run(['status']); assert code == 1; assert stderr == 'the client token is missing or wrong\\n'; assert stdout == ''; with --json assert stdout parses to the error body"
+          }
+        },
+        {
+          "id": "REQ-4.6",
+          "pattern": "unwanted",
+          "condition": "the command line names no command, an unknown command, an unknown flag, or lacks a required argument",
+          "action": "print the usage of the command, or of `nightshift` when none was recognised, and send no request",
+          "contract": "exit code 2; the usage on stderr; stdout is empty; the daemon received no request",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/cli_test.go, a table over {[], ['frobnicate'], ['status', '--nope'], ['status', 'extra']}: code, stdout, stderr = cli.Run(args); assert code == 2; assert stderr contains 'usage: nightshift'; assert stdout == ''; assert the httptest server saw no request"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "The event stream",
+      "rationale": "A thin client that was offline must be able to catch up exactly, or it has to read everything again.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "ubiquitous",
+          "action": "for any event appended to the event log, give it a `seq` one greater than the seq of the event appended before it, starting at 1, and a `time`, and write it to the store before any client receives it",
+          "contract": "the append returns the event with its `seq`; appends from concurrent callers yield seqs without a gap or a repeat",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an event log over a store in a temporary directory"
+            ],
+            "pseudocode": "new file internal/event/log_test.go: 8 goroutines each Append 50 events; assert the set of returned seqs == 1..400; assert log.After(0) returns 400 events in seq order with type and data as appended"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/events` without a `Last-Event-ID` header",
+          "action": "answer with a server-sent event stream that stays open and carries every event appended after the request, in seq order, each as the lines `id: <seq>`, `event: <type>` and `data: <JSON>` followed by an empty line",
+          "contract": "status 200 with `Content-Type: text/event-stream`; the `data` JSON is `{\"seq\", \"time\", \"type\", \"data\"}`; an event appended before the request is not sent",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "an API server over a real event log and store; one event appended before the client connects"
+            ],
+            "pseudocode": "new file internal/api/events_test.go: s = openStream('/api/v1/events'); assert s.header['Content-Type'] starts with 'text/event-stream'; log.Append(type 'test.a'), log.Append(type 'test.b'); assert s.next() == {id: '2', event: 'test.a', data.seq: 2}; assert s.next().id == '3'"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/events` with `Last-Event-ID: <seq>` and every event after that seq is still kept",
+          "action": "send every kept event with a greater seq in order, then every event appended afterwards, sending no event twice and leaving none out, also for events appended while the kept ones are being sent",
+          "contract": "the ids the client receives are seq+1, seq+2, … without a gap or a repeat; `Last-Event-ID` equal to the newest seq yields only later events",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a log holding events 1 to 200"
+            ],
+            "pseudocode": "in internal/api/events_test.go: s = openStream with Last-Event-ID 150 while another goroutine appends 100 events; assert the first 150 ids received == 151..300 in order; a second stream with Last-Event-ID 300 receives nothing until event 301 is appended, then id 301"
+          }
+        },
+        {
+          "id": "REQ-5.4",
+          "pattern": "unwanted",
+          "condition": "a request to `GET /api/v1/events` carries a `Last-Event-ID` and an event with a greater seq has been removed from the log",
+          "action": "refuse the stream",
+          "contract": "status 410 with body `{\"error_type\": \"cursor_expired\", \"message\": <string>, \"oldest_seq\": <the seq of the oldest kept event, or the next seq to be given when none is kept>}`; no event is sent",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a log whose events 1 to 10 were removed and whose events 11 to 20 are kept"
+            ],
+            "pseudocode": "in internal/api/events_test.go, a table over Last-Event-ID {0, 9 -> 410 cursor_expired with oldest_seq 11; 10 -> 200 and first id 11}: r = get with the header; assert r.status and r.json"
+          }
+        },
+        {
+          "id": "REQ-5.5",
+          "pattern": "unwanted",
+          "condition": "a request to `GET /api/v1/events` carries a `Last-Event-ID` that is not a non-negative decimal integer, or is greater than the newest seq ever given",
+          "action": "refuse the stream",
+          "contract": "status 400 with body `{\"error_type\": \"invalid_request\", \"message\": <string>}`; no event is sent",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/api/events_test.go, a table over Last-Event-ID {'abc', '-1', '1.5', '', newest+1}: r = get with the header; assert r.status == 400; assert r.json.error_type == 'invalid_request'"
+          }
+        },
+        {
+          "id": "REQ-5.6",
+          "pattern": "ubiquitous",
+          "action": "remove from the event log every event whose `time` is more than 7 days in the past, at start and once an hour after it, and keep every younger event",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an event log with an injected clock; events appended at day 0, day 3 and day 8"
+            ],
+            "pseudocode": "in internal/event/log_test.go: clock = day 8 plus one minute; log.Prune(); assert log.After(0) fails with the cursor-expired error carrying oldest seq of the day-3 event; assert the day-3 and day-8 events are returned by After(seq of the day-0 event); assert the next Append gets the seq after the day-8 event's"
+          }
+        },
+        {
+          "id": "REQ-5.7",
+          "pattern": "ubiquitous",
+          "action": "for any restart of nightshiftd, keep every event younger than 7 days and continue `seq` from the highest value ever given, also when the event that carried it has been removed",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a store file in a temporary directory, opened, used, closed and opened again"
+            ],
+            "pseudocode": "in internal/event/log_test.go: append 5 events; close the store; reopen; assert After(2) returns seqs 3,4,5; assert Append returns seq 6. Second case: append 3, prune all with the clock moved 8 days, close, reopen; assert Append returns seq 4"
+          }
+        },
+        {
+          "id": "REQ-5.8",
+          "pattern": "unwanted",
+          "condition": "256 events wait to be sent to one client of the event stream because it does not read them",
+          "action": "close that client's connection and release what it held",
+          "contract": "the client's stream ends; appends and every other client's stream go on without delay: an append returns within 100 milliseconds while the stalled client is connected; the stalled client's subscription is gone from the log",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "two subscribers of a real event log: one reads, one never reads"
+            ],
+            "pseudocode": "in internal/event/log_test.go: append 300 events, timing each; assert every Append took < 100ms; assert the reading subscriber received 300; assert the stalled subscriber's channel is closed and log.Subscribers() == 1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-6",
+      "title": "Stopping and the hub's outages",
+      "rationale": "The daemon runs for weeks; the hub and the machine under it do not stay up that long.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-6.1",
+          "pattern": "event_driven",
+          "condition": "nightshiftd receives SIGTERM or SIGINT",
+          "action": "stop accepting API requests, end every open event stream, run each registered shutdown step with a context that is cancelled 25 seconds after the signal, close the store, and exit",
+          "contract": "exit code 0 within 30 seconds of the signal; a request after the signal is refused at the connection; every registered step was called once; the store file opens cleanly afterwards",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a daemon started in-process against a fake hub, with one registered shutdown step and one open event stream"
+            ],
+            "pseudocode": "in internal/daemon/lifecycle_test.go, a table over {SIGTERM, SIGINT} delivered through the channel the signal handler feeds: code = wait(daemon); assert code == 0; assert the step ran once; assert the stream ended; assert a new request fails to connect; assert store.Open(path) succeeds"
+          }
+        },
+        {
+          "id": "REQ-6.2",
+          "pattern": "unwanted",
+          "condition": "a registered shutdown step has not returned when its context is cancelled",
+          "action": "abandon the step, close the store and exit",
+          "contract": "exit code 0 no later than 30 seconds after the signal; one line on stderr names the abandoned step",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the step deadline and the exit deadline are parameters, set to 100 and 200 milliseconds in the test; one registered step named 'stuck' blocks forever"
+            ],
+            "pseudocode": "in internal/daemon/lifecycle_test.go: signal the daemon; code = wait(daemon); assert code == 0; assert elapsed < 200ms; assert stderr contains 'stuck'"
+          }
+        },
+        {
+          "id": "REQ-6.3",
+          "pattern": "event_driven",
+          "condition": "a request to the hub fails with a connection error or a timeout while the hub is marked reachable",
+          "action": "mark the hub unreachable, record the time of that failure as the time of the first failure, and keep running",
+          "contract": "`GET /api/v1/status` answers `hub.reachable: false` and `hub.unreachable_since` equal to the recorded time; a later failed request or probe leaves `unreachable_since` unchanged; the hub client's availability is false for both tokens",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a hub monitor with an injected clock over a fake hub that is closed"
+            ],
+            "pseudocode": "new file internal/hub/monitor_test.go: hubClient.Do(request) -> connection error at T0; assert monitor.Reachable() == false; assert monitor.Since() == T0; clock = T0+40s; monitor.Probe() fails; assert monitor.Since() == T0; assert hub.Available(worker) == false"
+          }
+        },
+        {
+          "id": "REQ-6.4",
+          "pattern": "state_driven",
+          "condition": "the hub is marked unreachable",
+          "action": "request `GET /readyz` of the hub every 30 seconds, and mark the hub reachable, clearing the time of the first failure, at the first answer with status 200",
+          "contract": "after the 200 answer `GET /api/v1/status` reports `hub.reachable: true` and `hub.unreachable_since: null` without a restart; a 503 answer leaves the hub unreachable; no probe is sent while the hub is reachable",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a hub monitor whose probe interval is a parameter, set to 10 milliseconds; a fake hub whose /readyz answers 503 three times and then 200"
+            ],
+            "pseudocode": "in internal/hub/monitor_test.go: mark unreachable; wait until monitor.Reachable(); assert the fake hub saw 4 /readyz requests; assert monitor.Since() is zero; wait 50ms; assert the fake hub saw no further /readyz request; assert the default interval constant is 30 seconds"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "A first start and a status query",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "writes a configuration file with the hub's endpoint and the two tokens and starts `nightshiftd --config <file>`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "loads the configuration and requests the hub's `/readyz`"
+        },
+        {
+          "actor": "hub",
+          "action": "answers `/readyz` with 200 and the token reads with both tokens' permissions"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "passes the three start checks, opens the store, writes the client token file and listens"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift status`"
+        },
+        {
+          "actor": "nightshift",
+          "action": "reads the client token, requests `GET /api/v1/status` and prints the version and `hub: <endpoint> reachable`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd program's run function with its configuration loader, start checks, store on disk and HTTP listener",
+          "the nightshift client's run function",
+          "the client token file"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) holding a worker and an approver token with the scopes the PRD names",
+          "a temporary directory for the configuration, the token file and the store",
+          "listen = 127.0.0.1:0, the bound address read back from the daemon"
+        ],
+        "end_state": [
+          "`nightshift status` exits 0 and prints `nightshiftd <version>` and `hub: <fake hub URL> reachable`",
+          "the token file exists with mode 0600 and the store file exists",
+          "the same request without the token is answered 401 unauthorized"
+        ],
+        "pseudocode": "new file internal/daemon/e2e_test.go: d = startDaemon(configFile); code, out, _ = cli.Run(['status', '--addr', d.addr, '--token-file', tokenFile]); assert code == 0; assert out == 'nightshiftd ' + version + '\\nhub: ' + hubURL + ' reachable\\n'; assert stat(tokenFile).mode == 0600; assert rawGet(d.addr + '/api/v1/status').status == 401"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "A client resumes the event stream after a restart",
+      "steps": [
+        {
+          "actor": "nightshift",
+          "action": "connects to `GET /api/v1/events` and receives events up to a seq"
+        },
+        {
+          "actor": "person",
+          "action": "sends SIGTERM to nightshiftd"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "ends the stream, closes the store and exits with code 0"
+        },
+        {
+          "actor": "person",
+          "action": "starts nightshiftd again"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens the same store and appends further events with seqs continuing from the last one"
+        },
+        {
+          "actor": "nightshift",
+          "action": "reconnects with `Last-Event-ID` set to its last seq and receives every event after it"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function, started twice over one store file",
+          "the event log and its store",
+          "the HTTP event stream"
+        ],
+        "setup": [
+          "a fake Parley hub",
+          "events are appended through the event log's append function, the one later packages call, since this package produces none itself"
+        ],
+        "end_state": [
+          "the first daemon exited with code 0",
+          "the reconnected stream delivers exactly the events appended after the client's last seq, in order, with seqs continuing from before the restart",
+          "a reconnect with a seq whose successor was removed is answered 410 cursor_expired"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d1 = startDaemon(cfg); s = stream(d1); d1.log.Append x3; assert s received ids 1,2,3; d1.signal(SIGTERM); assert d1.wait() == 0; d2 = startDaemon(cfg); d2.log.Append x2; s2 = stream(d2, lastEventID 3); assert s2 received ids 4,5"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "The hub goes away and comes back",
+      "steps": [
+        {
+          "actor": "hub",
+          "action": "stops answering"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "fails a hub request, marks the hub unreachable and records the time"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift status` and reads `hub: unreachable since <time>`"
+        },
+        {
+          "actor": "hub",
+          "action": "answers again"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "probes `/readyz`, receives 200 and marks the hub reachable"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift status` and reads `hub: <endpoint> reachable`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with the hub client and its monitor",
+          "the HTTP API",
+          "the nightshift client's run function"
+        ],
+        "setup": [
+          "a fake Parley hub that can be stopped and started on the same address",
+          "the probe interval set to 20 milliseconds"
+        ],
+        "end_state": [
+          "while the fake hub is down `nightshift status` prints `hub: unreachable since <time>` and exits 0",
+          "after the fake hub is back `nightshift status` prints `hub: <endpoint> reachable`",
+          "the daemon process was the same throughout"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg, probe 20ms); fakeHub.Stop(); d.hub.Do(any request) fails; assert cli status second line starts with 'hub: unreachable since '; fakeHub.Start(); eventually cli status second line == 'hub: ' + hubURL + ' reachable'"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "GET /readyz",
+          "import_path": "<hub.endpoint>/readyz",
+          "signature": "no credential; 200 {\"status\":\"ready\"} or 503 {\"status\":\"not ready\"}"
+        },
+        {
+          "name": "GET /api/v1/user/tokens/{token_id}",
+          "import_path": "<hub.endpoint>/api/v1/user/tokens/{token_id}",
+          "signature": "Authorization: Bearer parley_pat_<token_id>_<secret>; scope tokens:read (satisfied by tokens:manage); 200 Token object {token_id, user_id, name, permissions: [string], paths, workspace: object|null, expires_at, revoked_at, created_at}; 401 unauthenticated; 403 token_bound; 403 insufficient_scope; 404 not_found; errors as {\"error\": {\"code\", \"message\", \"error_type\"}}"
+        }
+      ]
+    },
+    {
+      "package": "github.com/BurntSushi/toml",
+      "version": "v1.6.0",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "DecodeFile",
+          "import_path": "github.com/BurntSushi/toml",
+          "signature": "func DecodeFile(path string, v any) (MetaData, error)"
+        },
+        {
+          "name": "MetaData.Undecoded",
+          "import_path": "github.com/BurntSushi/toml",
+          "signature": "func (md *MetaData) Undecoded() []Key"
+        }
+      ]
+    },
+    {
+      "package": "modernc.org/sqlite",
+      "version": "v1.60.1",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "driver \"sqlite\"",
+          "import_path": "modernc.org/sqlite",
+          "signature": "sql.Open(\"sqlite\", dsn) after a blank import of the package"
+        }
+      ]
+    }
+  ]
+}

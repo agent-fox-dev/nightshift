@@ -1,0 +1,203 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "02",
+  "spec_name": "workspaces_and_policy",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/command/... ./internal/gitclone/... ./internal/policy/... ./internal/workspace/... ./internal/hub/... ./internal/cli/... ./internal/daemon/... -count=1"
+  },
+  "dependencies": [
+    {
+      "spec": "01",
+      "reason": "builds on its configuration struct, store and migrations, hub client with the worker credential and Available, fake hub internal/hubtest, API server (Handle, the error and JSON helpers, the workspaces status source), client command table (Register, the request function, the status command) and the e2e helper of internal/daemon/e2e_test.go"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Run shell commands with a timeout and a kept tail, and clone from the hub at a commit",
+      "criteria": [
+        "REQ-6"
+      ],
+      "steps": [
+        "Add the command behaviours to internal/command/command_test.go and the clone behaviours to internal/gitclone/gitclone_test.go and confirm they fail",
+        "Add internal/command: a Runner whose Run(ctx, Spec{Dir, Line, Timeout, TailLines, Env}) starts `sh -c <Line>` in Dir in a process group of its own, with Env added to the daemon's environment, and returns Result{ExitCode, TimedOut, Tail}; an exit code other than 0 is a result, not an error",
+        "Read standard output and standard error through one pipe into a ring of the last TailLines lines, cutting each line at 4,096 bytes while it is read, so that memory stays bounded for output of any size and for output without line ends",
+        "On the timeout or a cancelled context kill the whole process group, stop waiting for inherited pipes after a delay of at most 2 seconds, and return TimedOut with the tail, or the context's error",
+        "Refuse a missing directory, an empty line and a Timeout or TailLines that is not greater than zero with an error before any process starts; return every failure as an error, never by ending the process",
+        "Add SetIdentity(Identity) to the Runner, Identity being a function that prepares the *exec.Cmd to run as another operating-system user; call it once per Run before the start and return its error without starting; with none set, processes run as the daemon's user. Package 04 sets it to the session user",
+        "Extend internal/hubtest: a workspace can carry a real git repository, served at /git/<org>/<slug>.git by `git http-backend` through net/http/cgi, which answers 401 unless the Basic password is a token the fake hub knows and that token holds git:read or git:write; the repository can be given further commits, the endpoint can be scripted to answer an error or never, and each fetch is entered in the request log. Build the repository fixture once per test process and copy it per test",
+        "Add internal/gitclone: Sync(ctx, Options{URL, Token, Dir, Commit, Runner}) runs git through the given Runner with a timeout of 10 minutes per git command that is a parameter; it clones when Dir is missing or empty, fetches when Dir is a clone whose origin is URL, and removes and clones anew when Dir holds anything else",
+        "Give git the credential only through the process environment: GIT_CONFIG_COUNT, GIT_CONFIG_KEY_0=http.extraHeader and GIT_CONFIG_VALUE_0 with a Basic authorization of any user name and the token, plus GIT_TERMINAL_PROMPT=0; never in the command line, the remote's URL or the clone's configuration",
+        "After the clone or fetch check the commit out detached, reset tracked files and remove untracked and ignored ones; answer `commit <sha> not found` when the repository does not hold it; on any failure of a first clone remove the directory, and strip the token from every error text",
+        "Name the additions under Repository Specifics in .specs/steering.md (the fake hub's git endpoint and its repository fixture), and add internal/command and internal/gitclone to docs/architecture.md with the SetIdentity extension point"
+      ],
+      "touches": [
+        "internal/command/command.go",
+        "internal/command/command_test.go",
+        "internal/gitclone/gitclone.go",
+        "internal/gitclone/gitclone_test.go",
+        "internal/hubtest",
+        "docs/architecture.md",
+        ".specs/steering.md"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Read, judge and adopt the landing policy",
+      "criteria": [
+        "REQ-2.1",
+        "REQ-2.5"
+      ],
+      "steps": [
+        "Add the policy behaviours to internal/policy/policy_test.go and confirm they fail",
+        "Add internal/policy with the document types as the hub answers them in normal form: Document{Revision, Default, Rules}, Rule{Name, Paths, Exclude, Targets, Require} and Requirement{Approvals, Approvers, Checks, FreshChecks, Block}, and the exported list Checks holding nightshift-gate, nightshift-review and nightshift-release in that order",
+        "Add Missing(Document): `default` first, then each rule that does not block, named when its checks lack one of the three or its fresh_checks is false",
+        "Add Adopt(Document): a copy in which every requirement Missing names has the missing ones of the three appended to its checks in the order of Checks and fresh_checks set; nothing else changes, so that Missing of the result is empty",
+        "Add Sensitive(Document): the rules whose requirement has approvals of 1 or more or block, in document order, then `default` when it is one, each as {Name, Paths, Approvals, Block}",
+        "Extend internal/hubtest with the policy of a workspace: GET answers the normal form with ETag, PUT honours If-Match with 412 revision_mismatch, counts revisions from 0, refuses a glob that is empty, longer than 255 characters or starts with `/` and a rule name outside the format with 400 invalid_policy and details {rule, index, field}; add Policy(slug) and ReplacePolicy(slug, document) for tests, a hook that runs on a GET, and a script entry that makes the next PUT answer a given error",
+        "Add Read(ctx, hubClient, slug) and Write(ctx, hubClient, slug, document, revision) with the worker credential: Read returns the document with its revision; Write sends only `default` and `rules` with If-Match set to the revision, returns the new revision, returns ErrRevisionMismatch for a 412, and an error carrying the hub's details for a 400 invalid_policy; test both against the fake hub in internal/policy/policy_test.go",
+        "Name the fake hub's policy routes under Repository Specifics in .specs/steering.md and add internal/policy to docs/architecture.md"
+      ],
+      "touches": [
+        "internal/policy/policy.go",
+        "internal/policy/client.go",
+        "internal/policy/policy_test.go",
+        "internal/hubtest",
+        "docs/architecture.md",
+        ".specs/steering.md"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Register a workspace through its five checks",
+      "criteria": [
+        "REQ-1",
+        "REQ-2.2",
+        "REQ-2.3",
+        "REQ-2.4",
+        "REQ-2.6",
+        "REQ-5.1"
+      ],
+      "steps": [
+        "Add the registration behaviours to internal/workspace/register_test.go and the `workspace add` behaviours to internal/cli/workspace_test.go and confirm they fail; of the table for an unavailable hub write the row of the registration route here, the later tasks add theirs",
+        "Extend internal/hubtest with workspaces: GET /api/v1/workspaces/{slug} answering the workspace object (kind, default_branch, org_slug, settings.sync_enabled, hub_url pointing at its own git endpoint, access derived from the bearer token's user) and 404 for an unknown one, and POST …/sync answering a scripted list of branches or a scripted error, 400 sync_disabled when the setting is off",
+        "Add Workspace(ctx, slug) and Sync(ctx, slug) to the hub client of internal/hub, sent with the worker credential",
+        "Add the configuration key `clones_dir` (default `~/.nightshift/clones`, a leading `~/` expanded) to internal/config",
+        "Add internal/workspace with its store migration, registered with internal/store: a table of workspaces (slug, the git URL the hub gave as hub_url, health command, health timeout, daily tokens, state, created at) and a table of the rule names protect wrote per workspace; and a Service built from the store, the hub client, a command.Runner and the clones directory, with the exported field DefaultDailyTokens (50,000,000) and the functions Get and List (ordered by slug) returning ErrNotFound for an unregistered slug",
+        "Add Service.RunHealth(ctx, slug, commit, tailLines): bring the clone <clones_dir>/<slug> to the commit with gitclone.Sync, using the git URL stored at registration and the worker token, then run the workspace's health command there through the Runner with its health timeout; later packages call it after a landing",
+        "Add Service.Register: under a lock per slug (a second call for the slug is refused as in progress, an existing one as registered already) run the checks in order: the owner by `access`, `sync_enabled`, the sync and the default branch's result, policy.Missing, the health command at the default branch's local_sha with a tail of 50 lines (a workspace object whose hub_url is null is refused as `cannot clone <slug>: the hub reports no git URL`); refuse at the first failure with the reason of its criterion and store nothing",
+        "With adopt_policy and a policy that lacks the checks, write policy.Adopt of the document after the health command passed, with the revision read; a revision mismatch refuses the registration; then insert the workspace as green with the timeout and limit given or their defaults, and compute the warning from policy.Sensitive of the policy as it now is",
+        "Add POST /api/v1/workspaces through the API server's Handle: validate the body (400 invalid_request), answer 503 hub_unavailable when hub.Available of the worker credential is false or a hub request fails in transport, map a refusal to 409 conflict with the reason and, for a failed or timed-out health command, the member `output`; pass the request's context on, so that a client that goes away ends the health command",
+        "Have daemon.Run build one command.Runner and one workspace.Service after the store is open, register the routes, and hand both to the packages built after it, as it does the event log; remove a clone directory left by a registration that was refused",
+        "Add `nightshift workspace` to the client's command table with Register, and its command `add`: flags --health, --health-timeout, --daily-tokens and --adopt-policy, accepted before and after the slug; the request sent without a client-side deadline; the three lines of output, the warning on stderr",
+        "Add the route, its errors and the workspace object to docs/api.md, `workspace add` to docs/cli.md, `clones_dir` to docs/configuration.md, and internal/workspace with DefaultDailyTokens and RunHealth to docs/architecture.md"
+      ],
+      "touches": [
+        "internal/workspace/store.go",
+        "internal/workspace/service.go",
+        "internal/workspace/register.go",
+        "internal/workspace/routes.go",
+        "internal/workspace/register_test.go",
+        "internal/hub/workspace.go",
+        "internal/hubtest",
+        "internal/config/config.go",
+        "internal/config/config_test.go",
+        "internal/daemon/run.go",
+        "internal/cli/workspace.go",
+        "internal/cli/workspace_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/configuration.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Show, change, list and remove workspaces, with their state",
+      "criteria": [
+        "REQ-4",
+        "REQ-5.3",
+        "REQ-5.4",
+        "REQ-5.5",
+        "REQ-5.8"
+      ],
+      "steps": [
+        "Add the behaviours to internal/workspace/workspace_test.go, internal/cli/workspace_test.go and the status table of internal/cli/cli_test.go and confirm they fail; of the table for an unregistered slug write the rows of this task's three routes and of SetState, the last task adds the two policy routes",
+        "Add the states Green, Red and Held and Service.SetState(ctx, slug, state): store the state, refuse an unknown one, return ErrNotFound for an unregistered slug; it appends no event. Packages 07 and 08 call it",
+        "Add Service.SetTokensUsed(func(slug) int64), the source of tokens used today, 0 while none is set, and Service.Decorate(func(slug, object)), whose functions add members to every workspace object the API answers; packages 04 and 03 register them",
+        "Add GET /api/v1/workspaces (the list, no hub request) and register the `workspaces` status source of the API server with {slug, state, tokens_used_today} per workspace",
+        "Add GET /api/v1/workspaces/{slug}: the workspace object plus sensitive_rules from policy.Read and policy.Sensitive; 503 hub_unavailable without the hub; add its row to the table for an unavailable hub",
+        "Add Service.Set and PATCH /api/v1/workspaces/{slug}: decode the body refusing unknown members, require one of the three, validate as at registration, store only what was given, ask the hub nothing",
+        "Add Service.AddRemoveGuard(func(ctx, slug) error) and Service.OnRemoved(func(ctx, slug)), and Service.Remove with DELETE /api/v1/workspaces/{slug}: ask the guards in registration order and answer 409 conflict with the first error's text; otherwise delete the row and the recorded rule names in one transaction, remove the clone directory, call the hooks in order and answer 204; send nothing to the hub. Package 03 registers the guard for open work items and the hook that removes finished threads",
+        "Answer 404 not_found with `workspace <slug> is not registered` for an unregistered slug on the three routes, before any hub request",
+        "Add the commands `workspace show`, `workspace list`, `workspace set` and `workspace remove` with their text output, and AddWorkspaceListColumn(header, func(object) string) in internal/cli, by which packages 03 and 04 add the counts of open items and the `paused` marker to a line of `list`",
+        "Extend the `status` command of internal/cli to print one line per entry of `workspaces`",
+        "Add the registration-and-status flow and the refused-registration-and-removal flow to internal/daemon/e2e_test.go, with a helper that gives the fake hub a workspace with a repository for the later packages to reuse",
+        "Add the four routes, the `workspaces` member of the status and the states to docs/api.md, the four commands and the status lines to docs/cli.md, and the extension points SetState, SetTokensUsed, Decorate, AddRemoveGuard, OnRemoved and AddWorkspaceListColumn to docs/architecture.md"
+      ],
+      "touches": [
+        "internal/workspace/service.go",
+        "internal/workspace/store.go",
+        "internal/workspace/routes.go",
+        "internal/workspace/workspace_test.go",
+        "internal/workspace/register_test.go",
+        "internal/cli/workspace.go",
+        "internal/cli/workspace_test.go",
+        "internal/cli/status.go",
+        "internal/cli/cli_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Protect and unprotect paths in the hub's policy",
+      "criteria": [
+        "REQ-3",
+        "REQ-5.2",
+        "REQ-5.6",
+        "REQ-5.7",
+        "REQ-1.8",
+        "REQ-4.6"
+      ],
+      "steps": [
+        "Add the behaviours to internal/workspace/protect_test.go, internal/policy/policy_test.go and internal/cli/workspace_test.go and confirm they fail; complete the tables for an unavailable hub and for an unregistered slug with the rows of the two policy routes",
+        "Add policy.NextName(Document): `nightshift-<n>` with n one above the highest number among the rules named `nightshift-<decimal number>`, 1 when there is none",
+        "Add Service.Protect(ctx, slug, globs, block, name): refuse an empty list and a glob that is empty, longer than 255 characters or starts with `/` before any hub request; refuse a name outside the hub's format, and after the read a name the policy already holds",
+        "Read the policy, put the new rule before every other rule (the approval of the owner with the three checks and fresh_checks, or block alone), write it with the revision read, and only after the hub accepted it record the rule's name for the workspace",
+        "Map the write's outcomes: ErrRevisionMismatch to the refusal `policy changed meanwhile; run the command again`, an invalid_policy whose details.field begins with `paths` to the glob refusal carrying the hub's message, any other invalid_policy to 400 invalid_request with the hub's message; never send the write twice",
+        "Add Service.Unprotect(ctx, slug, name): refuse a name the store does not record for that workspace with `not a rule nightshift wrote` before any hub request; otherwise read the policy, write it without the rule and forget the record, or, where the policy no longer holds the rule, forget the record and write nothing; answer the policy's revision",
+        "Add POST /api/v1/workspaces/{slug}/policy/rules (201 with the rule and the revision; 400 invalid_glob, 400 invalid_request, 409 conflict, 404, 503) and DELETE /api/v1/workspaces/{slug}/policy/rules/{name} (200 with the revision)",
+        "Add the commands `workspace protect` and `workspace unprotect` with their two lines of output; flags are accepted before and after the globs",
+        "Give every workspace command one mapping of the daemon's refusals: the message on stderr, then the lines of `output` where the error has that member, exit code 2 for the error type invalid_glob and 1 for every other; and complete the usage errors of all seven commands and of `nightshift workspace` itself, each with exit code 2 before any request",
+        "Add the protect, show and unprotect flow to internal/daemon/e2e_test.go",
+        "Add the two routes and invalid_glob to docs/api.md, the two commands and the exit codes of every workspace command to docs/cli.md, update README.md with how a workspace is registered and a path marked, and run `make doc`"
+      ],
+      "touches": [
+        "internal/workspace/protect.go",
+        "internal/workspace/protect_test.go",
+        "internal/workspace/routes.go",
+        "internal/workspace/store.go",
+        "internal/workspace/register_test.go",
+        "internal/workspace/workspace_test.go",
+        "internal/policy/policy.go",
+        "internal/policy/policy_test.go",
+        "internal/cli/workspace.go",
+        "internal/cli/workspace_test.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "README.md"
+      ],
+      "done_when": [
+        "`make check` passes on the whole tree"
+      ]
+    }
+  ]
+}

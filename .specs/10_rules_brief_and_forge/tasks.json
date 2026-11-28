@@ -1,0 +1,220 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "10",
+  "spec_name": "rules_brief_and_forge",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/rule/... ./internal/stats/... ./internal/brief/... ./internal/forge/... ./internal/session/... ./internal/sched/... ./internal/config/... ./internal/cli/... ./internal/hub/... ./internal/publish/... ./internal/daemon/... -count=1"
+  },
+  "dependencies": [
+    {
+      "spec": "01",
+      "reason": "adds the key `[brief].at`, two routes, two commands, store migrations, hub client calls and shutdown steps to the daemon, and uses its event log, its fake hub and its end-to-end helper"
+    },
+    {
+      "spec": "02",
+      "reason": "reads each workspace's state and daily limit from `workspace.Service`, and registers a function with `OnRemoved`"
+    },
+    {
+      "spec": "03",
+      "reason": "acts on the stored `record` member of an answer, declares the decision kind `rule` and its handlers, writes to the brief thread and the items' threads, reads items, entries and decisions, registers an `OnChange` hook and calls `Notify` with the event `brief`"
+    },
+    {
+      "spec": "04",
+      "reason": "runs the rule's planner session through `Scheduler.RunSession`, extends `session.Spec` for a session with no item, and reads the session records, the pause flags and `Scheduler.Waiting`"
+    },
+    {
+      "spec": "05",
+      "reason": "reads an item's change with `change.Service.Get` for the forge comment, and creates a rule's fork and change with the hub client's `CreateFork`, `OpenChange` and `AbandonChange`"
+    },
+    {
+      "spec": "06",
+      "reason": "reports the three checks of an approved rule with the hub client's `ReportCheck`, reads a fork with `Tree` and `File` and a change with `Change`, and lists in the brief the files `(*impl.Service).OutsidePlan` returns"
+    },
+    {
+      "spec": "07",
+      "reason": "lands a rule's change with `land.Service.LandChange`, and reads the commit an item's change landed as with `land.Service.Landing`"
+    },
+    {
+      "spec": "08",
+      "reason": "runs the sync before a rule's landing with `publish.Service.Sync`, checks the landed commit with `health.Service.VerifyTip`, adds `PushTip` to `internal/publish`, and repeats its `published` entry in the brief"
+    },
+    {
+      "spec": "09",
+      "reason": "counts the items taken over from its thread entry, and shows its marker `taken over` as what an item waits for"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Run a session that belongs to no item, and write a recorded answer as a rule",
+      "criteria": [
+        "REQ-1",
+        "REQ-6"
+      ],
+      "steps": [
+        "Add the scoped-session behaviours to internal/session/session_test.go and internal/sched/sched_test.go (package 04's files) and the rule behaviours to the new internal/rule/rule_test.go, and confirm they fail; extend internal/hubtest, where an earlier package left it out, with the fork route (a name, `auto_change`, 409 conflict for a name in use), the routes scm/tree, scm/file and scm/diff over a fork's repository, and the change routes to open, read and abandon a change",
+        "Give session.Spec the member Scope {Workspace, Thread, Key}: Service.Run accepts a Spec with an item or with a scope and refuses one with neither or both, with the error `a session needs an item or a scope`, before any hub request; for a scope it creates the hub session on the scope's workspace with metadata {\"scope\": <key>}, uses <sessions.dir>/scopes/<key>/clone and <sessions.dir>/scopes/<key>/run/<session-id>/, writes the session_started and session_ended entries to the scope's thread and stores the session with the workspace and no item; add Service.RemoveScope(key), which removes <sessions.dir>/scopes/<key> through the UserRunner",
+        "Let Scheduler.RunSession take a scoped request: it waits behind the requests of `ready` items in the order asked, is not started while the hub is unavailable to the worker credential, while the workspace's pause flag is set or while the workspace's count of the day is at its daily limit, asks no start guard, counts no failure, never opens a `session_failed` or `session_limit` decision, and adds its tokens to the workspace's count of the day",
+        "Add internal/rule with its store migration: one row per rule, unique by the decision's id, with the workspace, the thread, the question, the option, the comment, the target, the state (writing, proposed, approved, landed, published, discarded, failed), the fork, the number of discarded branches, the change's number and version, the reasons of the failures in a row, the landed commit and whether it was handed over after the landing",
+        "Find recorded answers: subscribe to the event log for `decision.answered`, read the decision and its answer from the inbox, and at Start go through the inbox's answered decisions; for an answer with record true of a kind other than `rule`, insert the rule in `writing` and let the unique decision id make a second insert a no-op",
+        "Add the rule service's Pass, run once a second (a parameter) and at once after each `decision.*` and `session.*` event, from a goroutine that stops with the daemon: it handles each rule that is not in a final state, one call at a time per rule, and does nothing for a rule whose session runs",
+        "For a rule in `writing`: create the fork with the hub client's CreateFork(ctx, parent, name, purpose) of package 05, which sends auto_change false, with the name rule-<decision id>, taking 409 conflict as success (package 05's change.Service is bound to an item and is not used for a rule); choose the target once from the fork with the hub client's Tree and File of package 06, any 4xx answer of Tree meaning that docs/adr is not there; and ask RunSession for a planner session with the scope, the step `rule`, the fork, the branch and the input `rule`. The prompt is nightshift's own text: it names the target, says that exactly that one file may be written, and holds {input:rule} and {result}",
+        "When the session completed, read the branch's file changes with a call this task adds to the hub client, new: Diff(ctx, slug, base, head) for GET …/scm/diff in the mode merge_base, answering the files with path, status, insertions, deletions and patch (package 06's ChangeDiff answers a change's patch text and needs a change); call it for the fork with base the fork's default branch and head the branch, and judge it against the target: one file; `adr` added directly in docs/adr/, `decisions` added under docs/decisions/, `steering` .specs/steering.md modified with deletions 0 and no line beginning with a space after the first line beginning with `+` in its patch's hunks; produce the reasons `no rule written`, `rule change touches <path>` and `rule change alters <path>`",
+        "On an allowed change: open the change with the hub client's OpenChange of package 05 (source the fork and the branch, not a draft) unless the rule has one, read its number and version, set `proposed`, declare the kind `rule` with RegisterKind when the service is wired (approve, revise with a required comment, discard), and open the decision with the evidence `rule`, `file` and `change`, `approve` recommended and `nothing` as what it blocks",
+        "On a failed session or a refused change: add the reason to the failures in a row; at the first, count a discarded branch for a rule without a change and leave the rule in `writing`; at the second, abandon the change where there is one, set `failed`, append the `rule_failed` entry with both reasons and the unread mark, and call RemoveScope; an interrupted session changes nothing and the next Pass asks again; a completed and allowed session clears the failures",
+        "Create the rule service in daemon.Run after the inbox, the scheduler and the hub client, start it after the API serves and stop it with a named shutdown step; describe internal/rule, the rule's states and session.Spec's Scope in docs/architecture.md, and name the new routes of internal/hubtest under Repository Specifics in .specs/steering.md"
+      ],
+      "touches": [
+        "internal/session/session.go",
+        "internal/session/session_test.go",
+        "internal/sched/sched.go",
+        "internal/sched/sched_test.go",
+        "internal/rule/rule.go",
+        "internal/rule/write.go",
+        "internal/rule/rule_test.go",
+        "internal/hub/client.go",
+        "internal/hubtest",
+        "internal/daemon/run.go",
+        "docs/architecture.md",
+        ".specs/steering.md"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Carry out the answers to a rule decision: land, verify and publish, revise, discard",
+      "criteria": [
+        "REQ-2"
+      ],
+      "steps": [
+        "Add the answer, landing, revise and discard behaviours to the new internal/rule/land_test.go and confirm they fail; extend internal/hubtest, where an earlier package left it out, with the check route (the reports kept per change, version and name), the land route with a scriptable answer per change (landed with a commit, 409 land_conflict, 409 policy_blocked, 409 version_mismatch, 503 land_failed) and a request log that keeps the order of the requests",
+        "Add to package 08's internal/publish a function that is new, Service.PushTip(ctx, slug) (bool, error), with its behaviours in internal/publish/push_test.go: package 08 pushes only for an item (PublishStep) or for an answered `origin` decision (Retry), and a landed rule has neither. It refuses without a request while the workspace is not green, health.TipPending(slug) is true or the hub is unavailable, sends one Push of the default branch otherwise, and opens no decision, sets no state, writes no entry and starts no tries. Then give the rule service four functions at its creation, so that its tests can replace them, and have daemon.Run pass the real ones: publish.Service.Sync (the sync before a landing with what its result starts), land.Service.LandChange, health.Service.VerifyTip and publish.Service.PushTip",
+        "Register with OnAnswer the handlers of (`rule`, `approve`), (`rule`, `revise`) and (`rule`, `discard`): each finds the rule by the decision it was opened for, changes the rule's state only when the rule is `proposed` for that decision (to `approved`, to `writing` with the comment stored, to `discarded` after the abandon), and returns nil when the rule is already past that point, so that a second call does nothing",
+        "In Pass, for a rule in `approved`: go on only when workspace.Service.Get reports `green`, the scheduler's pause flag of the workspace is not set (add an accessor for the workspace's flag to internal/sched where there is none) and hub.Available(worker) is true; then call the sync function (publish.Service.Sync) and go on only when it returned no error",
+        "Read the change with GET …/changes/{number}: when its state is `landed`, take landed.sha and go to the landed step; when it is `abandoned`, set the rule `failed`; otherwise report the three checks on its current version through the hub client's ReportCheck of package 06 (its (*impl.Service).ReportCheck is bound to an item) with the status passed and the summary `rule approved by the owner`, remembering the version they were reported for so that a second Pass does not report them again, and call LandChange with the workspace, the change and that version; LandChange checks no condition and reports no check itself",
+        "On an Outcome of the kind `landed`: store LandedSHA and the state `landed` and append `rule_landed`; then, once per rule (the stored hand-over mark is set before the calls), call VerifyTip with the workspace and the commit and, when it returns nil, PushTip; when that returns true, set `published`, append `rule_published` and call RemoveScope; when VerifyTip returns an error (it has set the workspace red and opened `main_red` itself) or PushTip returns false, leave the rule `landed` and do nothing more: the commit reaches origin with the next push package 08 sends for the branch",
+        "On an Outcome of any other kind: abandon the change with the hub client's AbandonChange (409 change_closed counts as done), set `failed`, append `rule_failed` with `rule for decision <id> not landed: <kind>`, and `: <reason>` where the outcome has one, and the unread mark, and call RemoveScope",
+        "For a rule set to `writing` by `revise`: ask for the session on the change's branch with the inputs `rule` and `comment`; judge the branch as task 1 does; on success read the change's new version from the hub, set `proposed` and open a new `rule` decision; a failure stays on the same branch and the second in a row ends the rule as task 1 says, abandoning the change",
+        "For `discard`: abandon the change with the hub client's AbandonChange of package 05, taking 409 change_closed as done, append `rule_discarded` and call RemoveScope",
+        "Add the flow of a recorded answer that reaches origin to internal/daemon/e2e_test.go, with the fake `claude` helper of package 04 writing the ADR and with the real functions of packages 07 and 08, and describe the way of a rule from the answer to origin, what it takes from packages 05 to 08 and the new publish.Service.PushTip in docs/architecture.md"
+      ],
+      "touches": [
+        "internal/rule/rule.go",
+        "internal/rule/land.go",
+        "internal/rule/land_test.go",
+        "internal/publish/push.go",
+        "internal/publish/push_test.go",
+        "internal/sched/sched.go",
+        "internal/hub/client.go",
+        "internal/hubtest",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Count the outcome numbers and print them with nightshift stats",
+      "criteria": [
+        "REQ-3"
+      ],
+      "steps": [
+        "Add the number behaviours to the new internal/stats/stats_test.go and internal/stats/routes_test.go and the command's to internal/cli/cli_test.go, and confirm they fail; write the seed helper of internal/stats: it creates items through the item service and walks them through allowed transitions with the injected clock, writes session records through a function of internal/session (add one that stores a finished session's record for tests where package 04 has none), appends entries with the inbox's Append, and opens and answers decisions of a test kind",
+        "Add to internal/session, where package 04 has none, a read of the session records by item and by workspace with each record's role, status, tokens, start and end time; the tokens are the count package 04 keeps (input, cache-creation and output tokens)",
+        "Add internal/stats.Compute(ctx, slug, days), with the clock injected: the window is the days times 24 hours before now; the done items are the workspace's items in `done` whose state_since lies in the window, the abandoned ones likewise",
+        "Compute first_pass and sessions_per_item from the session records of each done item (package 06 asks a rework session with the step name `implement`, as a first one, so the records' order is what tells them apart): an item is a first pass when no implementer record starts after the end of its first implementer record with the status completed, and also when it has no completed implementer record; the share is rounded to the nearest whole percent",
+        "Compute reverted and taken_over by reading the entries of the threads of the workspace's items: an item counts once when an entry of kind `state` whose text begins `verifying -> awaiting_approval`, or an entry of kind `taken_over` (package 09 writes one for each take-over), has its time in the window",
+        "Compute decisions_per_done_item from the answered decisions of the done items' threads, decision_wait_seconds from the decisions of every thread of the workspace (the items' and the workspace's own) whose answer's time lies in the window, creation_to_done_seconds from created_at and state_since, and tokens_per_done_item from the summed tokens of each done item's records; one median function (the mean of the two middle values for an even count), and null for a number whose base is empty",
+        "Serve GET /api/v1/stats through the API server's Handle: `days` absent is 30, anything but a decimal integer from 1 to 365 is 400 invalid_request, an unregistered `workspace` is 404 not_found, no `workspace` is every registered workspace in order of slug",
+        "Register the command `nightshift stats [<slug>] [--days <N>]` through the client's Register: check `--days` and the argument count before any request (exit code 2 with the usage), print the block of each workspace, and the API's JSON with --json; put the formatting of a duration, of a null and of a number with at most one decimal into exported functions of internal/stats, for the brief to use",
+        "Describe GET /api/v1/stats with every member and how it is counted in docs/api.md, and `nightshift stats` in docs/cli.md"
+      ],
+      "touches": [
+        "internal/stats/stats.go",
+        "internal/stats/format.go",
+        "internal/stats/routes.go",
+        "internal/stats/stats_test.go",
+        "internal/stats/routes_test.go",
+        "internal/stats/helpers_test.go",
+        "internal/session/session.go",
+        "internal/cli/stats.go",
+        "internal/cli/cli_test.go",
+        "internal/daemon/run.go",
+        "docs/api.md",
+        "docs/cli.md"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Write the daily brief and print it with nightshift brief",
+      "criteria": [
+        "REQ-4"
+      ],
+      "steps": [
+        "Add the brief's behaviours to the new internal/brief/brief_test.go, internal/brief/daily_test.go and internal/brief/routes_test.go, the key's to internal/config/config_test.go and the command's to internal/cli/cli_test.go, and confirm they fail",
+        "Add the key `[brief].at` to the configuration struct of internal/config, with the default `08:00` and the error `brief.at must be HH:MM` for anything but two digits, a colon and two digits from 00:00 to 23:59",
+        "Add internal/brief.Build(ctx, since, until): for each registered workspace in order of slug, the done and the abandoned items by state and state_since in the period, the reverted ones by the `state` entry `verifying -> awaiting_approval` in the period, each done item's line from the text of its last thread entry of kind `published`, which package 08 writes with the change, the commit and the tokens (the line ends after the title where the item has none), and its files outside the plan from package 06's (*impl.Service).OutsidePlan, given to the brief as a function (the thread entry `outside_plan` is not written for every version, so it is not read)",
+        "Add the open decisions of the workspace's threads, oldest first, with the age to `until`, and the waiting items: `waiting_on` first, then the markers `paused` and `taken over`, then a reason of Scheduler.Waiting that is not empty",
+        "Add the tokens line from the session records of the workspace that ended in the period, summed by role, beside the workspace's daily limit from workspace.Service, and the closing numbers from stats.Compute over 30 days with the formatting functions of internal/stats",
+        "Render the text as the PRD's example gives it: the first line `brief <since> to <until>` in RFC 3339 UTC, an empty line, then per workspace the slug, the lists indented by two and four spaces, a heading left out with its empty list, a blank line between two workspaces; return the same content as the structure the route answers",
+        "Add the daily runner with its store migration (the local days a brief was made for): Check, called at start and at an interval that is a parameter with the default one minute, takes the time from the injected clock in the daemon's zone; when today's `brief.at` has passed and today is not recorded, it records today and, when an item was created or changed its state since the last `brief` entry or a decision is open, builds the brief for the period from that entry (24 hours back without one), appends it to inbox.BriefThread as an entry of kind `brief` with the unread mark and calls notify.Notify with the event `brief` and the thread's path; the runner stops with the daemon",
+        "Serve GET /api/v1/brief through the API server's Handle, building the brief from the last `brief` entry to now and writing nothing, and register the command `nightshift brief`, which prints `text`, the JSON with --json, and exits 2 for an argument",
+        "Add the flow of the morning's brief and the numbers to internal/daemon/e2e_test.go; give the end-to-end helper an injected clock for the daemon where it has none",
+        "Describe `[brief].at` in docs/configuration.md, GET /api/v1/brief in docs/api.md, `nightshift brief` in docs/cli.md, and internal/brief and internal/stats with what they read from the other packages in docs/architecture.md"
+      ],
+      "touches": [
+        "internal/config/config.go",
+        "internal/config/config_test.go",
+        "internal/brief/brief.go",
+        "internal/brief/daily.go",
+        "internal/brief/routes.go",
+        "internal/brief/brief_test.go",
+        "internal/brief/daily_test.go",
+        "internal/brief/routes_test.go",
+        "internal/cli/brief.go",
+        "internal/cli/cli_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/configuration.md",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Write back to the issue an item was imported from",
+      "criteria": [
+        "REQ-5"
+      ],
+      "steps": [
+        "Add the write-back behaviours to the new internal/forge/forge_test.go and confirm they fail; extend internal/hubtest with POST …/issues/{number}/comments (the comments kept per issue; a request whose Idempotency-Key was answered successfully before answers 200 and adds nothing), POST …/issues/{number}/close (the issue's state, a body with a comment adds the comment), a scriptable error per route and call, and accessors for an issue's comments and state",
+        "Add internal/forge with its store migration: one row per write with the item, the workspace, the issue's number, what it is for (approved, done, reverted, abandoned), its body, whether the comment was taken, whether a close follows and was taken, the time of its first try, the time of its next try, and whether it was given up",
+        "Register a hook with item.OnChange that, for an item whose source type is `issue` and nothing else, records a write and returns without any request: `approved` for a move to `ready` from `planning` or `awaiting_approval`, `done` for a move to `done`, `reverted` for a move from `verifying` to `awaiting_approval`, `abandoned` for a move to `abandoned`; a second hook call for the same transition records nothing",
+        "Build each body when its write is first tried: the change's number from Change of the record package 05's change.Service.Get returns, the hub's endpoint from the configuration, and for `done` the LandedSHA of package 07's land.Service.Landing; both lookups are given to the writer as functions, and one that fails or answers no change or no commit is a failed try of the write",
+        "Add the writer's Pass, run at an interval that is a parameter and stopped with the daemon: for each item with writes not yet taken or given up, take the oldest alone; when its next try is due, send the comment with the worker credential and the header Idempotency-Key `nightshift-forge-<write id>`, and for `done`, after the comment was taken, the close with no body; add to the hub client of internal/hub the two calls",
+        "On a failed call, and when hub.Available(worker) is false, set the first try's time where it is not set and the next try to 10 minutes later, both from the injected clock and both intervals parameters with the defaults 10 minutes and 24 hours; when the failed try is 24 hours or more after the first, mark the write given up and append the `forge_failed` entry with `could not write to issue #<N>: <error_type>: <message>`, or the transport error's text, without the unread mark",
+        "At Start, for every item whose source type is `issue` and whose state is `done` or `abandoned`, record the write of that state where the item has none for it",
+        "Register a function with workspace.Service.OnRemoved that removes the writes of the removed workspace's items, since their threads are gone",
+        "Create the writer in daemon.Run after the item service and the hub client, and add the flow of an imported issue across a forge outage to internal/daemon/e2e_test.go",
+        "Describe internal/forge, the four writes, the retry and what it reads from packages 05 and 07 in docs/architecture.md; say in docs/configuration.md that the worker token's `forge:write` is what the write-back uses and that the workspace needs a forge credential on the hub; run `make doc`"
+      ],
+      "touches": [
+        "internal/forge/forge.go",
+        "internal/forge/forge_test.go",
+        "internal/hub/client.go",
+        "internal/hubtest",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/architecture.md",
+        "docs/configuration.md",
+        "docs/generated"
+      ],
+      "done_when": [
+        "`make check` passes on the whole tree"
+      ]
+    }
+  ]
+}

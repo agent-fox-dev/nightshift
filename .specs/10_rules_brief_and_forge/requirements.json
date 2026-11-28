@@ -1,0 +1,811 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "10",
+  "spec_name": "rules_brief_and_forge",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "A recorded answer is written down as a rule",
+      "rationale": "A decision the person asks to keep must reach the repository, where later sessions read it, and must change nothing else on the way.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "event_driven",
+          "condition": "the event `decision.answered` is appended, or nightshiftd starts, and a decision of a kind other than `rule` is answered with `record: true` and has no rule yet",
+          "action": "store one rule for the decision in the state `writing`, with the decision's id, its workspace, its thread, its question, the answered option and the comment",
+          "contract": "exactly one rule exists per decision id, also when the event is seen twice or nightshiftd stopped between the answer and the event; the rule reads back as {decision, workspace, thread, question, option, comment, state: `writing`}",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a rule service over a copy of the store template, an inbox with a test decision kind `test` (options `yes`, `no`), the fake hub (internal/hubtest) and a fake of the scheduler's RunSession that the test scripts"
+            ],
+            "pseudocode": "new file internal/rule/rule_test.go, a table over {an answer with record true -> one rule with the decision's question, option and comment; the same decision.answered event handled twice -> still one rule; an answer with record false -> no rule; a decision of kind 'rule' answered with record true -> no rule; a decision answered with record true before the service exists -> svc.Start() stores its rule}: assert svc.Rules() and each rule's fields; for the rows without a rule assert the fake hub saw no request to a forks route and the session fake was not asked"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "unwanted",
+          "condition": "a decision is answered without `record`, or a decision of kind `rule` is answered with `record: true`",
+          "action": "store no rule, create no fork and ask for no session for that answer",
+          "contract": "no rule exists for the decision; the hub received no request to `POST …/forks`; no session was asked for",
+          "check": {
+            "same_as": "REQ-1.1"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "event_driven",
+          "condition": "a rule is in the state `writing`, no session of it runs, and the hub is available to the worker credential",
+          "action": "create the fork `<slug>--rule-<decision id>` with `POST /api/v1/workspaces/{slug}/forks` (`name: \"rule-<decision id>\"`, `auto_change: false`), taking `409 conflict` as the fork being there already; choose the rule's target where it has none (`adr` when `GET …/scm/tree` of the fork with `path=docs/adr` lists at least one entry, else `steering` when `GET …/scm/file` with `path=.specs/steering.md` answers 200, else `decisions`); and ask the scheduler for a planner session with no item, the scope `{the rule's workspace, the rule's thread, the key rule-<decision id>}`, the step `rule`, the fork, and the branch `rule-<decision id>-<n>`, n being one more than the number of branches the rule discarded",
+          "contract": "the hub received one fork request with that name and `auto_change: false`; the session request has `Role: planner`, `Item: 0`, the scope, the fork and the branch; its prompt names the target and holds `{input:rule}` and `{result}`; the input `rule` is the JSON object {decision, kind, question, answer, comment, target}; a target once chosen is the target of every later session of the rule",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the workspace `demo` on the fake hub with a git repository whose content the row sets",
+              "a rule in `writing` for decision 5 of the test kind"
+            ],
+            "pseudocode": "in internal/rule/rule_test.go, a table over the fork's tree {docs/adr/01-x.md present -> target 'adr'; no docs/adr but .specs/steering.md -> 'steering'; neither -> 'decisions'}: svc.Pass(ctx); assert fakeHub.Forks('demo') == ['demo--rule-5'] created with auto_change false; req = sessions.Asked()[0]; assert req.Role == planner and req.Item == 0 and req.Scope == {demo, thread, 'rule-5'} and req.Step == 'rule' and req.Fork == 'demo--rule-5' and req.Branch == 'rule-5-1'; assert json(req.Inputs['rule']) == {decision: 5, kind: 'test', question, answer: 'yes', comment, target}; assert req.Prompt contains '{input:rule}' and '{result}'. A second service over the same store and a fake hub that answers the fork request 409 conflict: assert one session asked for the same fork and no error"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "event_driven",
+          "condition": "a rule's session ends `completed`, and `GET /api/v1/workspaces/{fork}/scm/diff` with `base` the fork's default branch and `head` the session's branch lists exactly the one file the rule's target allows: for `adr` a file with `status: added` directly in `docs/adr/`; for `steering` the file `.specs/steering.md` with `status: modified`, `deletions: 0` and no unchanged line after the first added line of its patch; for `decisions` a file with `status: added` under `docs/decisions/`",
+          "action": "open the rule's change, where it has none, with `POST /api/v1/workspaces/{slug}/changes` (the fork and the branch as `source`, the title `Rule: <the question, cut to 80 characters>`, the intent `Recorded from decision <id>: <question>`, not a draft); set the rule to `proposed` with the change's number and version; and open a decision of kind `rule` in the rule's thread with the question `Add this rule to <slug>?`, the evidence `rule` (the added lines of the file's patch without their leading `+`), `file` (the file's path) and `change` (`<slug>#<number>`), the option `approve` recommended and `nothing` as what it blocks",
+          "contract": "the kind `rule` is declared with the options `approve`, `revise` (comment required) and `discard`; the decision is open in the rule's thread; the rule has exactly one change on the hub; the rule's state is `proposed`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub serving scm/diff from the fork's repository"
+            ],
+            "pseudocode": "in internal/rule/rule_test.go, a table over {target adr, the scripted session pushes a commit adding docs/adr/02-never-cache.md with the text T; target steering, the commit appends two lines to .specs/steering.md; target decisions, the commit adds docs/decisions/never-cache.md}: svc.Pass(ctx) until the rule is 'proposed'; ch = fakeHub.Changes('demo')[0]; assert ch.source == {demo--rule-5, rule-5-1} and ch.draft == false and ch.title == 'Rule: ' + question; d = inbox.OpenDecisions()[0]; assert d.Kind == 'rule' and d.Question == 'Add this rule to demo?' and d.Blocks == 'nothing'; assert d.Evidence == [{rule, the added text}, {file, the path}, {change, 'demo#' + ch.number}]; assert d.Options keys == ['approve','revise','discard'] with approve recommended and revise comment_required"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "unwanted",
+          "condition": "a rule's session ends `failed`, or ends `completed` while the diff of its branch lists no file, a file the rule's target does not allow, or the allowed file with another status or, for `steering`, with a removed line or an unchanged line after an added one",
+          "action": "count one failed session in a row for the rule, open no change for that branch, and, when it is the first failure in a row, ask for the session again: on the next branch for a rule without a change, on the same branch for a rule with one",
+          "contract": "the failure's reason is the session's own reason, `no rule written` for a diff without a file, `rule change touches <path>` for the first file in order of path that the target does not allow, or `rule change alters <path>` for the allowed file in a form the target does not allow; the hub received no `POST …/changes` for the branch; the rule stays `writing`; a session that completes with an allowed change sets the count to zero",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/rule/rule_test.go, a table over the first session of a rule with target adr {outcome failed with reason 'stalled' -> 'stalled'; completed with no commit -> 'no rule written'; a commit adding docs/adr/02-x.md and README.md -> 'rule change touches README.md'; a commit modifying docs/adr/01-x.md -> 'rule change alters docs/adr/01-x.md'} and with target steering {a commit that deletes a line of .specs/steering.md -> 'rule change alters .specs/steering.md'; a commit that inserts a line in the middle -> the same}: svc.Pass(ctx); assert rule.Failures == [reason]; assert rule.State == 'writing'; assert fakeHub.Changes('demo') is empty; assert the second session asked has Branch 'rule-5-2'. One more row: the first session ends 'interrupted' -> rule.Failures is empty and the second session has Branch 'rule-5-1'. One row over a restart: a rule left in 'writing' by a closed service -> the new service asks one session on the same branch"
+          }
+        },
+        {
+          "id": "REQ-1.6",
+          "pattern": "unwanted",
+          "condition": "a rule's session fails for the second time in a row",
+          "action": "set the rule to `failed`, abandon its change where it has one, append to the rule's thread one entry of kind `rule_failed` with the text `rule for decision <id> not written: <first reason>; <second reason>`, marking the thread unread, and ask for no further session of the rule",
+          "contract": "the rule's state is `failed`; the thread holds exactly one `rule_failed` entry and is unread; no decision was opened; a later pass asks for no session",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/rule/rule_test.go: two scripted sessions, the first 'stalled', the second completing with a commit that adds README.md; svc.Pass(ctx) twice; assert rule.State == 'failed'; assert the thread's last entry == {kind: 'rule_failed', text: 'rule for decision 5 not written: stalled; rule change touches README.md'} and thread.unread; assert inbox.OpenDecisions() is empty; svc.Pass(ctx); assert sessions.Asked() has 2 requests. A rule with a change (after a revise) failing twice: assert the fake hub saw POST …/changes/<n>/abandon"
+          }
+        },
+        {
+          "id": "REQ-1.7",
+          "pattern": "event_driven",
+          "condition": "a rule's session ends `interrupted`, or nightshiftd starts with a rule in the state `writing`",
+          "action": "ask for the rule's session again on the same branch and count no failure",
+          "check": {
+            "same_as": "REQ-1.5"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "The rule decision: approve, land and publish, revise, discard",
+      "rationale": "A rule binds later sessions, so its text lands only when the person approved it, and then goes the way of every other change.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "event_driven",
+          "condition": "a `rule` decision was answered `approve`, the rule's workspace is `green`, its pause flag is not set, the hub is available to the worker credential, and the sync from origin that precedes any landing, run through package 08's `publish.Service.Sync(ctx, slug)`, returned no error",
+          "action": "report the checks `nightshift-gate`, `nightshift-review` and `nightshift-release` with `PUT /api/v1/workspaces/{slug}/changes/{number}/checks/{name}` as `passed` on the change's current version with the summary `rule approved by the owner`, through the hub client's `ReportCheck`, and then ask the hub to land the change through package 07's `land.Service.LandChange(ctx, Request{Workspace, Change, Version})`, which sends `POST …/changes/{number}/land` with that version as `expected_version`",
+          "contract": "the hub received the three check reports, each with `status: passed`, the version and the summary, before one land request carrying `expected_version`; no approval was recorded and no `override` was sent; the rule was `approved` from the answer on",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a rule in `proposed` with change n at version 1 and its open `rule` decision d, the workspace `demo` green",
+              "the rule service is given four functions at its creation: the sync (`publish.Service.Sync`), the land (`land.Service.LandChange`, here the real one over the fake hub), the health check (`health.Service.VerifyTip`) and the push (`publish.Service.PushTip`); here the sync, the health check and the push are recording fakes that pass"
+            ],
+            "pseudocode": "new file internal/rule/land_test.go: inbox.Answer(ctx, d.ID, {Option: 'approve'}); svc.Pass(ctx); assert fakeHub.Checks('demo', n) == {nightshift-gate, nightshift-review, nightshift-release} each {status: 'passed', version: 1, summary: 'rule approved by the owner'}; assert the fake hub's request log has the three PUTs before one POST …/land with body {expected_version: 1}; assert fakeHub.Approvals('demo', n) is empty"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "state_driven",
+          "condition": "a rule is `approved` and its workspace is `red` or `held`, or the workspace's pause flag is set, or the hub is not available to the worker credential, or `publish.Service.Sync` returned an error for the sync before the landing",
+          "action": "report no check and send no land request for the rule, keep it `approved`, and carry out REQ-2.1 at the first pass at which none of these holds",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/rule/land_test.go, a table over {workspace state red; workspace state held; workspace paused; hub.Available(worker) false; the sync function returns an error}: answer approve; svc.Pass(ctx) three times; assert the fake hub saw no PUT …/checks and no POST …/land; assert rule.State == 'approved'; lift the condition; svc.Pass(ctx); assert one land request"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "event_driven",
+          "condition": "`LandChange` returns an `Outcome` of the kind `landed` for a rule's change",
+          "action": "set the rule to `landed` with the outcome's `LandedSHA`; append to the rule's thread the entry `rule_landed` with the text `rule for decision <id> landed as <sha>`; run the workspace's health command on that commit through package 08's `health.Service.VerifyTip(ctx, slug, commit)`, its check of a commit no item is to blame for; when that returns nil, push the workspace's default branch to origin through `publish.Service.PushTip(ctx, slug)` (REQ-6.4); and when that reports the branch on origin, set the rule to `published` and append the entry `rule_published` with the text `rule for decision <id> is on origin`",
+          "contract": "`VerifyTip` was called once with the workspace and the landed commit, and `PushTip` once after it returned nil; the rule's state is `published`; neither entry marks the thread unread",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/rule/land_test.go: the fake hub lands change n as sha S; answer approve; svc.Pass(ctx) until rule.State == 'published'; assert health.calls == [{demo, S}] and push.calls == [demo], in that order; assert the thread's entries end with {rule_landed, 'rule for decision 5 landed as ' + S}, {rule_published, 'rule for decision 5 is on origin'}; assert thread.unread is as it was before the pass"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "unwanted",
+          "condition": "`LandChange` returns for a rule's change an `Outcome` of a kind other than `landed` (`pending_approval`, `pending`, `blocked`, `conflict`, `version_mismatch` or `failed`)",
+          "action": "set the rule to `failed`, abandon the change, and append to the rule's thread one entry of kind `rule_failed` with the text `rule for decision <id> not landed: <the outcome's kind>`, followed by `: <reason>` where the outcome has a reason, marking the thread unread",
+          "contract": "the rule's state is `failed`; the hub received `POST …/changes/{number}/abandon`; no decision of kind `approval`, `conflict` or `blocked` was opened and no session was asked for; the health and publish functions were not called",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/rule/land_test.go, a table over the land's scripted answer and the text after 'not landed: ' {409 land_conflict -> 'conflict'; 409 policy_blocked whose requirement lacks an approval -> 'pending_approval'; 409 policy_blocked with blocked.status blocked -> 'blocked'; 409 version_mismatch -> 'version_mismatch'; 503 land_failed with error timeout -> 'failed: land_failed: timeout'}: answer approve; svc.Pass(ctx); assert rule.State == 'failed'; assert the thread's last entry == {rule_failed, 'rule for decision 5 not landed: ' + text} and thread.unread; assert the fake hub saw one POST …/land; assert fakeHub.Change('demo', n).state == 'abandoned'; assert inbox.OpenDecisions() is empty; assert health.calls and push.calls are empty"
+          }
+        },
+        {
+          "id": "REQ-2.5",
+          "pattern": "unwanted",
+          "condition": "`VerifyTip` returns an error for a rule's landed commit, or `PushTip` does not report the branch on origin",
+          "action": "leave the rule `landed`, call neither function for it a second time, and open no decision and ask for no session of its own",
+          "contract": "the rule's state stays `landed`; the thread has a `rule_landed` entry and no `rule_published` entry; `PushTip` was not called after `VerifyTip` returned an error; what `VerifyTip` did for the failure (the workspace `red`, the `main_red` decision in the workspace's thread) is as package 08 specifies it",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/rule/land_test.go, a table over {the health fake returns an error -> push.calls is empty; the health fake returns nil and the push fake returns false}: answer approve; svc.Pass(ctx) three times; assert rule.State == 'landed'; assert no entry of kind rule_published; assert health.calls has length 1; assert inbox.OpenDecisions() is empty"
+          }
+        },
+        {
+          "id": "REQ-2.6",
+          "pattern": "event_driven",
+          "condition": "a `rule` decision is answered `revise` with its comment",
+          "action": "set the rule to `writing` and ask for its session again on the branch of its change, with the comment as the further input `comment`; and when that session's branch passes the check of REQ-1.4, open a new `rule` decision for the change's new version",
+          "contract": "the change keeps its number and has a version one higher; the answered decision stays answered; the new decision's evidence `rule` shows the new text; the checks of an approval are then reported on the new version",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/rule/land_test.go: inbox.Answer(ctx, d.ID, {Option: 'revise', Comment: 'shorter'}); the scripted session pushes a second commit to rule-5-1 that rewrites the added file; svc.Pass(ctx) until 'proposed'; req = sessions.Asked()[1]; assert req.Branch == 'rule-5-1' and req.Inputs['comment'] == 'shorter'; assert len(fakeHub.Changes('demo')) == 1 and its version == 2; d2 = inbox.OpenDecisions()[0]; assert d2.ID != d.ID and d2.Evidence[0].Text == the new text; answer d2 approve; svc.Pass(ctx); assert every check report has version 2. An answer 'revise' without a comment through POST /api/v1/decisions/{id}/answer -> 400 comment_required"
+          }
+        },
+        {
+          "id": "REQ-2.7",
+          "pattern": "event_driven",
+          "condition": "a `rule` decision is answered `discard`",
+          "action": "abandon the rule's change with `POST …/changes/{number}/abandon`, set the rule to `discarded`, and append to the rule's thread the entry `rule_discarded` with the text `rule for decision <id> discarded`",
+          "contract": "the change's state on the hub is `abandoned`; the rule's state is `discarded`; no check was reported and no land was asked for; a later pass does nothing for the rule",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/rule/land_test.go: inbox.Answer(ctx, d.ID, {Option: 'discard'}); svc.Pass(ctx); assert fakeHub.Change('demo', n).state == 'abandoned'; assert rule.State == 'discarded'; assert the thread's last entry == {rule_discarded, 'rule for decision 5 discarded'}; assert no PUT …/checks and no POST …/land in the request log"
+          }
+        },
+        {
+          "id": "REQ-2.8",
+          "pattern": "ubiquitous",
+          "action": "for any answer to a `rule` decision whose handler is called more than once, and for any rule found `approved` or `landed` when nightshiftd starts, carry out the answer's effect once: one report of each check for a version, one landing, one call of `VerifyTip` and of `PushTip`, one abandon; taking a change the hub reports as `landed` as landed, and one it reports as `abandoned` as abandoned",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/rule/land_test.go, a table over {the approve handler called twice -> one land request; a service closed after the land answered 200 and before the rule was stored as landed, then a new service over the same store -> no second land request, GET …/changes/{n} read, rule 'published', health.calls has length 1; the discard handler called twice with the hub answering the second abandon 409 change_closed -> rule 'discarded' and one rule_discarded entry; a handler called for a decision whose rule is no longer 'proposed' -> nothing changes}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "The outcome numbers and nightshift stats",
+      "rationale": "Whether unattended work goes well shows in a few numbers over weeks, not in any one thread.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/stats`, optionally with `workspace=<slug>` naming a registered workspace and `days=<N>` from 1 to 365 (30 when absent)",
+          "action": "answer, for the named workspace or for every registered workspace in order of slug, the outcome numbers over the N times 24 hours before the request, with `done` and `abandoned` being the numbers of the workspace's items in that state whose `state_since` lies in that time",
+          "contract": "status 200 with `{\"days\": N, \"workspaces\": [{\"workspace\", \"done\", \"abandoned\", \"first_pass\", \"sessions_per_item\", \"reverted\", \"taken_over\", \"decisions_per_done_item\", \"decision_wait_seconds\", \"creation_to_done_seconds\", \"tokens_per_done_item\"}]}`; `done`, `abandoned`, `reverted` and `taken_over` are integers and 0 when nothing is counted",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a helper in internal/stats that seeds one store: clock now = T; workspace `demo` with item A (created T-27h, done T-23h; sessions planner completed 100 tokens, implementer completed 1000, reviewer completed 200; one decision opened T-27h and answered T-25h), item B (created T-3d, done T-2d; sessions implementer failed 50, implementer completed 500, reviewer completed 100, a second implementer completed 300 that started after the first completed one ended, reviewer completed 100; two decisions with waits of 1h and 3h answered at T-60h and T-50h; a `state` entry `verifying -> awaiting_approval` at T-53h and a `taken_over` entry at T-51h), item C (abandoned at T-3d), item D (done at T-40d with one implementer session of 9000 tokens), item E (ready, never done); and workspace `empty` with no item"
+            ],
+            "pseudocode": "new file internal/stats/stats_test.go, one table over (workspace, days) with the whole expected object: {demo, 30 -> done 2, abandoned 1, first_pass 50, sessions_per_item 4, reverted 1, taken_over 1, decisions_per_done_item 1.5, decision_wait_seconds 7200, creation_to_done_seconds 50400, tokens_per_done_item 1175; demo, 1 -> done 1, abandoned 0, first_pass 100, sessions_per_item 3, reverted 0, taken_over 0, decisions_per_done_item 1, decision_wait_seconds null, creation_to_done_seconds 14400, tokens_per_done_item 1300; demo, 365 -> done 3; empty, 30 -> the four counts 0 and the six other members null}: got = stats.Compute(ctx, slug, days); assert got == want. In new file internal/stats/routes_test.go through the router: get('/api/v1/stats') -> 200, days 30 and the workspaces [demo, empty] in that order; get('/api/v1/stats?workspace=demo&days=1') -> one workspace equal to the table's row"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "ubiquitous",
+          "action": "for any workspace and time asked for, answer `first_pass` as the share, in whole percent rounded to the nearest, of the items that reached `done` in that time for which no implementer session started after the end of the item's first implementer session with the status `completed`, and `sessions_per_item` as the median, over those items, of the number of sessions recorded for the item, of every role and status, a median of an even number of values being the mean of the two in the middle",
+          "check": {
+            "same_as": "REQ-3.1"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "ubiquitous",
+          "action": "for any workspace and time asked for, answer `reverted` as the number of the workspace's items whose thread holds, with a time in that time, an entry of kind `state` whose text begins `verifying -> awaiting_approval`, and `taken_over` as the number of its items whose thread holds, with a time in that time, an entry of kind `taken_over`, each item counted once",
+          "check": {
+            "same_as": "REQ-3.1"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "ubiquitous",
+          "action": "for any workspace and time asked for, answer `decisions_per_done_item` as the number of answered decisions in the threads of the items that reached `done` in that time divided by the number of those items, rounded to one decimal, and `decision_wait_seconds` as the median, over the decisions of the workspace's threads that were answered in that time, of the seconds from the decision's opening to its answer",
+          "check": {
+            "same_as": "REQ-3.1"
+          }
+        },
+        {
+          "id": "REQ-3.5",
+          "pattern": "ubiquitous",
+          "action": "for any workspace and time asked for, answer `creation_to_done_seconds` as the median, over the items that reached `done` in that time, of the seconds from the item's `created_at` to its `state_since`, and `tokens_per_done_item` as the median, over those items, of the sum of the tokens of the item's recorded sessions",
+          "check": {
+            "same_as": "REQ-3.1"
+          }
+        },
+        {
+          "id": "REQ-3.6",
+          "pattern": "ubiquitous",
+          "action": "for any workspace in which no item reached `done` in the time asked for, answer `first_pass`, `sessions_per_item`, `decisions_per_done_item`, `creation_to_done_seconds` and `tokens_per_done_item` as null, and for any workspace in which no decision was answered in that time, answer `decision_wait_seconds` as null",
+          "check": {
+            "same_as": "REQ-3.1"
+          }
+        },
+        {
+          "id": "REQ-3.7",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift stats [<slug>] [--days <N>]`",
+          "system": "nightshift",
+          "action": "request `GET /api/v1/stats` with the slug as `workspace` and N as `days`, each only when given, and print for each workspace the line `<slug>, last <N> days` and then, indented by two spaces, the lines `done <n>, abandoned <n>`, `first pass <n>%, sessions per item <n>`, `reverted <n>, taken over <n>`, `decisions per done item <n>, decision wait <duration>`, `creation to done <duration>` and `tokens per done item <n>`, a null printed as `-` (without the `%`), a duration as `<d>d <h>h` from 24 hours on, `<h>h <m>m` from one hour on and `<m>m` below, rounded down, and a number without a fraction printed without a decimal point",
+          "contract": "exit code 0; the lines on stdout; with `--json` stdout is the API's JSON",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an httptest server standing in for the daemon"
+            ],
+            "pseudocode": "in internal/cli/cli_test.go (package 01's file), a table over the served document {the demo row of 30 days -> 'demo, last 30 days\\n  done 2, abandoned 1\\n  first pass 50%, sessions per item 4\\n  reverted 1, taken over 1\\n  decisions per done item 1.5, decision wait 2h 0m\\n  creation to done 14h 0m\\n  tokens per done item 1175\\n'; the empty row -> '  first pass -, sessions per item -' and 'decision wait -' among its lines; a wait of 93600 seconds -> '1d 2h'; a wait of 540 seconds -> '9m'; --json -> stdout parses to the served document}: code, stdout, _ = cli.Run(['stats', 'demo', '--days', '30', …]); assert code == 0; assert stdout; assert the httptest server saw GET /api/v1/stats?days=30&workspace=demo; cli.Run(['stats']) -> the request has no query"
+          }
+        },
+        {
+          "id": "REQ-3.8",
+          "pattern": "unwanted",
+          "condition": "`nightshift stats` is given a `--days` that is not a decimal integer from 1 to 365, a second slug or an unknown flag; or a request to `GET /api/v1/stats` carries such a `days`, or names a workspace that is not registered",
+          "action": "refuse the command without sending a request, and refuse the request without computing anything",
+          "contract": "the client: exit code 2, the usage of `stats` on stderr, stdout empty, no request sent; the API: status 400 with `error_type: invalid_request` for `days`, status 404 with `error_type: not_found` for the workspace",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/cli_test.go, a table over {['stats','--days','0'], ['stats','--days','366'], ['stats','--days','x'], ['stats','a','b']}: assert code == 2 and stderr contains 'usage: nightshift stats' and the httptest server saw no request. In internal/stats/routes_test.go, a table over {days=0, days=366, days=1.5, days=abc -> 400 invalid_request; workspace=nope -> 404 not_found}: assert r.status and r.json.error_type"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "The daily brief and nightshift brief",
+      "rationale": "A person who does not watch needs one place, once a day, that says what finished, what waits for them and what it cost.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "event_driven",
+          "condition": "the time in the daemon's time zone reaches `brief.at` (`08:00` unless configured) on a day for which no brief was made yet, and since the previous brief an item of any workspace was created or changed its state, or a decision is open",
+          "action": "append one entry of kind `brief` to the installation's brief thread, marking the thread unread, whose text is the brief for the period from the time of the thread's last `brief` entry, or from 24 hours before when it has none, to that moment; record the local day as made; and call `Notify` of `internal/notify` with the event `brief` and the brief thread's URL path",
+          "contract": "the brief thread gains exactly one entry and is in the view `unread`; one notification was sent whose document has `event: \"brief\"`, `time` and `thread`, and neither `workspace` nor `item`; the entry's text begins `brief <since> to <until>` with both times in RFC 3339 UTC",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a brief runner over a copy of the store template, the inbox, the item service and a recording notifier"
+            ],
+            "pseudocode": "new file internal/brief/daily_test.go, with an injected clock in a zone two hours east of UTC and `brief.at` 08:00, the runner's check driven by the test: one item created yesterday; clock = 07:59 local; r.Check(ctx); assert the brief thread has no entry; clock = 08:00; r.Check(ctx); assert one entry {kind: 'brief'} whose text starts 'brief ' + (until - 24h) + ' to ' + until, thread.unread, and notifier.events == [{brief, thread: '/api/v1/threads/<id>'}] without workspace and item; clock = 09:00; r.Check(ctx); assert still one entry (one a day). Next day with nothing changed and no open decision: r.Check at 08:00 -> no new entry, no notification, and a second r.Check at 10:00 after an item was created -> still no new entry that day. The day after: r.Check at 08:00 -> a second entry whose period starts at the first entry's time. A runner created at 11:00 local over a store with no brief made that day -> its first Check writes the brief; a runner created at 11:00 on a day already recorded -> writes none; a store whose last made day is three days back -> one entry, not three"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "ubiquitous",
+          "action": "for any brief, give each registered workspace, in order of slug, a block that begins with the slug and lists under `done:` each item that reached `done` in the period as `#<number> <title>: <the text of the item's last thread entry of kind `published`>` (package 08 writes it as `change <n> is on origin as <sha>; <n> tokens spent`), followed on a line of its own by `outside the plan: <files>` where package 06's `(*impl.Service).OutsidePlan(ctx, item)` returns files for the item, the files joined with `, `; under `reverted:` each item whose thread holds, with a time in the period, an entry of kind `state` whose text begins `verifying -> awaiting_approval`, as `#<number> <title>`; and under `abandoned:` each item that became `abandoned` in the period, the same way; each list in ascending order of item number, and a heading with nothing under it left out",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "the files outside an item's plan are read through a function the brief is given (package 06's `(*impl.Service).OutsidePlan`), here a map"
+            ],
+            "pseudocode": "new file internal/brief/brief_test.go: b = brief.Build(ctx, since, until); assert b.Text == the expected text, written out in the test in full, for a store seeded with workspace `demo` (daily limit 50000000): item 12 done in the period with the published entry 'change 41 is on origin as 7c1e9a2; 54200 tokens spent' and the outside-plan lookup answering ['docs/api.md', 'internal/api/server.go']; item 13 with a state entry 'verifying -> awaiting_approval: health command failed' in the period; item 14 abandoned in the period; item 15 awaiting_approval with open decision 5 of kind plan opened 27 hours before until; item 16 ready with Scheduler.Waiting == 'the daily limit'; item 17 implementing with the marker 'paused'; item 18 implementing with nothing to wait for; item 19 done before the period; sessions ended in the period: planner 1200, implementer 50000, reviewer 3000 tokens, and one implementer session of 7000 tokens ended before it; and a second workspace `quiet` with no item. The expected text has the block of demo with 'done:', '#12 … : change 41 is on origin as 7c1e9a2; 54200 tokens spent', 'outside the plan: docs/api.md, internal/api/server.go', 'reverted:', '#13 …', 'abandoned:', '#14 …', 'decisions open:', '5 plan 1d 3h: …', 'waiting:', '#15 awaiting_approval: decision 5 (plan)', '#16 ready: the daily limit', '#17 implementing: paused', 'tokens: planner 1200, implementer 50000, reviewer 3000, total 54200 of 50000000 a day', 'last 30 days:' and its six lines; and the block of quiet with only its tokens line (all zero) and its numbers; assert items 18 and 19 appear nowhere"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "ubiquitous",
+          "action": "for any brief, list in each workspace's block under `decisions open:` every open decision of the workspace's threads, oldest first, as `<id> <kind> <age>: <question>`, the age being the time from its opening to the end of the period; and under `waiting:` every item of the workspace that is neither `done` nor `abandoned` and waits, as `#<number> <state>: <what for>`, what for being `decision <id> (<kind>)` for the item's oldest open decision, else `paused` or `taken over` where the item carries that marker, else the reason `Scheduler.Waiting` reports for it; an item with none of these is not listed",
+          "check": {
+            "same_as": "REQ-4.2"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "ubiquitous",
+          "action": "for any brief, print in each workspace's block the line `tokens: planner <n>, implementer <n>, reviewer <n>, total <n> of <the workspace's daily limit> a day`, summed over the workspace's recorded sessions that ended in the period, and close the block with the line `last 30 days:` and the six lines of the workspace's outcome numbers over 30 days, as `nightshift stats` prints them",
+          "check": {
+            "same_as": "REQ-4.2"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "unwanted",
+          "condition": "the time `brief.at` is reached and, since the previous brief, no item of any workspace was created or changed its state, and no decision is open",
+          "action": "write no entry and send no notification for that day, and record the local day as made",
+          "contract": "the brief thread has no new entry and its unread mark is unchanged; `Notify` was not called; no later check on that day writes a brief; the period of the next brief still starts at the last brief written",
+          "check": {
+            "same_as": "REQ-4.1"
+          }
+        },
+        {
+          "id": "REQ-4.6",
+          "pattern": "ubiquitous",
+          "action": "for any local day, make at most one brief; make the brief whose time passed while nightshiftd was stopped at the next start on that day; and make none for a day that passed entirely",
+          "check": {
+            "same_as": "REQ-4.1"
+          }
+        },
+        {
+          "id": "REQ-4.7",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/brief`, or the person runs `nightshift brief`",
+          "action": "answer the brief for the period from the brief thread's last `brief` entry, or from 24 hours before when it has none, to the moment of the request, also when the daily brief would be left out, storing no entry, recording no day and sending no notification; the client prints the answer's `text`, and with `--json` the answer",
+          "contract": "status 200 with `{\"since\", \"until\", \"text\", \"workspaces\": [{\"workspace\", \"done\": [{\"item\", \"title\", \"published\", \"outside_plan\": [<file>]}], \"reverted\": [{\"item\", \"title\"}], \"abandoned\": [{\"item\", \"title\"}], \"decisions\": [{\"id\", \"kind\", \"question\", \"opened_at\", \"age_seconds\"}], \"waiting\": [{\"item\", \"state\", \"waits_for\"}], \"tokens\": {\"planner\", \"implementer\", \"reviewer\", \"total\", \"daily_limit\"}, \"outcomes\": <the workspace's object of GET /api/v1/stats>}]}`; `text` equals what the daily brief would hold for the same period; the brief thread is unchanged; the command's exit code is 0",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "new file internal/brief/routes_test.go through the router, over the store of the build test: r = get('/api/v1/brief'); assert r.status == 200; assert r.json.text == brief.Build(ctx, since, until).Text; assert r.json.workspaces[0].done == [{item: 12, title, published: 'change 41 is on origin as 7c1e9a2; 54200 tokens spent', outside_plan: ['docs/api.md', 'internal/api/server.go']}] and .tokens.total == 54200 and .outcomes.workspace == 'demo'; assert the brief thread's entry count and the notifier's events are as before. A store with nothing changed and no open decision -> 200 with the blocks of the workspaces. In internal/cli/cli_test.go: cli.Run(['brief']) prints the served text and exits 0; ['brief','--json'] prints the served document; ['brief','extra'] exits 2 with no request"
+          }
+        },
+        {
+          "id": "REQ-4.8",
+          "pattern": "unwanted",
+          "condition": "the configuration gives `brief.at` a value that is not a time `HH:MM` from `00:00` to `23:59`",
+          "action": "fail the start check `config` and start nothing",
+          "contract": "exit code 1; one line on stderr, `config: brief.at must be HH:MM`; a configuration without the key loads with `08:00`",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/config/config_test.go (package 01's file), a table over brief.at {'8:00', '24:00', '08:60', '0800', 'noon' -> the error 'brief.at must be HH:MM'; '00:00', '23:59' -> loaded as given; absent -> '08:00'}: cfg, err = config.Load(path, home)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "Writing back to the issue an item was imported from",
+      "rationale": "Whoever filed the issue watches the issue, not nightshift's inbox.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "event_driven",
+          "condition": "a work item whose source is an issue moves to `ready` from `planning` or `awaiting_approval`",
+          "action": "record a write for the item and send, with the worker token, `POST /api/v1/workspaces/{slug}/issues/{N}/comments` with the body `nightshift: the plan is approved. The work is change <number> of <slug> on <hub endpoint>.`, the number being `Change` of the record package 05's `change.Service.Get(ctx, item)` returns, and with an `Idempotency-Key` header that is the same at every try of that write and differs between writes",
+          "contract": "the hub holds one comment on issue N with that body; the transition returned before the request was sent; a second approval of the same item, after a revert, writes a second comment naming the change the item has then",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a forge writer over a copy of the store template, the item service with its OnChange hook registered, and the fake hub (internal/hubtest) with issue 7 of `demo`",
+              "the item's change and its landed commit are read through two functions the writer is given (package 05's `change.Service.Get` and package 07's `land.Service.Landing`), here maps"
+            ],
+            "pseudocode": "new file internal/forge/forge_test.go, a table over the transitions of item 12 (source issue 7 of demo, change 41) {planning -> ready and awaiting_approval -> ready -> one comment 'nightshift: the plan is approved. The work is change 41 of demo on ' + hubURL + '.'; verifying -> awaiting_approval -> 'nightshift: the change was reverted after a failed health command.'; landing -> abandoned -> 'nightshift: the item was abandoned.'; new -> planning -> no comment; implementing -> reviewing -> no comment}: items.Transition(…); w.Pass(ctx); assert fakeHub.IssueComments('demo', 7) == [the body]; assert fakeHub.Issue('demo', 7).state == 'open'; assert every comment request carried an Idempotency-Key. The same transitions for item 13 (source text) and item 14 (source spec): assert the fake hub saw no request under /issues. Over all rows: assert the request log holds no path containing '/labels'. A second approval with the change lookup now answering 44: assert a second comment naming change 44 with another Idempotency-Key"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "event_driven",
+          "condition": "a work item whose source is an issue becomes `done`",
+          "action": "read the commit the item's change landed as, `LandedSHA` of what package 07's `land.Service.Landing(ctx, item)` returns, send the comment `nightshift: done. Commit <sha> is on origin.` to the issue, and, once the hub took the comment, close the issue with `POST /api/v1/workspaces/{slug}/issues/{N}/close` without a body",
+          "contract": "the issue has the comment and its state is `closed`; the close request was sent after the comment's 201 and carried no `comment`; when the close failed and is tried again, the comment is not sent a second time",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/forge/forge_test.go: the landing lookup answers LandedSHA S for item 12; items.Transition(12 -> done); w.Pass(ctx); assert fakeHub.IssueComments('demo', 7) == ['nightshift: done. Commit ' + S + ' is on origin.']; assert fakeHub.Issue('demo', 7).state == 'closed'; assert the request log has the comment before the close and the close's body is empty. Second case: the close is scripted to fail once with 502 forge_error; w.Pass; clock += 10m; w.Pass; assert one comment request in the log and the issue closed"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "event_driven",
+          "condition": "a work item whose source is an issue moves from `verifying` to `awaiting_approval`, or becomes `abandoned`",
+          "action": "send one comment to the issue, `nightshift: the change was reverted after a failed health command.` or `nightshift: the item was abandoned.`, and leave the issue open",
+          "check": {
+            "same_as": "REQ-5.1"
+          }
+        },
+        {
+          "id": "REQ-5.4",
+          "pattern": "ubiquitous",
+          "action": "for any work item whose source is not an issue, send no request to a forge route of the hub, and for any work item, send no request to a label route",
+          "check": {
+            "same_as": "REQ-5.1"
+          }
+        },
+        {
+          "id": "REQ-5.5",
+          "pattern": "unwanted",
+          "condition": "a forge call of a write is answered with an error, fails at the connection, or cannot be sent because the hub is not available to the worker credential",
+          "action": "keep the write, try its call again every 10 minutes, send no later write of the same item before it, and leave the item's state and its steps untouched",
+          "contract": "the item reached its state although the call failed; the next try is sent 10 minutes after the failed one by the injected clock and not earlier; the writes of other items are sent meanwhile; a write not yet taken is still tried after a restart of nightshiftd",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/forge/forge_test.go, a table over the failure {the comment route scripted to answer 502 forge_unreachable; 429 forge_rate_limited; the fake hub stopped; hub.Available(worker) false}: items.Transition(12 -> ready); w.Pass(ctx); assert items.Get(12).State == 'ready'; assert no comment; clock += 9m; w.Pass; assert the comment route saw no further request; clock += 1m; lift the failure; w.Pass; assert one comment. Order: with the approval's comment failing, Transition 12 on to done and Transition item 15 (issue 8) to ready; w.Pass; assert issue 8 has its comment and issue 7 none; lift the failure; clock += 10m; w.Pass; assert issue 7's comments == [approved, done] in that order. Restart: a writer closed with a pending write, a new writer over the same store; clock += 10m; w.Pass; assert the comment was sent"
+          }
+        },
+        {
+          "id": "REQ-5.6",
+          "pattern": "unwanted",
+          "condition": "the call of a write still fails 24 hours after its first try",
+          "action": "give the write up, append to the item's thread one entry of kind `forge_failed` with the text `could not write to issue #<N>: <the last error>`, not marking the thread unread, never send the write again, and go on with the item's later writes",
+          "contract": "exactly one `forge_failed` entry for the write; the thread's unread mark is unchanged; the hub receives no further request for that write; a later write of the same item is sent at the next pass",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/forge/forge_test.go: the comment route answers 502 forge_forbidden throughout; items.Transition(12 -> ready); w.Pass at the first try and at every 10 minutes of the injected clock up to 23 hours 50 minutes after it; assert the comment route saw 144 requests and the thread has no forge_failed entry; clock = 24 hours after the first try; w.Pass; assert 145 requests and the thread's last entry == {kind: 'forge_failed', text: 'could not write to issue #7: forge_forbidden: …'} and thread.unread unchanged; clock += 1h; w.Pass; assert still 145 requests and one entry; let the route answer; items.Transition(… 12 -> done); w.Pass; assert the done comment was sent"
+          }
+        },
+        {
+          "id": "REQ-5.7",
+          "pattern": "event_driven",
+          "condition": "nightshiftd starts and a work item whose source is an issue is `done` or `abandoned` with no write recorded for that state",
+          "action": "record that write and send it as REQ-5.2 or REQ-5.3 says",
+          "contract": "exactly one write exists per item and state, also after several starts; an item whose write for the state was taken or given up gets no second one",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/forge/forge_test.go: move item 12 to done with no writer registered; w = forge.New(…); w.Start(ctx); w.Pass(ctx); assert the done comment and the close were sent; a second forge.New over the same store, Start and Pass: assert no further request. The same for an abandoned item 16 of issue 9"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-6",
+      "title": "A session and a push that belong to no item",
+      "rationale": "A rule is no work item, and the item of the recorded decision is at work in its own clone, so the rule's session needs a place, a thread and a turn of its own, and its landed commit a push that no item asks for.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-6.1",
+          "pattern": "ubiquitous",
+          "action": "for any session asked with no item and a scope `{Workspace, Thread, Key}`, register it on the hub for the scope's workspace with `metadata {\"scope\": <key>}`, run it in the clone `<sessions.dir>/scopes/<key>/clone` with its input and result files in `<sessions.dir>/scopes/<key>/run/<session-id>/`, write its `session_started` and `session_ended` entries to the scope's thread, and record it with the workspace and no item; in everything else (the token, the stream, the bounds, the outcome, the reports to the hub) it is a session as package 04 runs one",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "sessions unisolated and a fake `claude` on PATH, as package 04's session tests set them up",
+              "the fake hub's fork `demo--rule-5` of `demo` with a git endpoint"
+            ],
+            "pseudocode": "in internal/session/session_test.go (package 04's file): res = svc.Run(ctx, Spec{Role: planner, Scope: {demo, thread, 'rule-5'}, Step: 'rule', Fork: 'demo--rule-5', Branch: 'rule-5-1', Prompt: 'write {input:rule} {result}', Inputs: {rule: '{}'}}); assert res.Outcome == completed; assert fakeHub.Session(res.ID).metadata == {scope: 'rule-5'} and its workspace_slug == 'demo' and its archetype == 'planner'; assert the fake claude's working directory == <dir>/scopes/rule-5/clone on the branch rule-5-1 and its result path lies in <dir>/scopes/rule-5/run/<res.ID>/; assert the scope's thread has a session_started and a session_ended entry; assert the stored session has workspace 'demo' and no item; svc.RemoveScope('rule-5'); assert <dir>/scopes/rule-5 is gone"
+          }
+        },
+        {
+          "id": "REQ-6.2",
+          "pattern": "unwanted",
+          "condition": "a session is asked with neither an item nor a scope, or with both",
+          "action": "refuse the request before any request to the hub",
+          "contract": "the call returns an error whose text is `a session needs an item or a scope`; the hub received no request; no session is recorded and no entry written",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/session/session_test.go, a table over {Spec with Item 0 and no Scope; Spec with Item 7 and a Scope}: _, err = svc.Run(ctx, spec); assert err.Error() == 'a session needs an item or a scope'; assert the fake hub's request count and the store's session count are unchanged"
+          }
+        },
+        {
+          "id": "REQ-6.3",
+          "pattern": "ubiquitous",
+          "action": "for any session asked with a scope, start it after the waiting sessions of `ready` items, in the order asked among its like; start it neither while the hub is unavailable to the worker credential, nor while the pause flag of the scope's workspace is set, nor while that workspace's count of tokens of the day is at its daily limit; add its tokens to that count; ask no start guard for it; and count no failure and open no `session_failed` or `session_limit` decision for it",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/sched/sched_test.go (package 04's file), over the scripted fake of the session service, a table over {a scoped request and a request of a `ready` item both waiting for one place -> the item's starts first; two scoped requests -> the one asked first starts first; the workspace paused -> the scoped request is not started, and starts after the workspace's resume; the day's count at the limit -> not started; hub.Available(worker) false -> not started; a registered guard that refuses every item -> the scoped request starts; two scoped sessions in a row ending failed -> inbox.OpenDecisions() is empty}; after a scoped session reporting 500 tokens: assert TokensToday('demo') grew by 500"
+          }
+        },
+        {
+          "id": "REQ-6.4",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls `publish.Service.PushTip(ctx, slug)`, a function this package adds to package 08's `internal/publish`",
+          "action": "send, when the workspace is `green`, `health.TipPending(slug)` is false and the hub is available to the worker credential, one push of the workspace's default branch through the hub client's `Push(ctx, slug, branch)`, without `force`, and return true when the hub answers `pushed` or `up_to_date`; otherwise send nothing, or take the hub's refusal, and return false with the reason; in no case open a decision, change the workspace's state, write a thread entry or try again by itself",
+          "contract": "returns (true, nil) for `pushed` and `up_to_date`; returns false and an error naming the condition (`workspace red`, `workspace held`, `tip pending`, `hub unavailable`) without a request to the hub; returns false and the hub's typed error for a refused or failed push; the workspace's state, its threads and package 08's counts of tries are unchanged",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/publish/push_test.go (package 08's file, with its fixtures), a table over {push answered 'pushed' -> (true, nil) and one push request ('demo', 'main', no force); 'up_to_date' -> (true, nil); workspace 'red' -> false, error 'workspace red', no request; workspace 'held' -> 'workspace held'; health.TipPending true -> 'tip pending'; hub.Available(worker) false -> 'hub unavailable'; push answered 422 origin_rejected -> false and that error, ws.state('demo') still 'green', no decision opened, no entry written, no retry timer}: ok, err = svc.PushTip(ctx, 'demo')"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "A recorded answer becomes a rule on origin",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "answers a decision of workspace `demo` with `nightshift decide <id> --option yes --comment \"Never cache greetings\" --record`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "stores a rule for the decision, creates the fork `demo--rule-<id>` on the hub, finds `docs/adr/` in it and starts a planner session with no item on the branch `rule-<id>-1`"
+        },
+        {
+          "actor": "planner",
+          "action": "adds one file under `docs/adr/` holding the question, the answer and the comment, pushes the branch to the fork and writes its result file"
+        },
+        {
+          "actor": "hub",
+          "action": "answers the diff of the branch with the one added file"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens the change and a `rule` decision that shows the file's text"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift decide <rule decision> --option approve`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "syncs from origin, reports the three checks as passed with `rule approved by the owner` and asks the hub to land the version"
+        },
+        {
+          "actor": "hub",
+          "action": "lands the change on the default branch"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "runs the health command on the landed commit and asks the hub to push the default branch"
+        },
+        {
+          "actor": "origin",
+          "action": "receives the default branch with the new file"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/rule, internal/session, internal/sched, internal/inbox and internal/item as daemon.Run wires them",
+          "package 08's publish.Service.Sync and health.Service.VerifyTip, package 07's land.Service.LandChange and the new publish.Service.PushTip, as daemon.Run gives them to the rule service",
+          "the hub client of internal/hub against the fake hub's fork, source control, change, check, land and push routes and its git endpoint",
+          "the nightshift client's run function",
+          "a planner session started through the session helper"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) with the workspace `demo`, registered through the end-to-end helper of package 02 with the health command `true`, whose repository holds `docs/adr/01-first.md` and whose origin is a bare repository in a temporary directory",
+          "sessions unisolated; a fake `claude` on PATH (a script the test writes) that adds `docs/adr/02-never-cache-greetings.md` with the text of its input file, commits, pushes its branch and writes the result file",
+          "a decision kind `test` with the option `yes`, registered through the end-to-end helper's hook, and one open decision of it in the thread of an item of `demo`"
+        ],
+        "end_state": [
+          "`nightshift decision show <rule decision>` prints the kind `rule`, the evidence `rule` with the comment's text and the options `approve`, `revise` and `discard`",
+          "the fake hub holds the three checks `passed` on version 1 with the summary `rule approved by the owner`, and the change is `landed`",
+          "the default branch of the origin repository holds `docs/adr/02-never-cache-greetings.md`, and no other file differs from before",
+          "`nightshift thread show` of the item's thread prints the entries `rule_landed` and `rule_published`",
+          "the fake hub's session of the rule has `archetype: planner` and `metadata {\"scope\": \"rule-<id>\"}`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go (package 01's file): d = startDaemon(cfg with the test kind); id = the open test decision; assert cli(['decide', id, '--option', 'yes', '--comment', 'Never cache greetings', '--record']) exits 0; eventually rd = the open decision of kind 'rule'; assert cli(['decision','show', rd]) contains 'Never cache greetings'; assert cli(['decide', rd, '--option', 'approve']) exits 0; eventually git show origin main:docs/adr/02-never-cache-greetings.md succeeds; assert fakeHub.Checks('demo', n) are three passed with the summary; assert git diff --name-only before..main in origin == ['docs/adr/02-never-cache-greetings.md']; assert cli(['thread','show', t]) contains 'rule_landed' and 'rule_published'"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "The morning's brief, and the numbers on request",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "finds at `brief.at` that an item reached `done` and a decision is open since the previous brief, appends one entry to the brief thread and runs the notification command with the event `brief`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift inbox --unread` and `nightshift thread show <brief thread>` and reads the brief"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift stats demo --days 7`"
+        },
+        {
+          "actor": "nightshift",
+          "action": "requests `GET /api/v1/stats?days=7&workspace=demo` and prints the seven lines of `demo`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift brief` later in the day"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "answers the brief for the time since the morning's entry and stores nothing"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/brief, internal/stats, internal/item, internal/inbox, internal/session's records and internal/notify as daemon.Run wires them",
+          "the store on disk",
+          "the nightshift client's run function",
+          "a real notification command (a shell script)"
+        ],
+        "setup": [
+          "a fake Parley hub with the workspace `demo` registered through the end-to-end helper of package 02",
+          "the daemon's clock injected through the end-to-end helper, set to 07:59 in the daemon's zone; the brief runner's check interval set to 10 milliseconds",
+          "item 1 of `demo` moved to `done` through the item service's transitions, with two session records (implementer 1000 tokens, reviewer 200) written through the session service's store functions, and item 2 with an open decision of a test kind",
+          "`[notify].command` set to a script that appends its standard input to a file"
+        ],
+        "end_state": [
+          "before 08:00 the brief thread has no entry; after the clock passed 08:00 it has exactly one, and `nightshift inbox --unread` lists the brief thread",
+          "`nightshift thread show <brief thread>` prints `#1` under `done:`, the open decision under `decisions open:`, `tokens: planner 0, implementer 1000, reviewer 200, total 1200 of` and `last 30 days:`",
+          "the script's file holds one document with `event: brief`",
+          "`nightshift stats demo --days 7` exits 0 and prints `demo, last 7 days` and `done 1, abandoned 0`",
+          "`nightshift brief` exits 0 and prints a text beginning `brief `, and the brief thread still has one entry"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg, clock 07:59 local, brief check 10ms); seed item 1 done and item 2 with an open decision; sleep 50ms; assert entries(briefThread) == 0; d.clock.Set(08:00 local); eventually entries(briefThread) == 1; assert cli(['inbox','--unread']) contains 'brief'; out = cli(['thread','show', briefThread]); assert out contains '#1 ' and 'decisions open:' and 'total 1200 of'; assert the script's file has one line with '\"event\":\"brief\"'; assert cli(['stats','demo','--days','7']) starts with 'demo, last 7 days\\n  done 1, abandoned 0'; assert cli(['brief']) starts with 'brief '; assert entries(briefThread) == 1"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "An imported issue hears of the approval and, after a forge outage, of the result",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift item import demo --issue 7`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "stores the item with the issue as its source; when the item becomes `ready`, it records a write and posts a comment naming the item's change"
+        },
+        {
+          "actor": "hub",
+          "action": "passes the comment on to the forge and answers 201"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "when the item becomes `done`, reads the commit its change landed as from package 07's record and posts the comment naming it"
+        },
+        {
+          "actor": "hub",
+          "action": "answers `502 forge_unreachable`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "keeps the item `done`, tries the comment again 10 minutes later, and then closes the issue"
+        },
+        {
+          "actor": "hub",
+          "action": "takes the comment and the close"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/forge and internal/item as daemon.Run wires them, the hook on the item's state changes among them",
+          "the hub client of internal/hub against the fake hub's issue routes",
+          "package 05's change.Service and package 07's land.Service as the writer's two lookups",
+          "the nightshift client's run function",
+          "the store on disk"
+        ],
+        "setup": [
+          "a fake Parley hub with the workspace `demo` and issue 7",
+          "the item is moved through its states with the item service's transition function, as the packages that drive an item do, its fork and draft change are made with package 05's change.Service.EnsureFork and OpenDraft after the test pushed the branch, and its landing is recorded with the helper `seedLanded` of package 08's end-to-end tests",
+          "the daemon's clock injected through the end-to-end helper; the forge writer's pass interval set to 10 milliseconds; the fake hub scripted to answer the second comment request 502 forge_unreachable"
+        ],
+        "end_state": [
+          "after the item became `ready`, issue 7 has one comment naming the number of the item's change",
+          "after the item became `done` and before the clock moved, issue 7 still has one comment, is open, and `nightshift item show <N>` prints the state `done`",
+          "after the clock moved 10 minutes, issue 7 has a second comment naming the landed commit and is closed",
+          "the item's thread has no `forge_failed` entry"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg, forge pass 10ms); assert cli(['item','import','demo','--issue','7']) exits 0; walk item 1 to ready; eventually fakeHub.IssueComments('demo', 7) has 1 containing 'change ' + the record's change number; fakeHub.FailNext('POST …/issues/7/comments', 502, 'forge_unreachable'); walk item 1 to done; sleep 50ms; assert len(comments) == 1 and the issue is open and cli(['item','show','1']) contains 'done'; d.clock.Add(10m); eventually len(comments) == 2 and comments[1] contains the landed sha and fakeHub.Issue('demo', 7).state == 'closed'"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "POST /api/v1/workspaces/{slug}/forks",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/forks",
+          "signature": "scope workspaces:write; body {name?: 1-32 of a-z, digits, hyphens, ref?, ttl?: e.g. \"7d\", auto_change?: bool (default true), purpose?, session_id?, token?}; the fork's slug is <parent>--<name>; 201 {workspace, remote, token?}; 409 conflict when the parent has a fork of that name; 400 invalid_request, 400 not_supported_on_fork, 429 fork_limit_reached"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/scm/tree",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/tree",
+          "signature": "scope git:read; query ref? (default the default branch), path? (default the root), recursive?; 200 a list of entries {path, name, type: blob|tree|symlink|commit, mode, sha, size}; 400 invalid_request for a path that names a file"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/scm/file",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/file",
+          "signature": "query path (required), ref? (default the default branch); 200 the file's bytes, or with Accept: application/json {path, sha, mode, size, encoding, content, resolved_sha}; 404 path_not_found; 400 invalid_request for a directory"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/scm/diff",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/diff",
+          "signature": "query base, head (both required), mode? merge_base (default) | direct, path?, patches? (default true), context? 0-20 (default 3), format? json; 200 {base_sha, head_sha, merge_base_sha, files: [{path, old_path, status: added|modified|deleted|renamed|copied|type_changed, insertions, deletions, binary, old_sha, new_sha, patch}], stats, truncated}"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/changes",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes",
+          "signature": "body {source: {workspace_slug?, branch}, target_branch?, title?, intent?, draft?, session_id?}; 201 the change object {workspace_slug, number, ref, title, intent, state: draft|open|landed|abandoned, source, version, head_sha, base_sha, paths, landing, landed: null | {sha, at, by, land_id, commits}}; 400 source_not_found, 400 nothing_to_land, 400 intent_required; 409 change_exists with details {workspace_slug, number, ref}"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/changes/{number}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}",
+          "signature": "200 the change object; `landed.sha` is set once the change landed; 404 change_not_found"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/changes/{number}/abandon",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/abandon",
+          "signature": "body optional {reason?, dependants?}; 200 the change object; 409 change_closed when the change is abandoned or landed already"
+        },
+        {
+          "name": "PUT /api/v1/workspaces/{slug}/changes/{number}/checks/{name}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/checks/{name}",
+          "signature": "scope checks:write; body {status: pending|passed|failed (required), version?, summary?: at most 2000 characters, url?, details?}; 200 the check {name, change, version, status, summary, reported_by, updated_at}; one result per version and name, a report replaces the earlier one"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/changes/{number}/land",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/land",
+          "signature": "body optional {expected_version?: integer >= 1, stack?, override?, session_id?}; query wait? 0-60 seconds (default 30); 200 the attempt {id, status: landed, landed_sha, onto_sha, noop, commits, …}; 202 the attempt while running (read GET …/lands/{id}); 409 land_conflict, 409 policy_blocked (blocked.status pending|blocked), 409 version_mismatch, 409 land_in_progress, 409 change_not_open, 503 land_failed, each with the attempt in error.details where one exists"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/issues/{number}/comments",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/issues/{number}/comments",
+          "signature": "scope forge:write; body {\"body\": string}, sent as given; 201 {\"url\"}; honours Idempotency-Key: a replay answers 200 with the first answer and sends nothing to the forge, and only a successful answer is kept; errors forge_unknown 422, forge_credential_missing 422, forge_not_found 404, forge_unauthenticated 502, forge_forbidden 502, forge_rejected 422, forge_rate_limited 429 (Retry-After), forge_timeout 504, forge_unreachable 502, forge_error 502, as {\"error\": {\"code\", \"message\", \"error_type\"}}"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/issues/{number}/close",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/issues/{number}/close",
+          "signature": "scope forge:write; body absent, {} or {\"comment\": string} (the comment is posted first, and again at every repeat); 200 the issue; closing a closed issue succeeds; Idempotency-Key is ignored; the forge errors of the comment route"
+        }
+      ]
+    },
+    {
+      "package": "Parley REST API: parts docs/api.md was not read for",
+      "version": "commit 7eabfb9",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "GET /api/v1/workspaces/{slug}/scm/tree for a missing path",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/tree",
+          "signature": "assumed: a 4xx answer (404 path_not_found, as the file route) for a `path` that does not exist at the revision; nightshift takes any 4xx answer as `the directory is not there`"
+        },
+        {
+          "name": "scope of the scm file and diff routes and of the change routes",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/diff",
+          "signature": "assumed: git:read for scm/file and scm/diff, as read for scm/tree; changes:write for POST …/changes, …/abandon and …/land, and for GET …/changes/{number} (changes:read, which changes:write is assumed to satisfy)"
+        }
+      ]
+    },
+    {
+      "package": "nightshift packages 05 to 09 (.specs/, read as drafts with specr)",
+      "version": "draft, 2026-11-28",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "change.Service.Get",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/change",
+          "signature": "package 05: Get(ctx, item) returns a Record{Workspace, Fork, GitURL, Branch, Generation, Change, ChangeRef, ChangeURL}, and change.ErrNotFound for an item with no fork; Change is 0 while the item has no change"
+        },
+        {
+          "name": "hub client: CreateFork, OpenChange, AbandonChange",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/hub",
+          "signature": "package 05: CreateFork(ctx, parent, name, purpose) sending auto_change false; OpenChange(ctx, slug, request); AbandonChange(ctx, slug, number, reason); each with the worker credential and Parley's error envelope as the typed error"
+        },
+        {
+          "name": "hub client: Change, ReportCheck, File, Tree",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/hub",
+          "signature": "package 06: Change(ctx, slug, number, include...) answering the change with its version, heads, state and paths (package 08 adds landed.sha); ReportCheck for PUT …/checks/{name} with status, version and summary; File(ctx, slug, ref, path) answering a file's bytes; Tree(ctx, slug, ref, path) answering a directory's entries. ChangeDiff answers the patch text of a change's version and is not used here"
+        },
+        {
+          "name": "impl.Service.OutsidePlan, entry kind `outside_plan`",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "package 06: (*impl.Service).OutsidePlan(ctx, item int) ([]string, error), the files of the item's last evaluated version outside its plan; the thread entry of kind `outside_plan` (`outside the plan: <files>`) is written only when the list is not empty and differs from the last one written. Rework sessions are asked with the step name `implement`, as first sessions are"
+        },
+        {
+          "name": "land.Service.LandChange, land.Service.Landing",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/land",
+          "signature": "package 07: LandChange(ctx, Request{Workspace, Change, Version, SessionID}) (Outcome, error), one land request with no condition checked and no check reported, Outcome.Kind one of landed, pending_approval, pending, blocked, conflict, version_mismatch, failed, with LandedSHA and Reason; Landing(ctx, item) returns the item's landing record with LandedSHA"
+        },
+        {
+          "name": "health.Service.VerifyTip, health.TipPending, publish.Service.Sync",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/health",
+          "signature": "package 08: (health) VerifyTip(ctx, slug, commit) error runs the health command on a commit with no item, returns nil when it passed, and on a failure sets the workspace red, opens `main_red` on the workspace's thread and returns an error; TipPending(slug) bool; (publish) Sync(ctx, slug) runs the sync from origin and hands the default branch's result to HandleSync, returning its error; the hub client's Push(ctx, slug, branch); the entry of kind `published` in the item's thread, `change <n> is on origin as <sha>; <n> tokens spent`"
+        },
+        {
+          "name": "thread entry kind `taken_over`, marker `taken over`",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/takeover",
+          "signature": "package 09: one entry of kind `taken_over` in the item's thread for each take-over, by the command or by a decision's option, and the marker `taken over`"
+        }
+      ]
+    }
+  ]
+}

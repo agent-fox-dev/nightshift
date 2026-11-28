@@ -1,0 +1,201 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "09",
+  "spec_name": "notes_and_take_over",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/note/... ./internal/takeover/... ./internal/sched/... ./internal/cli/... ./internal/daemon/... -count=1"
+  },
+  "dependencies": [
+    {
+      "spec": "01",
+      "reason": "registers two routes with the API server and two commands with the client, adds two store migrations, asks the hub client's `Available`, follows `session.ended` through the event log, and runs its flows with the fake hub and the end-to-end helper"
+    },
+    {
+      "spec": "03",
+      "reason": "reads and moves work items, registers the marker `taken over`, writes thread entries, adds the option `take_over` to five decision kinds with `AddOption` and `OnAnswer`, and opens and closes decisions"
+    },
+    {
+      "spec": "04",
+      "reason": "holds a taken-over item with the scheduler's pause, gives it back through `Scheduler.OnResume` and the resume route, and adds `take_over` to `session_failed` and `session_limit`"
+    },
+    {
+      "spec": "05",
+      "reason": "hands a note to the planner with `plan.Service.AddFinding` and `Revise`, adds `PendingFindings` to `internal/plan`, and reads the item's fork, git URL, branch and change from `change.Service.Get`"
+    },
+    {
+      "spec": "06",
+      "reason": "hands a note to the implementer with `impl.Service.Rework`, reads `History` and `Version`, relies on its steps to gate a person's version, adds the `notes` input of a first implementation to `internal/impl`, and adds `take_over` to `review_disagreement` and `blocked`"
+    },
+    {
+      "spec": "07",
+      "reason": "has a landing that has not happened withdrawn with `land.Service.Withdraw`, registers the landing condition `taken over` with `AddCondition`, and adds `take_over` to `conflict`"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Keep notes, serve the note route and command, and hand a note to the planner or the implementer",
+      "criteria": [
+        "REQ-1"
+      ],
+      "steps": [
+        "Add the note behaviours to the new files internal/note/note_test.go and internal/note/routes_test.go and the command cases to internal/cli/cli_test.go and confirm they fail; keep the fixtures (a service over a copy of the store template of internal/store, a real item service and inbox, an injected clock, recording stubs of the planner, the implementer and the lander) in internal/note/helpers_test.go, the one helpers file of the package",
+        "Add internal/note with a store migration registered with internal/store: notes with an id from a counter that is never given twice, the item, the text, the time, whom the note was handed to (`planner`, `implementer` or nobody yet), and the session and time of the delivery, both empty while the note is pending",
+        "Define in internal/note the interfaces the service calls, each with the functions it uses: the planner (package 05's plan.Service: AddFinding, Revise, and PendingFindings, which task 2 adds), the implementer (package 06's impl.Service: Rework and History) and the lander (package 07's land.Service: Withdraw); construct the service with note.New over the store, the item service, the inbox, the hub client's Available, a clock and those three; keep no package-level state",
+        "Add Service.Add(ctx, item, text): refuse a text of 0 or more than 20,000 Unicode code points with note.ErrInvalid, an unknown item with item.ErrNotFound, and an item that is verifying, publishing, done or abandoned with note.ErrLanded; store the note; hand it over, for an item in new or planning with AddFinding(ctx, item, text), for one in ready, implementing or reviewing with Rework(ctx, item, one impl.Finding{ID: `note-<id>`, Source: `person`, Text}); append the entry of kind `note` through the inbox's Append, not marking the thread unread; an item in awaiting_approval or landing is refused with an error until task 2 adds what a note starts there",
+        "When AddFinding answers plan.ErrNotPlanning (an item of kind spec in new), keep the note handed to nobody; register with the item service's OnChange a hook that, when an item becomes ready, hands its notes that nobody holds to Rework, in their order",
+        "When the hand-over fails otherwise, remove the note, write no entry and return the error; the route answers 503 hub_unavailable while Available(worker) is false and else 500 internal",
+        "Add Service.Pending(ctx, item), answering the undelivered notes of the item in ascending order of id, Service.MarkDelivered(ctx, item, through, session), which marks them up to that id in one transaction and appends one `note_delivered` entry naming the ids and the session and writes nothing when no note was marked, and Service.Source(), a value with Pending(ctx, item) (texts, through, error) and Delivered(ctx, item, through, session) error over the two",
+        "Follow the deliveries: subscribe to the event log (package 01's Subscribe) and, at every `session.ended` event of a completed planner or implementer session, look at the pending notes of the event's item: those handed to the implementer whose finding `note-<id>` is in History(item), and, when PendingFindings answers 0, all those handed to the planner, are marked with MarkDelivered and the event's session; stop the subscription in a named shutdown step",
+        "Register POST /api/v1/items/{number}/notes through the API server's Handle: 201 with the note, and the errors through the server's helper as 400 invalid_request (with `text must be 1 to 20,000 characters` for the text), 404 not_found and 409 conflict `item <N> has landed; create a new item`",
+        "Register the command `nightshift item note <N> \"<text>\"` with internal/cli's Register: exactly two arguments, the number a positive integer and the text 1 to 20,000 code points, else exit code 2 with the usage and no request; print `note <id> added to item <N>`, or the API's answer with --json",
+        "Create the note service in daemon.Run after the services of packages 05, 06 and 07, register its route, and hand it to the end-to-end helper of internal/daemon/e2e_test.go",
+        "Describe the note route, the note object and its errors in docs/api.md and the command in docs/cli.md, add internal/note with Add, Pending, MarkDelivered and Source to docs/architecture.md, and run `make doc`"
+      ],
+      "touches": [
+        "internal/note/note.go",
+        "internal/note/routes.go",
+        "internal/note/delivery.go",
+        "internal/note/note_test.go",
+        "internal/note/routes_test.go",
+        "internal/note/helpers_test.go",
+        "internal/cli/note.go",
+        "internal/cli/cli_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md",
+        "docs/generated"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Start what a note needs in `awaiting_approval` and `landing`, and carry a note into a first implementation",
+      "criteria": [
+        "REQ-2"
+      ],
+      "steps": [
+        "Add the behaviours for `awaiting_approval`, `landing`, a landed change and the failing calls to internal/note/routes_test.go and confirm they fail",
+        "For a note to an item in awaiting_approval: store the note, call package 05's plan.Service.Revise(ctx, item, text), which stores the text as a pending finding of the person and moves the item to planning, then close every open decision of the item of the kind `plan` through the inbox's Close with the reason `superseded by a note`, then append the `note` entry; the note counts as handed to the planner; when Revise returns an error remove the note and answer as for a failed hand-over",
+        "For a note to an item in landing: call package 07's land.Service.Withdraw(ctx, item, `note from the owner`) first; on land.ErrLanded answer as note.ErrLanded; on another error answer 503 hub_unavailable while Available(worker) is false and else 502 hub_error with the error's first line, storing nothing",
+        "After a Withdraw that returned nil: store the note, call package 06's impl.Service.Rework with the one finding `note-<id>` of the source `person`, which moves the item to implementing, close every open decision of the item with the reason `superseded by a note`, and append the `note` entry; when Rework returns an error remove the note, close nothing and answer 500 internal",
+        "NEW in internal/plan (package 05 does not have it): add Service.PendingFindings(ctx, item) (int, error), the number of the item's pending findings of the person, 0 for an item with no plan, with its case in internal/plan/review_test.go; the note service's delivery pass of task 1 reads it",
+        "NEW in internal/impl (package 06 gives findings to a rework only, and starts a first implementation with `--no-merge` and no input while the package has an open task): when that first-implementation request is built while findings of the source `person` wait, add the input `notes`, one JSON array of those findings as the rework's findings file writes them, and append to the prompt the line `Findings of the person, each of which must be followed: {input:notes}`; when the session is accepted, take those findings out of the waiting ones into the history with the reply `given with the first implementation`; findings of another source keep waiting for the rework. Add the case to internal/impl/rework_test.go and change that file's open-task case, which expects no input, to a request without a person's finding",
+        "Add the three note flows to internal/daemon/e2e_test.go with the fake `claude` helper recording each findings file: a note while the implementer runs (the rework starts when the session was accepted, before the gate), a note to an item whose landing waits for an approval, and the two notes around a plan's approval",
+        "Describe in docs/architecture.md how a note reaches a session: AddFinding, Revise, Rework and Withdraw by state, the `notes` input of a first implementation, and how a delivery is found; run `make doc` for the identifier added to internal/plan"
+      ],
+      "touches": [
+        "internal/note/note.go",
+        "internal/note/effects.go",
+        "internal/note/routes_test.go",
+        "internal/note/helpers_test.go",
+        "internal/plan",
+        "internal/impl",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/architecture.md",
+        "docs/generated"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Hold an item and take it over with the command",
+      "criteria": [
+        "REQ-3"
+      ],
+      "steps": [
+        "Add the hold behaviours to internal/sched/pause_test.go, the take-over behaviours to the new files internal/takeover/takeover_test.go and internal/takeover/routes_test.go and the command cases to internal/cli/cli_test.go, and confirm they fail; keep the stubs (change source, version source, holder) in internal/takeover/helpers_test.go",
+        "NEW in internal/sched (package 04 offers the pause of an item as a route alone): add Scheduler.HoldItem(ctx, item) beside the pause of an item, sharing its code: set the item's own pause flag where it is not set, also while the workspace's flag is set, with every effect of a pause (the running step cancelled, the session ended as interrupted, the OnPause functions, `item.updated`); return nil and change nothing where the flag is set; refuse an unknown, a done and an abandoned item",
+        "Add internal/takeover with a store migration registered with internal/store: take-overs with the item, the version at the take-over, how it came (`command` or `decision <id>`), the start time, and the end time and version, empty while the take-over lasts; at most one row without an end per item; rows are kept after their end",
+        "Define in internal/takeover the interfaces the service calls: the change source (package 05's change.Service.Get, answering a Record with Workspace, Fork, GitURL, Branch and Change, or change.ErrNotFound), the version source (package 06's impl.Service.Version, whose Number is the current version), the hub client's Available, and the holder (HoldItem)",
+        "Add Service.TakeOver(ctx, item, via), in this order: refuse an unknown item, one that is verifying, publishing, done or abandoned (`item <N> is <state>`), one without a change, which is change.ErrNotFound or a Record whose Change is 0 (`item <N> has no change yet`), and one taken over already; read the version, refusing as unavailable or with the error's first line; store the row; call HoldItem and remove the row when it fails; append the `taken_over` entry and the event `item.updated`; answer the item, the Record's GitURL and Branch, and the version",
+        "After the hold, where `via` is `command`, close the item's open decisions of the five kinds session_failed, session_limit, review_disagreement, blocked and conflict through the inbox's Close with the reason `taken over`",
+        "Register the marker `taken over` with the item service's RegisterMarker: true while the item has a take-over without an end and is not abandoned; register with package 07's land.Service.AddCondition the condition `taken over`, which answers false for such an item",
+        "Register POST /api/v1/items/{number}/take-over through Handle, answering 200 with {item, git_url, branch, version} and the refusals as 409 conflict, 400 invalid_request, 404 not_found, 503 hub_unavailable and 502 hub_error",
+        "Register the command `nightshift item take-over <N>`: one argument that is a positive integer, else exit code 2; print the three lines `item <N> taken over`, `git <git URL>`, `branch <branch>`, or the API's answer with --json",
+        "Create the take-over service in daemon.Run after the scheduler and the services of packages 05, 06 and 07, and hand it to the end-to-end helper",
+        "Describe the route and its answer in docs/api.md, the command in docs/cli.md, and in docs/architecture.md internal/takeover, HoldItem and why a taken-over item carries the pause flag; run `make doc`"
+      ],
+      "touches": [
+        "internal/sched/pause.go",
+        "internal/sched/pause_test.go",
+        "internal/takeover/takeover.go",
+        "internal/takeover/routes.go",
+        "internal/takeover/takeover_test.go",
+        "internal/takeover/routes_test.go",
+        "internal/takeover/helpers_test.go",
+        "internal/cli/takeover.go",
+        "internal/cli/cli_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md",
+        "docs/generated"
+      ],
+      "depends_on": [
+        1
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Offer `take_over` on the five decision kinds",
+      "criteria": [
+        "REQ-4"
+      ],
+      "steps": [
+        "Add the option behaviours to the new file internal/takeover/decision_test.go, over a real inbox on which the test declares the five kinds with their packages' options, and the start case to internal/daemon/start_test.go, and confirm they fail",
+        "Add Service.RegisterOption(inbox): for the kinds session_failed, session_limit, review_disagreement, blocked and conflict, in that order, call AddOption with the key `take_over`, the line `hands the item's branch to you; nothing runs for it until you resume it` and no required comment, and OnAnswer with the handler; return `take_over: decision kind \"<kind>\" is not declared` for the first kind the inbox does not know, adding nothing after it",
+        "Call RegisterOption in daemon.Run after packages 04, 06 and 07 declared their kinds and before the API serves; an error ends the start with exit code 1 and the error's line on stderr, as a failed start check does",
+        "Write the handler: read the decision's item; where the item is taken over already return nil; else call TakeOver with via `decision <id>`, which closes no decision; return nil on success",
+        "Where TakeOver refuses because the item has no change yet: append the entry `take_over_refused` with `take-over refused: item <N> has no change yet`, marking the thread unread, and, unless a decision of that kind is open for the item, open one through the inbox's Open with the answered decision's kind, question, evidence, recommended option and `blocks`; return nil",
+        "Where TakeOver fails because the hub could not be asked, return the error (`hub unavailable`, or the first line of the hub's error) and leave everything as it was, so that the inbox's dispatch pass calls the handler again at its retry interval",
+        "Make the handler safe to be called twice for one answer, as the inbox may: the second call finds the take-over, or the decision opened again, and changes nothing",
+        "Describe the option, what an answer does and the refusal that opens the decision again in docs/api.md beside the decision kinds, and add RegisterOption and its place in the wiring order to docs/architecture.md; run `make doc`"
+      ],
+      "touches": [
+        "internal/takeover/decision.go",
+        "internal/takeover/decision_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/start_test.go",
+        "docs/api.md",
+        "docs/architecture.md",
+        "docs/generated"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Give a taken-over item back at the resume, and run the take-over flow end to end",
+      "criteria": [
+        "REQ-5"
+      ],
+      "steps": [
+        "Add the give-back behaviours to the new file internal/takeover/giveback_test.go, with a real scheduler whose resume route is registered and step functions that count their calls, and confirm they fail",
+        "Add Service.GiveBack(ctx, item) and register it with Scheduler.OnResume in daemon.Run: for an item without a take-over that lasts it returns at once, reading no version and writing nothing, so that package 04's resume of a paused item is unchanged",
+        "For a taken-over item read the change's current version with impl.Service.Version and compare its Number with the stored one: newer means a greater number",
+        "Where the version is newer and the item is implementing, reviewing or landing: close every open decision of the item with the reason `superseded by version <n>` and append the `given_back` entry `given back with version <n> (taken over at version <m>); it is gated and reviewed`. Start nothing: package 06's implementing step evaluates and gates a current version without a gate verdict, its reviewing step and package 07's landing step move the item to implementing for such a version",
+        "Where the version is not newer, or the item is planning, awaiting_approval or ready: append `given back; continuing with <state>`, with `with version <n>` after `given back` where the version is newer, and close nothing",
+        "Where the version cannot be read: append `given back; the hub could not be asked for the version; continuing with <state>` and close nothing",
+        "In every case end the take-over (the end time, and the version where it was read) and append the event `item.updated`, so that the marker `taken over` is gone when the resume has answered",
+        "Add the take-over flow to internal/daemon/e2e_test.go: a `session_failed` decision answered `take_over`, a real `git push` to the fake hub's fork with a second token of its user, the resume, and the person's version gated, reviewed and landed with no implementer session in between",
+        "Describe giving back in docs/cli.md under `nightshift item resume` (one command for a paused and for a taken-over item) and in docs/architecture.md; run `make doc`"
+      ],
+      "touches": [
+        "internal/takeover/giveback.go",
+        "internal/takeover/giveback_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/cli.md",
+        "docs/architecture.md",
+        "docs/generated"
+      ],
+      "done_when": [
+        "`make check` passes on the whole tree"
+      ]
+    }
+  ]
+}

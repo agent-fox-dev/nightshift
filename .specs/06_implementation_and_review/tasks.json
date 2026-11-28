@@ -1,0 +1,222 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "06",
+  "spec_name": "implementation_and_review",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/impl/... ./internal/gate/... ./internal/review/... ./internal/hub/... ./internal/hubtest/... ./internal/daemon/... -count=1"
+  },
+  "dependencies": [
+    {
+      "spec": "01",
+      "reason": "uses its configuration struct, store migrations, hub client with the worker credential, fake hub internal/hubtest, event log with Subscribe and the e2e helper"
+    },
+    {
+      "spec": "02",
+      "reason": "runs the gate through command.Runner, clones the fork at a version with gitclone.Sync and reads the workspace with workspace.Service"
+    },
+    {
+      "spec": "03",
+      "reason": "moves items with Transition, creates linked items with CreateLinked, abandons with Abandon, and declares, opens and answers decisions and writes thread entries through internal/inbox"
+    },
+    {
+      "spec": "04",
+      "reason": "runs implementer and reviewer sessions through Scheduler.RunSession with session.Spec and its accept function, registers its steps and its start guard, records failures and reads Paused and OnResume"
+    },
+    {
+      "spec": "05",
+      "reason": "creates the item's task fork and draft change and reads their record through change.Service (EnsureFork, OpenDraft, Get, Forget), reads the package directory and kept text from plan.Service.Kept, and registers its fork restore with plan.Service.RegisterPrepare"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Read changes and packages from the hub, hold a ready item back for its dependencies and start its implementer",
+      "criteria": [
+        "REQ-1.1",
+        "REQ-1.2",
+        "REQ-1.3"
+      ],
+      "steps": [
+        "Add the guard behaviours to internal/impl/guard_test.go and the start behaviours to internal/impl/start_test.go, with the shared fixtures in internal/impl/helpers_test.go (a fake hub with a workspace, a fork and a change; a package built with afspec; a stub scheduler that records requests and whose RunSession the test scripts; package 05's change service over the fake hub and a stub of its plan service), and confirm they fail",
+        "Add to the hub client of internal/hub, sent with the worker credential: Change(ctx, slug, number, include...) answering the change with its version, heads, state, paths, landing requirements and, when asked, versions and overlaps; SetChangeState(ctx, slug, number, state); File(ctx, slug, ref, path) answering a file's bytes; Tree(ctx, slug, ref, path) answering a directory's entries over every page. Take the names package 05 already gave to a call it added, and add only what is missing",
+        "Extend internal/hubtest where it lacks them: GET and PATCH of a change (state, a version recorded for every push to its source branch, paths of the current version, landing requirements evaluated from its policy with block), include=versions and include=overlaps with overlaps the test sets, and scm/file and scm/tree served from its git repositories at a commit",
+        "Add internal/impl with its store migration, registered with internal/store: per item the package's directory, its dependencies once read, the class, the change and version at a session's start, and the tables later tasks fill (findings, versions with their verdicts, noted overlaps)",
+        "Add LoadPackage(ctx, slug, ref, dir): fetch prd.md, requirements.json, tasks.json and, where they exist, progress.json and architecture.md with File into a temporary directory named like the package's, load it with afspec.LoadSpec and remove the directory; the package's directory is source.dir for an item of kind spec and Dir of package 05's plan.Service.Kept otherwise",
+        "Add the start guard DependencyGuard and register it as `dependency` with Scheduler.RegisterGuard: for a ready item read the dependencies of its package (from its change's head, or from the default branch for an item without a change) and store them; for each, find the directory `<NN>_*` under .specs at the workspace's head_sha with Tree, load it and ask IsFinished; refuse with `package <NN> on <default branch>` for the first that is missing, does not load or is not finished; keep the answer per workspace head for 30 seconds by an injected clock; allow every item that is not ready",
+        "Add the step for the state ready and register it with Scheduler.RegisterStep: create the fork with package 05's change.Service.EnsureFork where change.Service.Get answers change.ErrNotFound, set a draft change open with SetChangeState, remember the change's current version (0 without a change), and ask Scheduler.RunSession for an implementer session with the step name `implement`, the fork, the branch, the prompt `/af-impl <package directory> --unattended --no-merge --result {result}` and an accept function that task 2 fills; return nil on sched.ErrNotStarted and on an outcome other than completed",
+        "Follow the event log from daemon.Run with Subscribe, in a goroutine that stops with the daemon and subscribes again when its channel is closed: on session.started for an implementer session of an item that is ready, move the item to implementing with Transition and the reason `implementer session started`; read the item and the role from the event's data, or from the session's row where the data lacks them",
+        "Build the impl service in daemon.Run after the scheduler and package 05's services exist, and give it to the e2e helper of internal/daemon/e2e_test.go"
+      ],
+      "touches": [
+        "internal/hub/changes.go",
+        "internal/hub/scm.go",
+        "internal/hubtest/changes.go",
+        "internal/hubtest/scm.go",
+        "internal/impl/service.go",
+        "internal/impl/store.go",
+        "internal/impl/package.go",
+        "internal/impl/guard.go",
+        "internal/impl/start.go",
+        "internal/impl/helpers_test.go",
+        "internal/impl/guard_test.go",
+        "internal/impl/start_test.go",
+        "internal/daemon/run.go"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Accept an implementer session from the hub's state and turn its open items into linked items",
+      "criteria": [
+        "REQ-1.4",
+        "REQ-1.5",
+        "REQ-1.6"
+      ],
+      "steps": [
+        "Add the accept and open-item behaviours to internal/impl/start_test.go and confirm they fail",
+        "Write the accept function of a `--no-merge` session: for an item without a change, open one through package 05's change.Service.OpenDraft with the item's title, the text of the `## Intent` section of the package's prd.md and the session's id, and set it open with SetChangeState; a branch that is not on the fork (the hub refuses the open with source_not_found or nothing_to_land) is `no new version`",
+        "Read the change with the hub client and compare its version with the one remembered at the session's start: not greater is the error `no new version`",
+        "Load the package at the new version's head with LoadPackage from the target workspace: an error is `package does not load: <its first line>`; a package for which IsFinished is false is `tasks still open`",
+        "Never read the result file's `outcome` to decide: a session whose push and tasks are in order is accepted whatever it says of itself",
+        "Add HandleResult(ctx, item, result): for each entry of the result document's `open_items`, in order, build the text from `title`, `missing`, `why` and `closes: <closes>`, each present one a paragraph, cut to 20,000 code points, skip an entry whose title a child of the item already has, and create the item with the item service's CreateLinked and the kind `defect`; call it for an accepted session only, after the accept function returned nil",
+        "After an accepted session go on, in the same step call, to the evaluation of the new version through a function task 4 fills; until then it records the version as not evaluated and returns"
+      ],
+      "touches": [
+        "internal/impl/accept.go",
+        "internal/impl/openitems.go",
+        "internal/impl/start.go",
+        "internal/impl/start_test.go"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Keep findings, start reworks with them and decide what an implementing item needs next",
+      "criteria": [
+        "REQ-2"
+      ],
+      "steps": [
+        "Add the rework behaviours to internal/impl/rework_test.go and the step order to internal/impl/step_test.go and confirm they fail",
+        "Add impl.Finding (ID, Source, Text, File, Line, Criterion, Output, Binding) and Rework(ctx, item, findings): validate every finding before storing any (ErrInvalid), refuse an unknown item and an item outside ready, implementing, reviewing and landing (ErrState), give a finding without an ID the next `f<n>` of the item, set Binding for the source person, skip an ID the item already has, append them in one transaction, move a reviewing or landing item to implementing with the reason `rework: <n> findings (<sources in order, each once>)`, and call the scheduler's Wake",
+        "Add Waiting(item) and History(item): the findings not yet given to an accepted rework, in their order, and the ones that were, each with its reply",
+        "Add the rework session: write the waiting findings as one JSON array to the input `findings`, each object with id, source, text and only the members that are set, and ask RunSession with the step name `implement` and the prompt `/af-impl <package directory> --unattended --rework {input:findings} --result {result}`, remembering which findings the session was given",
+        "Write the rework's accept function: first append one thread entry of the kind `reply` per entry of the result's `replies` (`<id> <action>: <text>`, cut to 2,000 characters, not unread) and store each reply with its finding; then compare the change's version with the one at the session's start: not greater is the error `no new version`, and the findings keep waiting",
+        "After an accepted rework move the findings it was given to the history, call HandleResult for its open items, and go on to the evaluation of the new version",
+        "Register the step for the state implementing: in a loop, do the first that applies and stop when a session ended otherwise than completed, a decision of the item is open, an error occurred or the item left implementing: RestoreFork (task 6 fills it; until then it returns nil); a check report not yet taken, with what follows its verdict; a `--no-merge` session when the item has no change or the package at the change's head is not finished; a rework when findings wait; the evaluation of a current version not yet evaluated; the gate for a version without a verdict; Transition to reviewing when the gate passed on the current version. Evaluation, report and gate are functions task 4 fills",
+        "Use one function for the states ready and implementing after the session was asked, so that the call that started as a ready step goes on as an implementing one",
+        "Add SetClass(ctx, item, class), stored with the item, and put the stored class into every sched.Request this package builds"
+      ],
+      "touches": [
+        "internal/impl/rework.go",
+        "internal/impl/findings.go",
+        "internal/impl/step.go",
+        "internal/impl/store.go",
+        "internal/impl/rework_test.go",
+        "internal/impl/step_test.go"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Evaluate every version, open the blocked decision, note files outside the plan and overlaps, and run the gate",
+      "criteria": [
+        "REQ-3"
+      ],
+      "steps": [
+        "Add the gate's verdict table to internal/gate/gate_test.go and the evaluation, gate, report and overlap behaviours to internal/impl/evaluate_test.go, with a helper in internal/gate that writes a fake `speca` script into a directory put first on PATH (it records its arguments, working directory and XDG_STATE_HOME and prints what the test gives it), and confirm they fail",
+        "Add the configuration key `gate.timeout` (a duration, default 30m) to internal/config, failing the config check with `config: gate.timeout must be greater than 0`",
+        "Add internal/gate: Run(ctx, Options{Runner, Dir, Package, Timeout, StateDir, ReadFile}) runs `speca <Package> --gate full --timeout <Timeout>` with `sh -c` through the command.Runner in Dir, with XDG_STATE_HOME set to an empty directory it makes under StateDir and removes afterwards, the JSON redirected to a file beside it that it reads with ReadFile (package 04's file read as the session user) and removes; the command's own limit is twice Timeout plus one minute; it returns Verdict{Passed, Summary, Tail} and an error only when the context was cancelled",
+        "Map everything but the verdict `pass` to Passed false: the summary is the envelope's `summary`, or `gate did not run: speca exited <N>`, `gate did not run: no verdict in speca's output` or `gate did not run: timed out`, followed for a failed command by a line `<name> exited <code>` (`<name> timed out`) and its tail; cut the whole to 2,000 characters; add the constant CheckName `nightshift-gate`",
+        "Add ReportCheck to the hub client (PUT …/checks/{name} with status, version and summary) and to internal/hubtest the check route with an accessor and a way to make it answer 503; add (*impl.Service).ReportCheck(ctx, item, name, status, summary): cut the summary to 2,000 characters, store the report as pending, send it for the change's current version, append the thread entry of the kind `check` (`<name> <status> on version <v>: <summary>`) once the hub took it, and leave it pending with the error otherwise; the implementing step sends a pending report before anything else",
+        "Add Version(ctx, item): the item's change read with include=overlaps as impl.Version (Workspace, Change, Number, HeadSHA, BaseSHA, State, Paths, Requirements, Overlaps)",
+        "Fill the evaluation: for a version not yet evaluated, when a requirement has block, call OpenBlocked and record the version as evaluated; otherwise compute the files outside the plan from the package's touches at the version's head (an entry equal to the path, or a directory above it compared by whole path segments, or the package's own directory), store the list, and append the `outside_plan` entry when the list is not empty and differs from the last one written (the first 50 in path order joined with `, `, then ` and <n> more`); add OutsidePlan(ctx, item)",
+        "Declare the kind `blocked` with the inbox's RegisterKind (`revise`: `starts the implementer with your comment`, comment required; `abandon`: `ends the item without landing`) and add OpenBlocked(ctx, item, reqs): one decision per version, with the question, the change's URL and each blocking rule with its files as evidence, `revise` recommended and `item <N>` blocked",
+        "Register the `blocked` handlers with OnAnswer: `revise` calls Rework with the finding `blocked-<decision id>` of the source person and the comment; `abandon` calls the item service's Abandon; register them through (*impl.Service).OnAnswer(kind, option, fn), which wraps the inbox's OnAnswer: when Scheduler.Paused says the item is paused it stores the answer and returns nil, and a function registered with Scheduler.OnResume carries the stored answers out in order; task 5 registers its kind through it too",
+        "Fill the gate step: bring <sessions.dir>/items/<N>/gate to the version's head with gitclone.Sync from the fork's git URL and the worker token, call gate.Run, store the verdict with the version before anything is reported, then ReportCheck; what follows a verdict is done once, after the hub took its report, also when that happens at a later step: on a pass set the count of failed gates in a row to zero and move the item to reviewing",
+        "On a failed gate, after its report was taken, call Rework with one finding of the source gate (the summary's first line, the tail as output) and count it: the first in a row is given to Scheduler.RecordFailure(ctx, item, `implement`, `gate failed: <first line>`, ``), the second, with no passed gate between, to Scheduler.OpenSessionFailed with both failures",
+        "After every gate read the change's overlap entries and append an `overlap` entry (`overlaps change <workspace>#<number>`) for each other change not yet stored as noted for the item; describe `gate.timeout` in docs/configuration.md"
+      ],
+      "touches": [
+        "internal/gate/gate.go",
+        "internal/gate/gate_test.go",
+        "internal/gate/fakespeca_test.go",
+        "internal/impl/evaluate.go",
+        "internal/impl/blocked.go",
+        "internal/impl/checks.go",
+        "internal/impl/step.go",
+        "internal/impl/evaluate_test.go",
+        "internal/hub/changes.go",
+        "internal/hubtest/changes.go",
+        "internal/config/config.go",
+        "docs/configuration.md"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Review every gated version and take a disagreement to the person",
+      "criteria": [
+        "REQ-4"
+      ],
+      "steps": [
+        "Add the review behaviours to internal/review/review_test.go, over the real impl service and a stub scheduler whose RunSession returns the verdict the test scripts, and confirm they fail",
+        "Add ChangeDiff(ctx, slug, number, version) to the hub client (GET …/diff with format=patch, answering the text and whether the hub cut it) and the route to internal/hubtest, served from its repositories",
+        "Add internal/review with the step for the state reviewing, registered with Scheduler.RegisterStep: call impl's RestoreFork; send a pending check report first; read impl's Version; when impl holds no passed gate for the current version, move the item to implementing with the reason `version <v> is not gated` and return",
+        "Build the prompt: the review brief, the package's directory, the version's files, the diff up to 400,000 characters and the line `diff cut: <n> characters left out` when it was cut, the gate's stored summary, every finding of impl's History that came from a review with its reply's action and text, and the form of the verdict object package 04 expects",
+        "Ask Scheduler.RunSession for a reviewer session with the step name `review`, the fork, the version's head as Commit, the item's class and an accept function that refuses a verdict `object` with a finding that has neither a file with a line nor a criterion (`finding names no file and line and no criterion`); return nil on sched.ErrNotStarted and on an outcome other than completed",
+        "Store the verdict and its findings with the version before reporting. On `agree`: impl's ReportCheck with CheckName `nightshift-review`, `passed` and `reviewer agrees`, the count of reviews without agree set to zero, Transition to landing",
+        "On `object`: ReportCheck `failed` with `reviewer objects: <n> findings` and the findings' texts, add one to the count; below 3, call impl's Rework with the findings as findings of the source review",
+        "At a count of 3 or more open the decision instead: declare the kind `review_disagreement` with RegisterKind (`side_with_reviewer`: `gives the implementer one more session with the findings as binding`; `side_with_implementer`: `passes the review on your word`; `abandon`: `ends the item without landing`), and open it with the question, the change's URL, each finding of this review and each earlier review finding with its reply as evidence, `side_with_reviewer` recommended",
+        "Register the three handlers through impl's OnAnswer: `side_with_reviewer` calls Rework with the last review's findings, Binding set, ids `review-<decision id>-<index>`; `side_with_implementer` reports `nightshift-review` passed with `passed by the owner's decision: side_with_implementer` and moves the item to landing unless it is there already; `abandon` calls Abandon",
+        "Send no request to the approvals route anywhere in this package and never use the approver credential; build the review step in daemon.Run and give it to the e2e helper"
+      ],
+      "touches": [
+        "internal/review/review.go",
+        "internal/review/prompt.go",
+        "internal/review/decision.go",
+        "internal/review/review_test.go",
+        "internal/hub/changes.go",
+        "internal/hubtest/changes.go",
+        "internal/daemon/run.go"
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Extend the forks of running items, restore an expired fork, and prove the flows end to end",
+      "criteria": [
+        "REQ-5"
+      ],
+      "steps": [
+        "Add the fork behaviours to internal/impl/forks_test.go and confirm they fail",
+        "Add SetForkTTL(ctx, fork, ttl), CreateRef(ctx, slug, name, sha) and Commit(ctx, slug, branch, baseRef, message, files) to the hub client, and to internal/hubtest the PATCH of a fork's ttl, POST scm/refs, POST scm/commits and ExpireFork(slug), which removes a fork as the hub's expiry does: the fork answers 404, its draft and open changes are abandoned and their versions stay readable in the parent",
+        "Add ExtendForks(ctx): for every item of the item service's List that has a fork record, is neither done nor abandoned and has a null waiting_on, call SetForkTTL with `7d`; log a refusal with the item's number and go on; run it at the daemon's start and on a ticker of 6 hours, both injected, in a goroutine that stops with the daemon",
+        "Add RestoreFork(ctx, item): return nil for an item without a fork record and for a fork the hub answers 200 for; on 404 restore, one item at a time",
+        "Restore an item that is not awaiting_approval: read the earlier change with include=versions and keep its number, title, intent and last version's head in the store before anything is created; call package 05's change.Service.Forget and EnsureFork, which gives the fork `i<N>-<g>`; CreateRef for the branch of the new record at that head; OpenDraft with the kept title and intent and no session id; SetChangeState open for an item in implementing, reviewing or landing; append the `fork_restored` entry; move a reviewing or landing item to implementing with the reason `fork restored`. An item without an earlier change gets the fork alone",
+        "Restore an item that is awaiting_approval: Forget and EnsureFork, then Commit the files of package 05's plan.Service.Kept under its Dir to the item's branch with the fork's default branch as base and the message `plan for item <N>`, OpenDraft, and the entry; the state stays",
+        "Record each finished step of a restore with the item, so that a restore that failed part-way goes on at the next trigger without creating a second fork, branch, change or entry",
+        "Trigger RestoreFork from the event-log follower of task 1 on decision.answered with an option other than `abandon` (the event's data names the item and the option), from the function registered with package 05's plan.Service.RegisterPrepare under the name `fork`, and at the start of the steps for ready, implementing and reviewing",
+        "Add the three flows to internal/daemon/e2e_test.go with its startDaemon helper, a fake claude that pushes and writes result files per prompt, a fake speca and a faux reviewer",
+        "Add to docs/architecture.md the packages internal/impl, internal/gate and internal/review, the order in which a step decides what to do, and what later packages use: Rework, SetClass, ReportCheck, Version, OpenBlocked, OnAnswer, RestoreFork, OutsidePlan, gate.Run and the hub client's change calls; add to docs/api.md the decision kinds `blocked` and `review_disagreement` with their options and the thread entry kinds `check`, `reply`, `outside_plan`, `overlap` and `fork_restored`; name the fake `speca` helper and the new routes of internal/hubtest under Repository Specifics in .specs/steering.md; run `make doc`"
+      ],
+      "touches": [
+        "internal/impl/forks.go",
+        "internal/impl/forks_test.go",
+        "internal/impl/start.go",
+        "internal/impl/step.go",
+        "internal/hub/changes.go",
+        "internal/hub/scm.go",
+        "internal/hub/workspace.go",
+        "internal/hubtest/changes.go",
+        "internal/hubtest/scm.go",
+        "internal/hubtest/forks.go",
+        "internal/daemon/e2e_test.go",
+        "docs/architecture.md",
+        "docs/api.md",
+        ".specs/steering.md",
+        "docs/generated"
+      ],
+      "done_when": [
+        "`make check` passes on the whole tree"
+      ]
+    }
+  ]
+}

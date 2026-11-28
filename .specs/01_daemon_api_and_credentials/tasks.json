@@ -1,0 +1,201 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "01",
+  "spec_name": "daemon_api_and_credentials",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/config/... ./internal/store/... ./internal/hub/... ./internal/daemon/... ./internal/api/... ./internal/event/... ./internal/cli/... -count=1"
+  },
+  "dependencies": [],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Create the module and load the configuration",
+      "criteria": [
+        "REQ-1.1",
+        "REQ-1.2",
+        "REQ-1.3"
+      ],
+      "steps": [
+        "Create the Go module github.com/agent-fox-dev/nightshift (Go 1.27) with the two programs cmd/nightshiftd and cmd/nightshift, each a main that only calls a run function taking the arguments, the environment and the output streams and returning the exit code (internal/daemon.Run and internal/cli.Run), so that tests run them in-process",
+        "Add a Makefile with the targets build, test (the all_tests command), lint (the linter command), check (gofmt check, lint, then test) and doc (go doc -all of every package outside internal/ into docs/generated/, one text file per package; with none yet, it writes nothing and succeeds)",
+        "Add internal/buildinfo with a Version string that is `dev` unless set at link time, and have `make build` set it",
+        "Add the configuration behaviours to internal/config/config_test.go and confirm they fail",
+        "Add internal/config: Load(path, home) decodes the TOML file with github.com/BurntSushi/toml into the keys listen, token_file, [store].path and [hub].endpoint, worker_token, approver_token, applies the three defaults, expands a leading ~/ against the home directory it is given, and returns an error whose text is the reason alone (the caller adds the `config: ` prefix)",
+        "Refuse an unknown key with `unknown key \"<dotted key>\"`, using the decoder's list of undecoded keys, and a missing required key with `<dotted key> is not set`; later packages add their own keys to the same struct",
+        "Add internal/store: Open(path) creates the parent directory (mode 0700) and the SQLite file through modernc.org/sqlite, applies numbered schema migrations in order inside a transaction, and exposes a function by which another package registers its migrations; Close flushes and closes. Test that a store opened, closed and opened again keeps a row, in internal/store/store_test.go",
+        "Build one migrated store per test process as a template file and copy it per test, in a helper of internal/store that other packages' tests use",
+        "Have daemon.Run parse --config and run the start check `config`: on an error print `config: <reason>` to stderr and return 1, before anything else is touched; cover it in internal/daemon/start_test.go",
+        "Create docs/configuration.md with the six keys, their defaults and the `config` check's messages, and name the shared test helpers (the store template of internal/store) under Repository Specifics in .specs/steering.md"
+      ],
+      "touches": [
+        "go.mod",
+        "go.sum",
+        "Makefile",
+        "cmd/nightshiftd/main.go",
+        "cmd/nightshift/main.go",
+        "internal/buildinfo",
+        "internal/config/config.go",
+        "internal/config/config_test.go",
+        "internal/store/store.go",
+        "internal/store/store_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/start_test.go",
+        "internal/cli/run.go",
+        "docs/configuration.md",
+        ".specs/steering.md"
+      ],
+      "done_when": [
+        "`make check` passes",
+        "`go build ./cmd/...` produces both programs"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Check the hub and the two credentials at start",
+      "criteria": [
+        "REQ-1.4",
+        "REQ-1.5",
+        "REQ-2.1",
+        "REQ-2.2",
+        "REQ-2.3",
+        "REQ-2.4",
+        "REQ-2.5",
+        "REQ-2.6"
+      ],
+      "steps": [
+        "Add internal/hubtest, the fake Parley hub every package's tests use: an httptest server with a scriptable /readyz, a set of personal access tokens with permissions, binding and a revoked flag, the route GET /api/v1/user/tokens/{token_id} answering as Parley does (401 unauthenticated, then 403 token_bound, then 403 insufficient_scope without tokens:read or tokens:manage, 404 for another user's or an unknown id, Parley's error envelope), a log of the requests it saw with their bearer, and Stop and Start on the same address",
+        "Add the credential and start-check behaviours to internal/daemon/credentials_test.go and internal/daemon/start_test.go and confirm they fail",
+        "Add internal/hub: a client over the endpoint that sends a request with a named credential (worker or approver), decodes Parley's error envelope into an error carrying the status and the error_type, and has Ready(ctx) for GET /readyz and Token(ctx, credential, tokenID) for the Token object",
+        "Add the `hub` start check: Ready with a 10 second timeout that is a parameter; map a refused connection, another status and a timeout to the three reasons",
+        "Add CheckCredentials: first the form of both tokens and their inequality, with no request; then the worker token reads its own Token object and the approver's, and the approver token sends one request on that route whose 401 alone fails it",
+        "Report the reasons in this precedence: not a personal access token, same token, 401 of the worker, 401 of the approver, worker bound, worker lacks tokens:manage (its read was answered insufficient_scope), worker holds changes:approve, first missing worker scope in the PRD's order, first missing approver scope",
+        "Have daemon.Run run the checks in the order config, hub, credentials through one ordered list that a later package can append a check to, print `<check>: <reason>` for the first failure and return 1 without running the rest",
+        "Name internal/hubtest under Repository Specifics in .specs/steering.md"
+      ],
+      "touches": [
+        "internal/hubtest",
+        "internal/hub/client.go",
+        "internal/hub/client_test.go",
+        "internal/daemon/checks.go",
+        "internal/daemon/credentials.go",
+        "internal/daemon/credentials_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/start_test.go",
+        ".specs/steering.md"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Serve the authenticated API with the status, and add the client",
+      "criteria": [
+        "REQ-1.6",
+        "REQ-1.7",
+        "REQ-3",
+        "REQ-4"
+      ],
+      "steps": [
+        "Add the token, envelope, status and client behaviours to internal/api/token_test.go, internal/api/server_test.go and internal/cli/cli_test.go and confirm they fail",
+        "Add internal/api.EnsureClientToken(path): return the token an existing file holds without touching the file; otherwise write 64 hex characters from crypto/rand and a newline with mode 0600, the parent directory with mode 0700",
+        "Add the API server on net/http's ServeMux under /api/v1 with a Handle function by which later packages register their routes; wrap it so that the bearer token is compared in constant time before the route is looked up, an unknown path is 404 not_found, a wrong method 405 method_not_allowed and a panic 500 internal, each as {error_type, message} JSON",
+        "Add one helper that writes an error answer and one that writes a JSON answer, for every later handler",
+        "Add GET /api/v1/status: the version from internal/buildinfo, the hub's endpoint, the reachability, the time of the first failure and the credential error from an interface the hub monitor of task 5 implements (a stub reporting reachable until then), and the lists sessions and workspaces from sources a later package registers, empty lists while none is registered",
+        "After the start checks have daemon.Run open the store, ensure the client token and listen, in that order, each failure printing `store: `, `token: ` or `listen: ` with the error and returning 1; report the bound address to the caller so that tests can listen on port 0",
+        "Add internal/cli: a command table over the standard flag package with the global flags --addr, --token-file and --json, the address from the flag, then $NIGHTSHIFT_ADDR, then the default listen address, the token from the flag's file, then ~/.nightshift/token; a Register function by which later packages add commands",
+        "Add one client function that sends a request with the bearer token and maps the outcomes to exit codes: 1 with `cannot reach nightshiftd at <address>` for a transport failure, 1 with `cannot read the client token at <path>`, 1 with the error body's message for a 4xx or 5xx (the body on stdout with --json), 2 with the usage for a usage error before any request",
+        "Add the command `nightshift status` with its text and --json output",
+        "Add the first-start flow to internal/daemon/e2e_test.go with a helper that starts the daemon in-process on port 0 against the fake hub in a temporary directory, for the later tasks and packages to reuse",
+        "Create docs/api.md (authentication, the error body, GET /api/v1/status) and docs/cli.md (nightshiftd and its --config flag, nightshift's global flags, exit codes and `status`), and update README.md with what the two programs are and how to start them"
+      ],
+      "touches": [
+        "internal/api/token.go",
+        "internal/api/token_test.go",
+        "internal/api/server.go",
+        "internal/api/server_test.go",
+        "internal/api/status.go",
+        "internal/cli/run.go",
+        "internal/cli/client.go",
+        "internal/cli/status.go",
+        "internal/cli/cli_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/start_test.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "README.md"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Keep the event log and serve it as a resumable stream",
+      "criteria": [
+        "REQ-5"
+      ],
+      "steps": [
+        "Add the event log behaviours to internal/event/log_test.go and the stream behaviours to internal/api/events_test.go and confirm they fail",
+        "Add internal/event with its store migration: a table of events (seq, time, type, data as JSON) and a one-row table holding the highest seq ever given, so that seq never goes back after a prune or a restart",
+        "Add Append(type, data): give the next seq and the time from an injected clock and write the event and the counter in one transaction, under one lock so that seqs are gapless, then hand the event to every subscriber without blocking",
+        "Add After(seq): the kept events with a greater seq in order, a cursor-expired error carrying the oldest kept seq (or the next seq to be given when none is kept) when an event after seq was removed, and an invalid error when seq is greater than the highest ever given",
+        "Add Subscribe(afterSeq): register the subscriber under the append lock, replay the kept events after afterSeq and then deliver live ones through a buffer of 256 events, so that none is missed or sent twice; when the buffer is full, close the subscriber's channel and remove it instead of waiting",
+        "Add Prune: delete every event older than 7 days by the injected clock; run it when the daemon starts and once an hour from a goroutine that stops with the daemon",
+        "Add GET /api/v1/events: validate Last-Event-ID (400 invalid_request), answer 410 cursor_expired with oldest_seq, otherwise stream `id`, `event` and `data` lines with a flush after each event, without Last-Event-ID from the present; end the stream when the client goes away, the subscriber was dropped or the server shuts down",
+        "Create the log in daemon.Run over the opened store and expose it to the packages that will append to it",
+        "Describe the stream, the cursor, the 7 days and the two refusals in docs/api.md"
+      ],
+      "touches": [
+        "internal/event/log.go",
+        "internal/event/log_test.go",
+        "internal/api/events.go",
+        "internal/api/events_test.go",
+        "internal/daemon/run.go",
+        "docs/api.md"
+      ],
+      "depends_on": [
+        3
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Stop on a signal, ride out a hub outage and reload the credentials",
+      "criteria": [
+        "REQ-2.7",
+        "REQ-2.8",
+        "REQ-6"
+      ],
+      "steps": [
+        "Add the monitor behaviours to internal/hub/monitor_test.go and the lifecycle behaviours to internal/daemon/lifecycle_test.go and confirm they fail",
+        "Add the hub monitor in internal/hub: every request the client sends reports its outcome; a connection error or a timeout marks the hub unreachable and records the time of the first failure from an injected clock, which later failures leave unchanged",
+        "While unreachable, probe GET /readyz at an interval that is a parameter with the default 30 seconds; the first 200 marks the hub reachable and clears the time; send no probe while reachable; stop with the daemon",
+        "Record a 401 answer to a request with the worker or the approver token as that token's credential error (`worker token: 401 unauthenticated`), without marking the hub unreachable for the other token",
+        "Add Available(credential): false while the hub is unreachable or that credential has an error; it is what later packages ask before they start a session or land",
+        "Feed the monitor's state into GET /api/v1/status in place of the stub",
+        "Hold the two tokens behind a lock in the hub client; on SIGHUP load the configuration again, run CheckCredentials on its tokens, swap them in and clear the credential errors when it passes, and write `config: <reason>` or `credentials: <reason>` to stderr and keep the old ones when it does not",
+        "On SIGTERM or SIGINT stop the listener, end the event streams, run the registered shutdown steps in registration order with a context cancelled after a deadline that is a parameter with the default 25 seconds, name an abandoned step on stderr, close the store and return 0, no later than an exit deadline with the default 30 seconds",
+        "Add a function by which a later package registers a named shutdown step",
+        "Add the restart flow and the outage flow to internal/daemon/e2e_test.go, and one test that sends real SIGHUP and SIGTERM to the test binary re-executed as the daemon",
+        "Create docs/architecture.md: the two programs, the packages internal/config, store, hub, daemon, api, event and cli, the start sequence and the extension points later packages use (start checks, routes, commands, status sources, migrations, shutdown steps, the event log); add signals and the outage behaviour to docs/cli.md; run `make doc`"
+      ],
+      "touches": [
+        "internal/hub/monitor.go",
+        "internal/hub/monitor_test.go",
+        "internal/hub/client.go",
+        "internal/daemon/lifecycle.go",
+        "internal/daemon/lifecycle_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "internal/api/status.go",
+        "docs/architecture.md",
+        "docs/cli.md"
+      ],
+      "depends_on": [
+        3,
+        4
+      ],
+      "done_when": [
+        "`make check` passes on the whole tree"
+      ]
+    }
+  ]
+}

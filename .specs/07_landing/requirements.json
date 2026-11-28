@@ -1,0 +1,908 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "07",
+  "spec_name": "landing",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "The landing conditions and the sync before a landing",
+      "rationale": "A change that passed its review may still have to wait: for the person who paused it, for a main branch that is broken, or for an origin that moved.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "ubiquitous",
+          "action": "for any item in the state `landing`, evaluate the landing conditions in this order and stop at the first that does not hold: neither the item nor its workspace is paused (`paused`); every condition registered with `AddCondition`, in registration order (its name); the workspace's state is `green`, or `red` for an item marked with `SetRepair` (`workspace red` or `workspace held`); the workspace's policy requires the three checks (`workspace held`); the sync from origin passes (`origin sync`); and report no check and send no land request while one does not hold",
+          "contract": "`Service.Conditions(ctx, item)` returns the name of the first condition that does not hold, or the empty `Condition` when all hold; it is the evaluation the step runs, so it may hold the workspace for its policy and run the sync; for `paused`, a registered condition, `workspace red` and a workspace already `held` it returns without a request to the hub; an item that is not `landing` returns an error",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "new file internal/land/conditions_test.go, a table over {nothing wrong -> '', item paused -> 'paused', workspace paused -> 'paused', paused and workspace red -> 'paused', workspace red -> 'workspace red', workspace held -> 'workspace held', policy with an empty default -> 'workspace held', sync answering 'diverged' -> 'origin sync'}: got, err = svc.Conditions(ctx, n); assert err == nil; assert got == want; for the rows paused, red and held assert the fake hub's request count == 0; then svc.Step(ctx, item) for every row but the first: assert the stub saw no ReportCheck and the fake hub saw no POST …/land; assert the item's state == 'landing'"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/items` or `GET /api/v1/items/{number}`, or the person runs `nightshift item list` or `nightshift item show <N>`, for an item in `landing`",
+          "action": "report for the item, through three functions registered with `RegisterMarker` of package 03's item service, the marker `workspace red`, `workspace held` or `origin sync` that names the first condition that does not hold, computed from the store alone, and no such marker for an item that is paused, whose marker `paused` is package 04's",
+          "contract": "the item's `markers` hold at most one of the three names, so that `nightshift item show <N>` prints it on the `state:` line; `Service.Waiting(item)` returns the same name, `paused` for a paused item, or the empty string; an item in another state has none of them; the hub is not asked",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/conditions_test.go, through the router of package 03's item routes with the three markers registered as daemon.Run registers them, a table over {green -> markers == [], red -> ['workspace red'], held -> ['workspace held'], a sync held 10 seconds ago -> ['origin sync'], red and the item marked with SetRepair -> [], red and the pause stub true -> none of the three, item in 'reviewing' in a red workspace -> []}: r = get('/api/v1/items/' + n); assert the three names among r.json.markers == want; assert svc.Waiting(n) == the name or ''; assert the fake hub's request count == 0"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "unwanted",
+          "condition": "the hub client reports the worker credential as not available, or the hub answers the read of the item's change or of the workspace's policy with an error, while the step of an item in `landing` runs",
+          "action": "report no check, send no land request and no sync, leave the item in `landing`, and after an error answer ask the hub nothing for that item for 1 minute",
+          "contract": "the step returns nil; the item's state is `landing`; `Conditions` returns `the hub`; the fake hub saw no `PUT …/checks/nightshift-release`, no `POST …/sync` and no `POST …/land`; a step called less than 1 minute after an error answer sends no request, and the first one after it does",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/conditions_test.go, a table over {the fake hub stopped so that Available(worker) is false, the change read answering 500, the policy read answering 500}: err = svc.Step(ctx, item); assert err == nil; assert item state == 'landing'; assert the stub saw no ReportCheck; assert no POST …/land and no POST …/sync was seen; got, _ = svc.Conditions(ctx, n); assert got == 'the hub'; for the two error rows: count = fake hub request count; svc.Step again at clock + 59s; assert the count is unchanged; clock + 61s with the hub answering 200; svc.Step; assert a land request was seen"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "event_driven",
+          "condition": "the conditions before the sync hold for an item in `landing`",
+          "action": "send one `POST /api/v1/workspaces/{slug}/sync` with the worker token, take from the answer's `branches` the entry whose `name` is the answer's `default_branch`, and, where no function is registered with `OnSyncResult`, let the condition hold for the result `up_to_date`, `ahead` or `fast_forward`",
+          "contract": "one sync request per landing, sent before `nightshift-release` is reported; `Service.SyncOrigin(ctx, slug)` returns `SyncResult{Workspace, Branch, Result, LocalSHA, OriginSHA}` for the default branch, with an empty `Result` for a branch the sync does not report, and calls no registered function",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "new file internal/land/sync_test.go, one table for every sync result; these rows, with no function registered: {'up_to_date', 'ahead', 'fast_forward'}: svc.Step(ctx, item); assert the fake hub's log holds one POST …/sync and it precedes the ReportCheck of nightshift-release and the POST …/land; assert the item is 'verifying'; res, err = svc.SyncOrigin(ctx, 'demo'); assert res == {Workspace: 'demo', Branch: 'main', Result: the row's, LocalSHA, OriginSHA as scripted}; with a recording function registered assert SyncOrigin did not call it"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "optional",
+          "condition": "another package registered a function with `OnSyncResult(func(ctx, SyncResult) error)`",
+          "action": "call that function with the result of every sync it runs before a landing, a sync the hub answered with an error included (`Err` set), wait for it to return before any check is reported, and go on with the landing only when it returns nil",
+          "contract": "the function is called once per sync before a landing, with `SyncResult{Workspace, Branch, Result, LocalSHA, OriginSHA, Err}`, before any check is reported; nothing is reported and no land is requested until it returned",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/sync_test.go, the rows with a function registered through svc.OnSyncResult: {'up_to_date' and nil -> the function saw Result 'up_to_date' once and a land request is seen, 'fast_forward' and nil -> it saw Result 'fast_forward' with the scripted LocalSHA before the ReportCheck of nightshift-release and a land request is seen, 'diverged' and nil -> a land request is seen, a sync answered 502 upstream_error and nil -> it saw Err set and a land request is seen, 'fast_forward' with a function that blocks until the test releases it -> no ReportCheck and no land request before the release, both after it}"
+          }
+        },
+        {
+          "id": "REQ-1.6",
+          "pattern": "unwanted",
+          "condition": "no function is registered with `OnSyncResult` and the sync before a landing reports the default branch with another result than `up_to_date`, `ahead` and `fast_forward`, does not report it, or is answered by the hub with an error; or the registered function returns an error",
+          "action": "let the condition not hold, report no check, send no land request, and send no further sync for that workspace for 1 minute",
+          "contract": "`Conditions` returns `origin sync` and the item's marker is `origin sync`; the item's state is `landing`; the fake hub saw no `PUT …/checks/nightshift-release` and no `POST …/land`; a step of any item of that workspace within 1 minute sends no sync, and the first one after it does",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/sync_test.go, the rows {no function and 'diverged', no function and 'reset', no function and a default branch the sync leaves out, no function and a sync answered 502 upstream_error, a function returning an error for 'fast_forward', a function returning an error for 'up_to_date'}: svc.Step(ctx, item); got, _ = svc.Conditions(ctx, n); assert got == 'origin sync'; assert item state == 'landing'; assert the stub saw no ReportCheck and the fake hub saw no POST …/land; svc.Step for another item of 'demo' at clock + 59s; assert the fake hub saw one sync in all; clock + 61s with the sync answering 'up_to_date' and the function nil; svc.Step; assert a second sync and a land request"
+          }
+        },
+        {
+          "id": "REQ-1.7",
+          "pattern": "ubiquitous",
+          "action": "for any workspace, let at most one of its items at a time be between the start of its sync and the hub's final answer to its land request, the steps of its other items waiting for their turn, while items of other workspaces go on",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/sync_test.go: two items of 'demo' and one of 'other', all ready to land; the fake hub holds the answer to the first land of 'demo' until released; run the three steps in goroutines; assert the fake hub saw one sync and one land for 'demo' and a landed item of 'other'; release; assert the second item of 'demo' then syncs and lands; assert the log of 'demo' reads sync, land, sync, land"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "A workspace held by its policy",
+      "rationale": "Everything lands without the person only because the hub refuses a version nightshift has not checked; a policy that stopped requiring the checks removes that ground, and only the person can say whether it was meant.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "event_driven",
+          "condition": "the conditions of an item in `landing` reach the policy, the workspace has no open `policy` decision, and `policy.Missing` of the policy read with the worker token names at least one requirement",
+          "action": "set the workspace's state to `held` with `SetState`, append to the workspace's thread an entry of kind `workspace_state` with the text `green -> held: policy does not require nightshift's checks in: <names joined by \", \">`, open in that thread a decision of kind `policy` with the question `The policy of <slug> does not require nightshift's checks in: <names>. Adopt them?`, one piece of evidence per name, the options `adopt` (recommended) and `recheck` and `every landing in <slug>` as what it blocks, and call `Notify` of `internal/notify` with the event `workspace_held`, the workspace and the thread's URL path",
+          "contract": "the workspace is `held`; `GET /api/v1/decisions` lists one `policy` decision with exactly the option keys `adopt` and `recheck`, neither requiring a comment, on the workspace's thread and with no item; the notifier received one `workspace_held` event; the item stays `landing` with no check reported and no land requested",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "new file internal/land/policyhold_test.go: fakeHub.ReplacePolicy('demo', a policy with an empty default and the rules docs (no checks) and secrets (block)); svc.Step(ctx, item); assert workspace.Get('demo').State == 'held'; d = the open decisions of inbox.WorkspaceThread('demo'); assert len(d) == 1 and d[0].Kind == 'policy' and option keys == ['adopt', 'recheck'] and the recommended one is 'adopt'; assert d[0].Question names 'default, docs' and not 'secrets'; assert the thread's entries hold {kind: 'workspace_state', text: \"green -> held: policy does not require nightshift's checks in: default, docs\"}; assert the notifier saw one Event{Event: 'workspace_held', Workspace: 'demo', Thread: the thread's path}; assert item state == 'landing'; assert the stub saw no ReportCheck and no POST …/land"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "state_driven",
+          "condition": "a `policy` decision is open for a workspace",
+          "action": "open no second `policy` decision and send no further `workspace_held` notification for that workspace, whichever of its items reach the policy condition, and set the workspace's state to `held` again, with no entry, when another package set it to `green` meanwhile and the policy still lacks the checks",
+          "contract": "the count of open `policy` decisions of the workspace stays 1 and the notifier's count stays 1; no item of the workspace has a check reported or a land requested",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/policyhold_test.go, after the hold above: svc.Step for a second item of 'demo', three times; assert one open policy decision and one notification; workspace.SetState(ctx, 'demo', 'green'); svc.Step(ctx, item); assert State == 'held'; assert still one decision, one notification and one workspace_state entry"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "event_driven",
+          "condition": "a `policy` decision is answered `adopt`",
+          "action": "read the workspace's policy with `policy.Read`, write `policy.Adopt` of it with `policy.Write` and the revision read when `policy.Missing` names a requirement, and then, when the workspace's state is `held`, set it to `green` and append to the workspace's thread an entry of kind `workspace_state` with the text `held -> green: policy adopted at revision <N>`",
+          "contract": "the hub's policy afterwards passes `policy.Missing`, with every rule in its place and the checks it had kept; the `PUT` carried `If-Match` with the revision read; a workspace that was `held` is `green` and one that is `red` stays `red`; the handler called a second time for the answer writes nothing; the next step of an item of the workspace goes on to the sync",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/policyhold_test.go, the policy at revision 4 with the rule docs naming the check 'spell': call the handler registered for ('policy', 'adopt') with the decision; assert err == nil; p = fakeHub.Policy('demo'); assert policy.Missing(p) is empty; assert p.rules[docs].checks == ['spell', the three]; assert the PUT carried If-Match 4; assert State == 'green'; assert the last workspace_state entry == 'held -> green: policy adopted at revision 5'; call the handler again; assert the fake hub saw one PUT in all; svc.Step(ctx, item); assert a land request is seen. Second case, the workspace set to 'red' before the answer: assert the policy is written and State == 'red'"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "event_driven",
+          "condition": "a `policy` decision is answered `recheck`",
+          "action": "read the workspace's policy again and, when `policy.Missing` names no requirement and the workspace's state is `held`, set it to `green` and append to the workspace's thread an entry of kind `workspace_state` with the text `held -> green: policy requires nightshift's checks`, writing nothing to the hub",
+          "contract": "the workspace is `green`; the hub saw one `GET …/policy` and no `PUT`; no `policy` decision is open for the workspace",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/policyhold_test.go: after the hold, fakeHub.ReplacePolicy('demo', a complete policy); call the handler registered for ('policy', 'recheck'); assert err == nil; assert State == 'green'; assert the last workspace_state entry == \"held -> green: policy requires nightshift's checks\"; assert the fake hub saw no PUT of the policy; assert no policy decision is open"
+          }
+        },
+        {
+          "id": "REQ-2.5",
+          "pattern": "unwanted",
+          "condition": "the policy read for an answered `recheck`, or read again after the write of an answered `adopt`, still lacks the three checks in `default` or in a rule that does not block",
+          "action": "keep the workspace `held` and open a new `policy` decision in the workspace's thread that lists the requirements lacking the checks at that moment, sending no notification",
+          "contract": "the handler returns nil; the workspace's state is `held`; exactly one `policy` decision is open, with a new id and the current names; the notifier was not called again",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/policyhold_test.go: after the hold naming 'default, docs', fakeHub.ReplacePolicy('demo', default complete, docs still without checks); call the recheck handler; assert err == nil; assert State == 'held'; d = the open policy decisions; assert len(d) == 1 and d[0].ID != the first decision's and d[0].Question names 'docs' and not 'default'; assert the notifier's count is still 1"
+          }
+        },
+        {
+          "id": "REQ-2.6",
+          "pattern": "unwanted",
+          "condition": "the hub answers the adopting write with `412 revision_mismatch`, or the hub is not available to the worker credential, or answers the read or the write of the policy with another error, while a `policy` answer is carried out",
+          "action": "return an error from the answer's handler, leave the workspace's state as it is, and open no decision, so that package 03's inbox notes the failure in the thread and calls the handler again",
+          "contract": "the handler returns a non-nil error, `policy.ErrRevisionMismatch` for the 412; the workspace stays `held`; the write is not sent a second time by that call; a later call of the handler, with the hub answering, carries the answer out",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/policyhold_test.go, a table over {the fake hub replaces the policy between the handler's read and its write (the hook on its GET) -> the error is policy.ErrRevisionMismatch, the fake hub stopped -> an error}: err = adopt handler(decision); assert err != nil; assert State == 'held'; assert the fake hub saw at most one PUT; assert no policy decision was opened; then with the hub steady call the handler again; assert err == nil and State == 'green'"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "The release check, the land request and the hub's answers",
+      "rationale": "The hub lands what its policy lets pass, so nightshift's own conditions have to be a check on the hub, reported on exactly the version that is landed.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "event_driven",
+          "condition": "every landing condition holds for an item in `landing` whose change the hub reports as `open` with `nightshift-gate` and `nightshift-review` `passed` on its current version",
+          "action": "report the check `nightshift-release` as `passed` with the summary `conditions hold`, through `ReportCheck` of package 06, which reports on the change's current version, then ask the hub to land exactly the version it read with `LandChange` (`POST …/changes/{number}/land?wait=30` with the worker token and the body `{\"expected_version\": <version>}`, plus `session_id` when the change's `session_id` is not null), and append to the item's thread an entry of kind `land` with the text `land of version <version>: <the hub's answer>`",
+          "contract": "`ReportCheck` was called once with `nightshift-release` and `passed` before the land request was sent; the land request names the version the step read as `expected_version`; `Service.Landing(ctx, item)` returns a `Record` with `ReleaseVersion` and `Release: \"passed\"`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "new file internal/land/step_test.go: svc.Step(ctx, item); assert the stub saw exactly one ReportCheck(n, 'nightshift-release', 'passed', 'conditions hold'); assert it precedes the fake hub's POST …/changes/7/land; assert that request's query has wait=30, its bearer is the worker token and its body == {expected_version: 2, session_id: the change's}; with a change whose session_id is null assert the body == {expected_version: 2}; rec, _ = svc.Landing(ctx, n); assert rec.ReleaseVersion == 2 and rec.Release == 'passed'; assert the thread's last land entry starts with 'land of version 2: '"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "ubiquitous",
+          "action": "for any land request it sends, from the step of an item or from `LandChange`, send neither the member `override` nor the member `stack`",
+          "check": {
+            "same_as": "REQ-6.1"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "event_driven",
+          "condition": "the hub answers the land of an item's change with `200` and an attempt whose `status` is `landed`",
+          "action": "store the attempt's `landed_sha` for the item and move the item to `verifying` with package 03's `Transition` and the reason `landed as <landed_sha>`",
+          "contract": "the item's state is `verifying`; `Service.Landing(ctx, item)` returns `LandedSHA`; the thread's `land` entry reads `land of version <v>: landed as <sha>`; no further land is requested for the item",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/step_test.go: the fake hub lands version 2 as commit L; svc.Step(ctx, item); assert item state == 'verifying'; rec, _ = svc.Landing(ctx, n); assert rec.LandedSHA == L; assert the thread holds {kind: 'land', text: 'land of version 2: landed as ' + L} and then {kind: 'state', text: 'landing -> verifying: landed as ' + L}; svc.Step again; assert the fake hub saw one land request in all"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "event_driven",
+          "condition": "the step of an item in `landing` reads the item's change and the hub reports its `state` as `landed`",
+          "action": "store the change's `landed.sha` for the item and move the item to `verifying`, reporting no check and sending no land request; and read the change at once, before any condition, at the step of an item for which a land request was sent and no answer was recorded",
+          "contract": "the item's state is `verifying` with the landed commit stored; an item whose land was being answered when the daemon stopped or the item was paused is found landed whatever the landing conditions say; an item in a `red` or `held` workspace with no unanswered land request causes no request to the hub",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/step_test.go, a table over {a land request recorded as sent and unanswered (the step's context was cancelled while the fake hub held the answer, then the hub landed), the workspace 'red' -> the first request of the next step is the read of the change, no land request recorded and the change landed by other means, the workspace 'green' -> the read follows the conditions that need no hub}: the fake hub's change 7 is in state 'landed' with landed.sha L; svc.Step(ctx, item); assert item state == 'verifying'; assert Landing.LandedSHA == L; assert the stub saw no ReportCheck and the fake hub saw no further POST …/land and no POST …/sync. A third row: a land request recorded as unanswered and the change still 'open': the step forgets the record and goes on with the conditions"
+          }
+        },
+        {
+          "id": "REQ-3.5",
+          "pattern": "event_driven",
+          "condition": "the step of an item in `landing` finds that `nightshift-gate` or `nightshift-review` has no `passed` result reported on the current version of the item's change itself, or the hub answers the land with `409 version_mismatch`",
+          "action": "move the item to `implementing` with package 03's `Transition` and the reason `version <version> is not gated and reviewed`, so that package 06's step gates and reviews the current version as any version, append to the item's thread an entry of kind `land` with the text `land of version <version>: the version is no longer current`, and request no land of the earlier version again",
+          "contract": "the item's state is `implementing`; no decision was opened and `Rework` was not called; where the checks were missing at the read, no check was reported and no land requested",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/step_test.go, a table over {the fake hub's change gained version 3 with no check on it before the step -> no ReportCheck and no land request, nightshift-review 'failed' on version 2 -> the same, nightshift-gate passed on version 1 only and reported for version 2 by carry-over -> the same, the land answered 409 version_mismatch -> one land request}: svc.Step(ctx, item); assert item state == 'implementing'; assert the stub saw no Rework; assert no decision is open on the item's thread; assert the land entry's text ends with 'the version is no longer current'"
+          }
+        },
+        {
+          "id": "REQ-3.6",
+          "pattern": "event_driven",
+          "condition": "the hub answers a land request with `202` and an attempt that is still `running`, or with `409 land_in_progress` and the running attempt in `error.details`",
+          "action": "read the attempt with `GET /api/v1/workspaces/{slug}/lands/{id}` every 2 seconds until its `status` is no longer `running`, sending no second land request meanwhile, and handle the final attempt as the answer to the land",
+          "contract": "`LandChange` returns the `Outcome` of the final attempt; the hub saw one `POST …/land`; an attempt still `running` 10 minutes after the request returns `Outcome{Kind: \"failed\", Reason: \"land attempt <id> is still running\"}`",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a land service over the hub client and a fake hub (internal/hubtest) whose land route answers from a script"
+            ],
+            "pseudocode": "new file internal/land/land_test.go, with the poll interval set to 1 millisecond, a table over {the land answered 202 with attempt A running, the land answered 409 land_in_progress with attempt A in error.details} x {A read as running twice and then landed -> Outcome.Kind == 'landed' and LandedSHA, then conflict -> 'conflict' with the report, then failed with error 'timeout' -> 'failed' with Reason 'land_failed: timeout'}: out, err = svc.LandChange(ctx, req); assert the fake hub saw one POST …/land and three GET …/lands/A. One row with the limit set to 5 milliseconds and A running for ever: assert out.Kind == 'failed' and out.Reason == 'land attempt A is still running'"
+          }
+        },
+        {
+          "id": "REQ-3.7",
+          "pattern": "unwanted",
+          "condition": "the hub answers the land of an item's change with `503 land_failed`; with `409 policy_blocked` and `blocked.status` `blocked` where no requirement has `block`; with `409 policy_blocked` and `blocked.status` `pending` where no requirement has fewer counted approvals than required, or for a version on which nightshift recorded the person's approval already; with any other refusal than `land_conflict` and `version_mismatch`; or the attempt is still `running` after 10 minutes",
+          "action": "append to the item's thread an entry of kind `land` with the text `land of version <version> failed: <reason>`, keep the item in `landing`, and ask the hub to land again no sooner than 1 minute later, after evaluating the conditions again, at most 5 times; and when the land asked for the fifth time again fails, open a `session_failed` decision with `OpenSessionFailed(ctx, item, \"land\", failures)` of package 04's scheduler, the failures carrying the reason of each failed attempt and no stream path, and set the item's count of failed lands to zero",
+          "contract": "the reason is `<error_type>: <the attempt's error, or the hub's message>`, for a pending check `policy_blocked: check <name> is <status> under rule <rule>`, for approvals that do not suffice `policy_blocked: <counted> of <required> approvals count under rule <rule>`, and for a structural block `policy_blocked: blocked: <the landing's reason>`; the hub sees at most 6 land requests for the item, each at least 1 minute after the one before; after the sixth failure one `session_failed` decision is open on the item's thread with the six reasons, and after its answer `retry` the next step requests the land again; an attempt that lands in between opens no decision",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/step_test.go with a recording stub of OpenSessionFailed, a table over the fake hub's scripted answer {503 land_failed with attempt error 'contention' -> 'land_failed: contention', policy_blocked with blocked.status 'blocked', no requirement with block and landing reason 'merge_commits' -> 'policy_blocked: blocked: merge_commits', policy_blocked 'pending' whose only unsatisfied requirement has the check 'spell' pending under rule docs -> 'policy_blocked: check spell is pending under rule docs', 409 change_not_open -> 'change_not_open: ' + the hub's message, 403 forbidden -> 'forbidden: ' + the hub's message}: svc.Step; assert one land request and a land entry 'land of version 2 failed: ' + reason; svc.Step at clock + 59s; assert still one land request; then five times {clock + 61s; svc.Step}; assert six land requests in all; assert OpenSessionFailed was called once, after the sixth, with step 'land' and six failures whose reasons are the answers' and whose stream paths are empty; assert item state == 'landing'; then svc.Step with the hub landing: assert item state == 'verifying'. One case where the third attempt lands: assert no decision"
+          }
+        },
+        {
+          "id": "REQ-3.8",
+          "pattern": "event_driven",
+          "condition": "a condition stops holding for an item in `landing` whose `nightshift-release` was reported `passed` and whose change has not landed",
+          "action": "report `nightshift-release` as `failed` through `ReportCheck`, with the name of the condition as the summary (`paused`, `workspace red`, `workspace held`, or the name of a condition registered with `AddCondition`), once for as long as the condition does not hold; find it at a pass over those items every 5 seconds and at once through a function registered with `OnPause` of package 04's scheduler; and report `passed` again before the next land request",
+          "contract": "`ReportCheck` is called once with `nightshift-release`, `failed` and the summary; `Service.Landing` returns `Release: \"failed\"`; when the conditions hold again the step reports `passed` before it requests the land; an item whose release check was never reported, or which has landed, has nothing reported",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/step_test.go: the fake hub answers the land with a pending approval, so that the release check is passed and the item not landed; a table over {the OnPause function called for the item -> 'paused', the pause stub true for the workspace and svc.Pass(ctx) -> 'paused', workspace.SetState red and svc.Pass -> 'workspace red', held and svc.Pass -> 'workspace held', a condition 'taken over' registered with AddCondition turning false and svc.Pass -> 'taken over'}: assert the stub's last call == ReportCheck(n, 'nightshift-release', 'failed', want); svc.Pass twice more; assert no further ReportCheck; assert Landing.Release == 'failed'. Then the condition holds again and the approval was given: svc.Step; assert a ReportCheck 'passed' precedes the next land request. An item in 'landing' with no release reported, in a red workspace: svc.Pass; assert no ReportCheck. A marked repair in a red workspace with its release passed: svc.Pass; assert no ReportCheck"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "The approval decision, and a land the policy blocks",
+      "rationale": "The hub's policy is where the person said they are needed; nightshift asks them there and nowhere else, and records their word with a credential that wrote none of the change.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "event_driven",
+          "condition": "the hub answers the land of an item's change with `409 policy_blocked`, `blocked.status` `pending` and at least one requirement whose `approvals.counted` is less than its `approvals.required`, for a version on which nightshift has recorded no approval",
+          "action": "open on the item's thread a decision of kind `approval` with the question `Approve version <version> of change <slug>#<number>, which touches paths of rule <rule names joined by \", \">?`, as evidence the change's path on the hub and, for each requirement that lacks an approval, its rule and the files that selected it, the options `approve` (recommended), `reject` (comment required) and `abandon`, and `the landing of item <N>` as what it blocks; keep the item in `landing` and its `nightshift-release` as reported",
+          "contract": "`GET /api/v1/decisions` lists one `approval` decision of the item with exactly the option keys `approve`, `reject` and `abandon`, `reject` alone requiring a comment; its evidence names each rule that lacks an approval with its files and no other rule; the item's `waiting_on` names it; no check is reported `failed`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "new file internal/land/approval_test.go: the fake hub answers the land with 409 policy_blocked, blocked.status 'pending' and the requirements [{rule: 'nightshift-1', paths: ['deploy/config.yaml'], approvals: {required: 1, counted: 0}, block: false}, {rule: 'default', paths: ['api/greet.go'], approvals: {required: 0, counted: 0}, satisfied: true}]; svc.Step(ctx, item); d = the open decisions of the item's thread; assert len(d) == 1 and d[0].Kind == 'approval'; assert option keys == ['approve', 'reject', 'abandon'], 'approve' recommended and only 'reject' with comment_required; assert d[0].Question == 'Approve version 2 of change demo#7, which touches paths of rule nightshift-1?'; assert d[0].Evidence holds {Label: 'rule nightshift-1', Text: 'deploy/config.yaml'} and no entry for 'default'; assert item state == 'landing'; assert the stub's last ReportCheck is 'passed'; assert the item's waiting_on names the decision"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "event_driven",
+          "condition": "an `approval` decision of an item that is not paused is answered `approve`",
+          "action": "record the approval on the hub with the approver token (`POST …/changes/{number}/approvals` with `{\"verdict\": \"approve\", \"version\": <the version the decision was opened for>}`), remember that version as approved for the item, and let the item's step run again, which evaluates the conditions, reports the release check and asks the hub to land",
+          "contract": "the hub holds one `approve` verdict on that version from the approver credential and none from the worker credential; the item's next step requests the land of the version; a handler called twice for the answer leaves one verdict; an item whose change gained a version meanwhile has that version gated and reviewed first (REQ-3.5)",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/approval_test.go, after the decision above with the fake hub's land answering from the recorded approvals: call the handler registered for ('approval', 'approve') with the decision and its answer; assert err == nil; assert the fake hub saw POST …/changes/7/approvals with body {verdict: 'approve', version: 2} bearing the approver token; assert no request under …/approvals bore the worker token; call the handler again; assert the fake hub holds one verdict of the approver credential on version 2; svc.Step(ctx, item); assert a land request with expected_version 2 followed; assert item state == 'verifying'"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "event_driven",
+          "condition": "an `approval` decision of an item that is not paused is answered `reject` with its comment",
+          "action": "record the rejection on the hub with the approver token (`{\"verdict\": \"reject\", \"comment\": <the comment>, \"version\": <the decision's version>}`) and then start the implementer through `Rework(ctx, item, findings)` of package 06 with one finding (`impl.Finding`) whose `ID` is `approval-<decision id>`, whose `Source` is `person`, whose `Text` is the comment and whose `Binding` is true",
+          "contract": "the hub holds a `reject` verdict with the comment on that version from the approver credential; `Rework` was called once for the answer, also when the handler is called twice; no land is requested for that version again",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/approval_test.go: call the handler registered for ('approval', 'reject') with the answer {comment: 'Keep the old port'}; assert err == nil; assert the fake hub saw one POST …/approvals with {verdict: 'reject', comment: 'Keep the old port', version: 2} bearing the approver token; assert the rework stub saw Rework(n, [{ID: 'approval-' + d.ID, Source: 'person', Text: 'Keep the old port', Binding: true}]) once; call the handler again; assert Rework was called once in all"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "event_driven",
+          "condition": "an `approval` decision or a `conflict` decision of an item that is not paused is answered `abandon`",
+          "action": "abandon the item through `Abandon(ctx, item, reason)` of package 03's item service with the reason `abandoned at the <kind> decision`, recording nothing on the hub itself",
+          "contract": "the item's state is `abandoned` and the abandon hooks of package 03 ran; the hub saw no verdict and no land request from this package; a handler called again for an item that is `abandoned` already returns nil",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/approval_test.go, a table over {('approval', 'abandon'), ('conflict', 'abandon')} with an abandon hook registered that records its call: call the handler; assert err == nil; assert item state == 'abandoned'; assert the hook ran once; assert the fake hub saw no POST …/approvals and no further POST …/land; call the handler again; assert err == nil and the hook ran once in all"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "event_driven",
+          "condition": "the hub answers the land of an item's change with `409 policy_blocked`, `blocked.status` `blocked` and at least one requirement whose `block` is true",
+          "action": "open the `blocked` decision of package 06 through its `OpenBlocked(ctx, item, requirements)` with the requirements that block (each with its rule and its files), keep the item in `landing`, and request no land of that version again",
+          "contract": "`OpenBlocked` was called once with the item and only the requirements whose `block` is true; the item stays `landing`; this package declares no kind `blocked` and registers no handler for it",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/approval_test.go: the fake hub answers the land with 409 policy_blocked, blocked.status 'blocked' and the requirements [{rule: 'secrets', paths: ['deploy/secrets/key.pem'], block: true}, {rule: 'default', paths: ['api/greet.go'], block: false}]; the OpenBlocked stub opens a decision of a test kind on the item's thread, as package 06's does; svc.Step(ctx, item); assert the stub saw OpenBlocked(n, [{Rule: 'secrets', Paths: ['deploy/secrets/key.pem']}]) once; assert item state == 'landing'; svc.Step is not called again while the decision is open: assert the fake hub saw one land request; assert the land entry == 'land of version 2: blocked by rule secrets'"
+          }
+        },
+        {
+          "id": "REQ-4.6",
+          "pattern": "unwanted",
+          "condition": "the hub client reports the approver credential as not available, or the hub answers the verdict with an error, while an `approve` or a `reject` answer is carried out",
+          "action": "return an error from the answer's handler without starting a rework and without marking the version as approved, so that package 03's inbox notes the failure in the thread and calls the handler again",
+          "contract": "the handler returns a non-nil error that holds the hub's `error_type` where the hub answered; `Rework` was not called; the decision stays `answered`; a later call of the handler with the hub accepting the verdict carries the answer out once",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/approval_test.go, a table over {the approver token revoked on the fake hub so that Available(approver) is false, the approvals route answering 409 change_closed, the approvals route answering 500} x {approve, reject}: err = handler(decision, answer); assert err != nil; assert the rework stub saw nothing; svc.Step is not needed: assert Landing.ApprovedVersion == 0; then the fake hub accepts; call the handler again; assert err == nil and, for reject, one Rework"
+          }
+        },
+        {
+          "id": "REQ-4.7",
+          "pattern": "state_driven",
+          "condition": "an item is paused (`Paused(item)` of package 04's scheduler is true) and its open `approval` or `conflict` decision is answered",
+          "action": "accept the answer, call neither the hub nor `Rework` nor `Abandon` for it, and carry it out when the item is resumed, in the order the answers were given, by registering every handler of the kinds `approval` and `conflict` through `(*impl.Service).OnAnswer(kind, option, fn)` of package 06, which keeps the answers of a paused item",
+          "contract": "the answer route answers as for any decision; until the resume the hub saw no verdict, no rework was started and the item is not `abandoned`; at the resume each kept answer is carried out once; a `policy` answer, which is no item's, is carried out at once (its handlers are registered with the inbox's `OnAnswer`)",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/approval_test.go, with a real impl.Service of package 06 over the same store and inbox in place of the stub for OnAnswer, a table over {approval approve, approval reject, approval abandon, conflict retry}: the pause stub true for the item; answer the decision through the inbox; let the inbox dispatch; assert the fake hub saw no POST …/approvals, no Rework was recorded and the item's state is 'landing'; the pause stub false; call the function package 06 registered with OnResume for the item; assert the answer was carried out once (the verdict on the hub, the Rework, or the state 'abandoned'); call it again; assert nothing more happened"
+          }
+        },
+        {
+          "id": "REQ-4.8",
+          "pattern": "unwanted",
+          "condition": "an `approve` or a `reject` answer is carried out and, after `RestoreFork(ctx, item)` of package 06 returned, the item's change is no longer the change the decision was opened for (package 06 restored a fork that expired while the decision waited)",
+          "action": "record no verdict on the hub and request no land for the earlier change; for `approve` do nothing more, and for `reject` start the implementer through `Rework` with the comment as for any rejection",
+          "contract": "the handler calls `RestoreFork` first and returns nil; the hub saw no request under `…/approvals`; the new change is gated and reviewed by package 06, and its land asks for an approval again where the policy requires one",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/approval_test.go: the decision was opened for change 7; the RestoreFork stub then makes the change stub answer change 9 for the item (a restored fork) and moves the item to 'implementing'; a table over {approve -> the fake hub saw no POST …/approvals and the stub no Rework, reject with a comment -> no POST …/approvals and one Rework with the comment as a binding finding}: err = handler(decision, answer); assert err == nil; assert the stub saw RestoreFork(n) before anything else; assert no POST …/land for change 7 or 9 followed from the handler"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "Conflicts at landing",
+      "rationale": "Items never wait for each other on files, so two changes may meet at the land; the implementer resolves that, and a change that keeps colliding is a question for the person.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "event_driven",
+          "condition": "the hub answers the land of an item's change with `409 land_conflict` and it is the first such answer for the item since it was created or its `conflict` decision was last answered `retry`",
+          "action": "store the attempt's conflict report for the item, count the conflict, append to the item's thread an entry of kind `land` with the text `land of version <version>: conflict in <n> files`, and start the implementer through `Rework(ctx, item, findings)` of package 06 with one finding (`impl.Finding`) whose `ID` is `conflict-<version>`, whose `Source` is `hub`, whose `Binding` is true and whose `Text` gives the target head, the first commit that did not apply, each conflicted file with its kind, and each landed change that touched one with its number and title",
+          "contract": "`Rework` was called once with the item and one finding carrying the report; no decision was opened; `Service.Landing` returns `Conflicts: 1`; the version the rework produces is gated and reviewed by package 06 before the item is `landing` again",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "new file internal/land/conflict_test.go: the fake hub answers the land with 409 land_conflict and a report {target_sha: T, commit_sha: C, files: [{path: 'api/handler.go', kind: 'content', landed_by: [5]}, {path: 'go.sum', kind: 'add_add', landed_by: []}], landed_changes: [{number: 5, title: 'Add health route'}]}; svc.Step(ctx, item); assert the rework stub saw one Rework(n, [f]) with f.Source == 'hub' and f.Binding; assert f.Text holds T, C, 'api/handler.go (content)', 'go.sum (add_add)' and '#5 Add health route'; assert the land entry == 'land of version 2: conflict in 2 files'; assert no decision is open; rec, _ = svc.Landing(ctx, n); assert rec.Conflicts == 1"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "event_driven",
+          "condition": "the hub answers the land of an item's change with `409 land_conflict` and it is the second such answer for the item since it was created or its `conflict` decision was last answered `retry`, whatever answers that replayed nothing (a pending approval, a failure) came in between",
+          "action": "start no rework, store the new report, and open on the item's thread a decision of kind `conflict` with the question `Change <slug>#<number> conflicted with the main branch twice in a row. Try once more?`, the report's text as evidence, the options `retry` (recommended) and `abandon`, and `the landing of item <N>` as what it blocks, keeping the item in `landing`",
+          "contract": "`GET /api/v1/decisions` lists one `conflict` decision of the item with exactly the option keys `retry` and `abandon`; its evidence holds the report of the second conflict; `Rework` was not called for the second conflict; the item's `waiting_on` names the decision",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/conflict_test.go: after the first conflict above the item is walked back to 'landing' with version 3 gated and reviewed on the fake hub; a table over what happens before the second conflict {nothing, one land answered with a pending approval that is then approved, one land answered 503 land_failed}: the fake hub answers the land of version 3 with 409 land_conflict; svc.Step(ctx, item); assert the rework stub saw no second Rework; d = the open decisions of the item's thread; assert len(d) == 1 and d[0].Kind == 'conflict' and option keys == ['retry', 'abandon'] with 'retry' recommended and no comment required; assert d[0].Evidence holds the second report's file paths; assert item state == 'landing'"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "event_driven",
+          "condition": "a `conflict` decision of an item that is not paused is answered `retry`",
+          "action": "set the item's count of conflicts to zero and start the implementer through `Rework` with the stored report as its one finding",
+          "contract": "`Rework` was called once for the answer, also when the handler is called twice; the next conflict of the item starts a rework and the one after it opens a new `conflict` decision",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/conflict_test.go: call the handler registered for ('conflict', 'retry') with the decision; assert err == nil; assert the rework stub saw one further Rework whose finding's text holds the second report's commit; assert Landing.Conflicts == 0; call the handler again; assert no further Rework; then one more conflict on the next version: assert a Rework and no decision"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-6",
+      "title": "What landing offers the later packages, and what it keeps",
+      "rationale": "A repair and a revert land by the same request as any change but under other conditions, and a daemon that restarts must not forget how far a landing had come.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-6.1",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls `LandChange(ctx, Request{Workspace, Change, Version, SessionID})`",
+          "action": "send one land request for that version of that change with the worker token, evaluating no landing condition and reporting no check, and return the hub's answer as an `Outcome` whose `Kind` is `landed` (with `LandedSHA`), `pending_approval` (a `pending` answer with a requirement that lacks an approval; with `Requirements`), `pending` (another `pending` answer; with `Requirements` and `Reason`), `blocked` (with `Requirements` and `Reason`), `conflict` (with `Conflict`, the report), `version_mismatch`, or `failed` (with `Reason`)",
+          "contract": "returns `(Outcome, nil)` for every answer of the hub and `(Outcome{}, err)` when the hub could not be asked; the request's body is `{\"expected_version\": <Version>}` plus `session_id` when `SessionID` is not empty, and never holds `override` or `stack`; the request is sent at once, behind no other landing of the workspace; the call changes no item, reports no check, opens no decision and writes no thread entry",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a land service over the hub client and a fake hub (internal/hubtest) whose land route answers from a script"
+            ],
+            "pseudocode": "in internal/land/land_test.go, a table over the fake hub's scripted answer {200 landed with landed_sha L -> {Kind: 'landed', LandedSHA: L}, 409 policy_blocked pending with a requirement at 0 of 1 approvals -> 'pending_approval' with that requirement, 409 policy_blocked pending with only a check pending -> 'pending', 409 policy_blocked blocked with a block requirement -> 'blocked' with it, 409 land_conflict -> 'conflict' with the report's files, 409 version_mismatch -> 'version_mismatch', 503 land_failed with error 'contention' -> 'failed' with Reason 'land_failed: contention', 409 workspace_busy -> 'failed' with Reason starting 'workspace_busy: ', 404 change_not_found -> 'failed'}: out, err = svc.LandChange(ctx, {Workspace: 'demo', Change: 7, Version: 2, SessionID: 's1'}); assert err == nil; assert out; for every row assert the request's bearer is the worker token, its body's keys are exactly expected_version and session_id, and it holds neither 'override' nor 'stack'. The fake hub stopped: assert err != nil. The workspace 'red' and paused in the store: assert the request is sent all the same"
+          }
+        },
+        {
+          "id": "REQ-6.2",
+          "pattern": "unwanted",
+          "condition": "the hub answers a land request that carries a `session_id` with `400 unknown_session`",
+          "action": "send the land request once more without `session_id` and answer with the outcome of that second request",
+          "contract": "the hub saw two land requests, the second without `session_id`; the `Outcome` is that of the second; a second `unknown_session` is not possible and any other answer is mapped as in REQ-6.1",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a land service over the hub client and a fake hub (internal/hubtest) whose land route answers from a script"
+            ],
+            "pseudocode": "in internal/land/land_test.go: the fake hub answers a land that carries session_id with 400 unknown_session and lands one without; out, err = svc.LandChange(ctx, {…, SessionID: 'gone'}); assert err == nil and out.Kind == 'landed'; assert the fake hub saw two POST …/land, the second with the body {expected_version: 2}"
+          }
+        },
+        {
+          "id": "REQ-6.3",
+          "pattern": "optional",
+          "condition": "another package marked an item with `SetRepair(ctx, item, true)`",
+          "action": "let the workspace state `red` hold as `green` does in the conditions of that item, so that it lands although its workspace is `red`, while a `held` workspace, a pause and every other condition hold it back as any item, and every unmarked item of the workspace waits with `workspace red`",
+          "contract": "`SetRepair` returns nil for an existing item and `item.ErrNotFound` otherwise; `Conditions` of the marked item returns no `workspace red`; `SetRepair(ctx, item, false)` removes the mark",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/conditions_test.go: two items of 'demo' ready to land, workspace 'red'; svc.SetRepair(ctx, a, true); svc.Step for both; assert item a is 'verifying' and item b is 'landing' with Conditions == 'workspace red' and no land request for its change; a table for a marked item over {held -> 'workspace held', paused -> 'paused'}: assert no land request; svc.SetRepair(ctx, a2, false) for another marked item: assert Conditions == 'workspace red'; svc.SetRepair(ctx, 999, true) returns item.ErrNotFound"
+          }
+        },
+        {
+          "id": "REQ-6.4",
+          "pattern": "optional",
+          "condition": "another package registered a condition with `AddCondition(name, func(ctx, item) bool)`",
+          "action": "evaluate that function for every item in `landing` after the pause and before the workspace's state, in the order of registration, and treat an item for which it returns false as one whose condition of that name does not hold",
+          "contract": "`Conditions` returns the registered name; no check is reported `passed` and no land is requested for the item; a second registration of one name, or an empty name, returns an error",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/conditions_test.go: svc.AddCondition('taken over', fn) and svc.AddCondition('second', fn2), both false for the item; assert Conditions == 'taken over'; with the pause stub true assert 'paused'; with fn true and fn2 false assert 'second'; svc.Step: assert no ReportCheck, no sync and no land request; both true: assert the item lands; svc.AddCondition('taken over', fn) again returns an error; assert the fake hub's request count == 0 for the three refusing rows"
+          }
+        },
+        {
+          "id": "REQ-6.5",
+          "pattern": "ubiquitous",
+          "action": "for any stop of nightshiftd, by a signal or by the death of the process, keep for every item the version its release check was reported on with its status, the landed commit, the count of failed lands with their reasons and the time before which no land is asked again, the count of conflicts with the last report, the approved version, the repair mark and a land request sent and not yet answered, and keep per workspace the time before which it is not synced again; and continue from them at the next start",
+          "contract": "after a restart `Service.Landing(ctx, item)` returns the same `Record` as before it",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/step_test.go, over a store file in a temporary directory opened twice with the same injected clock: three failed lands for item a, one conflict for item b, SetRepair for item c, release passed for item d with a pending approval; close the store, open it with a new service; assert Landing(a).FailedLands == 3 and a step before the minute is up sends no land request; three more failures: assert OpenSessionFailed is called with six reasons; a conflict for b opens the conflict decision; Conditions(c) in a red workspace is ''; workspace red and svc.Pass: the stub saw ReportCheck 'failed' for d"
+          }
+        },
+        {
+          "id": "REQ-6.6",
+          "pattern": "event_driven",
+          "condition": "another package calls `Withdraw(ctx, item, summary)` for an item in `landing` whose change has not landed",
+          "action": "wait until no land request of that item is being answered, then report `nightshift-release` as `failed` with the summary through `ReportCheck`, whether or not it had been reported `passed`, and store the status `failed`, so that the next land of the item reports `passed` first",
+          "contract": "returns nil after one `ReportCheck` with `failed` and the summary; returns `land.ErrLanded`, reporting nothing, for an item whose change landed or lands while the call waits; returns another error, reporting nothing, for an item that is not `landing`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/step_test.go: a table over {an item whose release passed and whose land waits on an approval, an item in 'landing' in a red workspace with nothing reported}: err = svc.Withdraw(ctx, n, 'note from the owner'); assert err == nil; assert the stub's last call == ReportCheck(n, 'nightshift-release', 'failed', 'note from the owner'); assert Landing.Release == 'failed'. The fake hub holds the answer to the item's land until released: start svc.Step in a goroutine; call Withdraw in another; assert no ReportCheck 'failed' before the release; release with 'landed'; assert errors.Is(err, land.ErrLanded) and no ReportCheck 'failed'. An item that is 'verifying': assert land.ErrLanded. An item that is 'reviewing': assert an error that is not ErrLanded and no ReportCheck"
+          }
+        },
+        {
+          "id": "REQ-6.7",
+          "pattern": "optional",
+          "condition": "another package opened an `approval` decision for a change of its own with `OpenApproval(ctx, ApprovalRequest{Item, Workspace, Change, Version, Requirements, Owner})`",
+          "action": "carry an `approve` or a `reject` answer out by recording the verdict with the approver token on that change and version, and then call the function registered with `OnApprovalAnswered(owner, fn)` for the owner's name with the item, the change, the version, the option and the comment, in place of landing the item's own change, starting a rework or abandoning the item; and call that function alone for `abandon`",
+          "contract": "`OpenApproval` returns the decision, opened on the item's thread with the options of the kind `approval` and the evidence of REQ-4.1 for that change; the registered function is called once per answer with `Approval{Item, Workspace, Change, Version, Option, Comment}`, after the verdict was recorded; its error is the handler's error; this package requests no land for such a decision",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a land service over a copy of the store template with an injected clock, a real item service, inbox and workspace.Service of packages 02 and 03, the hub client pointed at a fake hub (internal/hubtest), and recording stubs for the notifier, the pause source (Paused), the item's change (Get), and package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork, and an OnAnswer that passes straight to the inbox)",
+              "the helper landingItem(t, slug) of internal/land/helpers_test.go: the workspace inserted directly into the store as `green`, an item walked to `landing` by allowed transitions, and on the fake hub an open change at version 2 with `nightshift-gate` and `nightshift-review` passed on version 2, a policy whose `default` requires the three checks with `fresh_checks`, and a sync answer of `up_to_date` for the default branch"
+            ],
+            "pseudocode": "in internal/land/approval_test.go: svc.OnApprovalAnswered('revert', fn) with a recording fn; d, err = svc.OpenApproval(ctx, {Item: n, Workspace: 'demo', Change: 31, Version: 1, Requirements: [{rule: 'nightshift-1', paths: ['deploy/config.yaml']}], Owner: 'revert'}); assert d.Kind == 'approval' on the item's thread with the question naming demo#31; a table over {approve -> the fake hub holds an approve verdict of the approver credential on version 1 of change 31, reject with a comment -> a reject verdict with the comment, abandon -> no verdict}: handler(d, answer); assert fn saw {Item: n, Change: 31, Version: 1, Option, Comment} once; assert the stub saw no Rework, the item is not 'abandoned' and the fake hub saw no POST …/land; a handler whose fn returns an error returns that error; OpenApproval with an Owner no function is registered for returns an error and opens nothing"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "A reviewed change lands, and the next one waits for a green workspace",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "calls the step of item 1, which is `landing`, reads its change from the hub and finds `nightshift-gate` and `nightshift-review` passed on version 2"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "finds neither the item nor the workspace paused and the workspace `green`, reads the policy and asks the hub to sync the workspace from origin"
+        },
+        {
+          "actor": "hub",
+          "action": "answers the policy with the three checks required and the sync with the default branch `up_to_date`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reports `nightshift-release` as `passed` on version 2 and requests the land with `expected_version` 2"
+        },
+        {
+          "actor": "hub",
+          "action": "lands version 2 and answers the attempt `landed` with its commit"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "moves item 1 to `verifying` and writes the land to its thread"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "finds the workspace `red` when the step of item 2 runs, lands nothing and marks the item `workspace red`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item show 1` and `nightshift item show 2` and reads `state: verifying` and the marker `workspace red`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/land, the scheduler of internal/sched, internal/item, internal/inbox, internal/workspace and internal/policy as daemon.Run wires them",
+          "the hub client of internal/hub against the fake hub's change, check, policy, sync and land routes",
+          "the change service of package 05 and the check reporter of package 06 as daemon.Run wires them",
+          "the nightshift client's run function"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) and the workspace `demo` registered through the end-to-end helper of package 02",
+          "items 1 and 2 seeded in `landing`, each with an open change on the fake hub (version 2 and version 1) on which `nightshift-gate` and `nightshift-review` are passed, recorded as the items' changes the way package 05's own tests record one",
+          "the workspace's state set to `red` through workspace.Service.SetState after item 1 reached `verifying`, as package 08 will set it; no step is registered for `verifying`"
+        ],
+        "end_state": [
+          "the fake hub holds `nightshift-release` `passed` on version 2 of item 1's change, reported before the land request, and its request log reads sync, check, land for that item",
+          "the land request's body is `{\"expected_version\": 2}` plus the change's `session_id`, with no `override`",
+          "`nightshift item show 1` prints `state: verifying` and its thread holds an entry `land of version 2: landed as <sha>`",
+          "`nightshift item show 2` prints `state: landing` with the marker `workspace red`, and the fake hub saw no land request for its change"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go, with the startDaemon helper of package 01: d = startDaemon(cfg); seed items 1 and 2 with their changes; eventually cli(['item','show','1']) contains 'state: verifying'; assert fakeHub.Check('demo', 7, 'nightshift-release') == {status: 'passed', version: 2}; assert the land request's body has no 'override'; d.workspaces.SetState(ctx, 'demo', 'red'); wait three passes; assert cli(['item','show','2']) contains 'workspace red'; assert fakeHub saw no POST …/changes/8/land; assert cli(['thread','show', thread of item 1]) contains 'land of version 2: landed as '"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "A change that touches a sensitive path waits for the person's approval",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "reports `nightshift-release` on version 2 of item 1's change, which touches `deploy/config.yaml` and `api/greet.go`, and requests its land"
+        },
+        {
+          "actor": "hub",
+          "action": "answers `409 policy_blocked` with `blocked.status` `pending` and the requirement of rule `nightshift-1` at 0 of 1 approvals"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens an `approval` decision on the item's thread that names the rule and lists `deploy/config.yaml`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift inbox --action`, reads the decision and runs `nightshift decide <id> --option approve`"
+        },
+        {
+          "actor": "nightshift",
+          "action": "sends `POST /api/v1/decisions/<id>/answer` with the option `approve`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "records the approval on version 2 with the approver token and requests the land again"
+        },
+        {
+          "actor": "hub",
+          "action": "counts the approval, lands version 2 and answers the attempt `landed`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "moves the item to `verifying`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/land, internal/sched, internal/item and internal/inbox as daemon.Run wires them, its answer dispatch included",
+          "the hub client of internal/hub with both credentials against the fake hub's land and approval routes, the land answered from the recorded approvals",
+          "the nightshift client's run function with package 03's `inbox` and `decide` commands"
+        ],
+        "setup": [
+          "a fake Parley hub and the workspace `demo` registered through the end-to-end helper of package 02, its policy holding the rule `nightshift-1` for `deploy/**` with one approval of the owner and the three checks",
+          "item 1 seeded in `landing` with an open change at version 2 whose files are `deploy/config.yaml` and `api/greet.go` and on which `nightshift-gate` and `nightshift-review` are passed; version 2 was created with the worker token"
+        ],
+        "end_state": [
+          "`nightshift inbox --action` lists an `approval` decision of item 1, and `nightshift decision show <id>` prints the evidence line of rule `nightshift-1` with `deploy/config.yaml` and the options `approve`, `reject` (comment required) and `abandon`",
+          "`nightshift decide <id> --option approve` exits 0",
+          "the fake hub holds one `approve` verdict on version 2 from the approver token and none from the worker token",
+          "within 5 seconds `nightshift item show 1` prints `state: verifying` and `waiting on: nothing`",
+          "the fake hub saw two land requests for the change, both with `expected_version` 2 and neither with `override`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg); seed item 1 with change 7 touching deploy/config.yaml; eventually cli(['inbox','--action']) contains 'approval demo item 1'; assert cli(['decision','show', id]) contains 'evidence: rule nightshift-1: deploy/config.yaml'; assert cli(['decide', id, '--option', 'approve']).code == 0; eventually cli(['item','show','1']) contains 'state: verifying'; assert fakeHub.Approvals('demo', 7) == [{verdict: 'approve', version: 2, by: approver token}]; assert len(fakeHub.LandRequests('demo', 7)) == 2 and none holds 'override'"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "A policy that lost the three checks holds the workspace until the person adopts them",
+      "steps": [
+        {
+          "actor": "hub",
+          "action": "holds, for workspace `demo`, a policy that someone replaced with one whose `default` requires nothing"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reads the policy at the step of item 1, sets the workspace `held`, opens a `policy` decision naming `default` in the workspace's thread and runs the notification command with `workspace_held`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item show 1` and reads the marker `workspace held`, then runs `nightshift decide <id> --option adopt`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "writes the policy with the three checks and `fresh_checks` in `default`, with `If-Match` set to the revision it read, and sets the workspace `green`"
+        },
+        {
+          "actor": "hub",
+          "action": "stores the policy as a new revision, answers the sync and lands the change"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reports `nightshift-release`, requests the land and moves item 1 to `verifying`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/land, internal/policy, internal/workspace, internal/inbox and internal/notify as daemon.Run wires them",
+          "the fake hub's policy routes with their revisions",
+          "the nightshift client's run function",
+          "a real notification command (a shell script)"
+        ],
+        "setup": [
+          "a fake Parley hub and the workspace `demo` registered through the end-to-end helper of package 02; afterwards the test replaces its policy with an empty one through fakeHub.ReplacePolicy",
+          "`[notify].command` set to a script the test writes that appends its standard input to a file",
+          "item 1 seeded in `landing` with an open change on which `nightshift-gate` and `nightshift-review` are passed"
+        ],
+        "end_state": [
+          "`nightshift workspace show demo` prints `demo: held`, and `nightshift item show 1` prints `state: landing` with the marker `workspace held`",
+          "the script's file holds one JSON document with `event: workspace_held` and `workspace: demo`",
+          "`nightshift inbox --action` lists one `policy` decision of `demo` with no item",
+          "after `nightshift decide <id> --option adopt` the fake hub's policy is at the next revision and its `default` requires the three checks with `fresh_checks`; `nightshift workspace show demo` prints `demo: green`",
+          "within 5 seconds `nightshift item show 1` prints `state: verifying`; the fake hub saw no land request before the policy was written"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg with notify script); fakeHub.ReplacePolicy('demo', empty); seed item 1; eventually cli(['workspace','show','demo']) starts with 'demo: held'; assert cli(['item','show','1']) contains 'workspace held'; eventually the notify file parses with event 'workspace_held'; id = the policy decision of cli(['inbox','--action','--json']); assert len(fakeHub.LandRequests('demo', 7)) == 0; assert cli(['decide', id, '--option', 'adopt']).code == 0; eventually cli(['item','show','1']) contains 'state: verifying'; assert policy.Missing(fakeHub.Policy('demo')) is empty; assert cli(['workspace','show','demo']) starts with 'demo: green'"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "POST /api/v1/workspaces/{slug}/changes/{number}/land",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/land",
+          "signature": "scope changes:write; the owner of {slug} may call it; query wait: 0 to 60 seconds, 30 when absent; optional body {expected_version: int >= 1, stack: bool, override: {reason} (never sent by nightshift), session_id}; 200 the attempt (landed); 202 the attempt still running; 409 land_conflict, 409 policy_blocked and 503 land_failed with the attempt in error.details; 409 version_mismatch; 409 land_in_progress with the running attempt in error.details; 409 depends_on_unlanded, change_not_open, workspace_busy, workspace_not_ready, workspace_archived; 403 forbidden, token_bound, path_not_allowed, override_not_allowed; 400 unknown_session; 404 change_not_found; errors as {\"error\": {\"code\", \"message\", \"error_type\", \"details\"?}}"
+        },
+        {
+          "name": "the land attempt",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/lands/{id}",
+          "signature": "GET, scope changes:read (satisfied by changes:write); {id, workspace_slug, target_branch, changes: [int], status: running|landed|conflict|blocked|failed, trigger, strategy, attempts, onto_sha, landed_sha, noop, commits: [{change, version_sha, landed_sha}], conflict: report|null, blocked: {change, status: pending|blocked, requirements}|null, error: contention|timeout|origin_rejected|internal|null, override: {reason}|null, policy_revision, requested_by, session_id, created_at, finished_at}; 404 land_not_found"
+        },
+        {
+          "name": "the conflict report",
+          "import_path": "attempt.conflict",
+          "signature": "{target_sha, head_sha, base_sha, commit_sha, files: [{path, kind: content|add_add|modify_delete|delete_modify|rename|mode|binary|submodule, base, ours, theirs: {sha, mode, path}|null, landed_by: [int]}], landed_changes: [{number, title, landed_sha, session_id}], change: int|null}"
+        },
+        {
+          "name": "a requirement of a landing",
+          "import_path": "attempt.blocked.requirements[] and change.landing.requirements[]",
+          "signature": "{rule: string (a rule's name or default), paths: [string] (the first 50), approvals: {required, counted, approvers}, checks: [{name, status: passed|failed|pending}], block: bool, satisfied: bool}"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/changes/{number}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}?include=checks",
+          "signature": "scope changes:read; the change object {workspace_slug, number, state: draft|open|landed|abandoned, target_branch, source: {workspace_slug, branch}, version: int, head_sha, session_id: string|null, mergeable, landing: {status: ready|pending|blocked, reason, requirements}, landed: {sha, at, by, land_id, commits}|null, …}; include=checks adds checks: the results that apply to the current version, [{name, change, version (the version it was reported on), status, summary, …}]"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/changes/{number}/approvals",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/approvals",
+          "signature": "scope changes:approve; body {verdict: approve|reject (required), comment: at most 16,000 characters, version: default the current version}; 201 for a credential's first verdict on a version, 200 for a replacement; answers {id, change, version, verdict, comment, by, counts_for: [rule], carried_from, created_at}; a verdict counts only when its credential created neither that version nor an earlier one; 404 change_not_found, 404 not_found for a version the change does not have, 409 change_closed, 409 workspace_archived, 400 invalid_request, 403 token_bound"
+        },
+        {
+          "name": "PUT /api/v1/workspaces/{slug}/changes/{number}/checks/{name}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/checks/{name}",
+          "signature": "scope checks:write, write access; body {status: pending|passed|failed (required), version, summary: at most 2,000 characters, url, details}; one result per version and name, a report replaces the earlier one whole; 200 with the check; called through package 06's reporter"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/sync",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/sync",
+          "signature": "scope workspaces:write; no body; 200 the workspace object (with default_branch) plus branches: [{name, result: created|up_to_date|fast_forward|ahead|diverged|reset|name_conflict, local_sha, origin_sha}]; a branch only the hub has is not reported; 400 fork_has_no_origin, 400 sync_disabled, 502 upstream_error, 500 internal; called through the hub client's Sync of package 02"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/policy",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/policy",
+          "signature": "scope changes:read; 200 {revision, default, rules, updated_at, updated_by} in normal form, a requirement being {approvals, approvers, checks, fresh_checks, block}; header ETag: \"<revision>\"; read through policy.Read of package 02, written through policy.Write (PUT with If-Match, 412 revision_mismatch)"
+        }
+      ]
+    },
+    {
+      "package": "nightshift packages 05_planning and 06_implementation_and_review (read with specr on 2026-11-28)",
+      "version": "draft",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "change.Service.Get",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/change",
+          "signature": "func (s *Service) Get(ctx context.Context, item int) (Record, error); Record{Item, Workspace, Fork, GitURL, Branch, Generation, Change, ChangeRef, ChangeURL}; Workspace is the workspace of the target branch, Change the change's number there (0 while the item has none); change.ErrNotFound for an item with no fork"
+        },
+        {
+          "name": "impl.Service.Rework",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "func (s *Service) Rework(ctx context.Context, item int, findings []Finding) error; Finding{ID, Source, Text, File, Line, Criterion, Output, Binding}, an empty ID is given one; keeps the findings for the item's next implementer session and moves an item that is reviewing or landing to implementing; the version the rework produces is evaluated, gated and reviewed again"
+        },
+        {
+          "name": "impl.Service.ReportCheck",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "func (s *Service) ReportCheck(ctx context.Context, item int, name, status, summary string) error; reports a check on the current version of the item's change and writes the thread entry of the kind check"
+        },
+        {
+          "name": "impl.Service.OpenBlocked",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "func (s *Service) OpenBlocked(ctx context.Context, item int, reqs []Requirement) error; opens the blocked decision (revise with a required comment, abandon), one per version, for a block the hub reports at a land"
+        },
+        {
+          "name": "impl.Service.RestoreFork",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "func (s *Service) RestoreFork(ctx context.Context, item int) error; restores an expired fork with a new change and does nothing for one the hub still has; an item that was landing returns to implementing"
+        },
+        {
+          "name": "impl.Service.OnAnswer",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "func (s *Service) OnAnswer(kind, option string, fn handler); wraps the inbox's OnAnswer: for a paused item it stores the answer and returns nil, and a function registered with Scheduler.OnResume carries the stored answers out in order"
+        },
+        {
+          "name": "the step of the state implementing",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "for an item in implementing whose change has a current version without a gate verdict and no waiting finding, the step evaluates and gates that version and moves the item to reviewing, without an implementer session; package 06 moves an item from reviewing to landing when nightshift-review passed"
+        },
+        {
+          "name": "hub.Client.Change, hub.Client.ReportCheck",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/hub",
+          "signature": "Change(ctx, slug, number, include...) answers the change with its version, heads, state, paths and landing requirements and, when asked, versions and overlaps; ReportCheck sends PUT …/checks/{name} with status, version and summary; the members checks (include=checks), session_id and landed are not read by package 06 and are added by this package"
+        }
+      ]
+    },
+    {
+      "package": "nightshift package 06_implementation_and_review: the fields of impl.Requirement",
+      "version": "draft",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "impl.Requirement",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "the type of impl.Version.Requirements and of OpenBlocked's argument; package 06 names it without its fields; assumed to carry the hub's requirement: Rule, Paths, Block and the approvals and checks"
+        }
+      ]
+    }
+  ]
+}
