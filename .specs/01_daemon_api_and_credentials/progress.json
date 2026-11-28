@@ -3,11 +3,72 @@
   "spec_id": "01",
   "spec_name": "daemon_api_and_credentials",
   "schema_version": 3,
-  "updated_at": "",
+  "updated_at": "2026-11-28T11:09:17Z",
   "tasks": [
     {
       "id": 1,
-      "state": "pending"
+      "state": "done",
+      "evidence": [
+        {
+          "covers": "REQ-1.1",
+          "tests": [
+            {
+              "test": "./internal/config:TestLoad_ReadsEveryKeyFromTheFile",
+              "failed": {
+                "at": "2026-11-28T11:07:00Z",
+                "tree": "58edf20c9871d063b53a3ae4c3d457a3147108e2"
+              },
+              "passed": {
+                "at": "2026-11-28T11:09:17Z",
+                "tree": "37f3d13a441eb6b51543d9a573d9053221ec3fc0"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-1.2",
+          "tests": [
+            {
+              "test": "./internal/config:TestLoad_DefaultsOmittedKeys",
+              "failed": {
+                "at": "2026-11-28T11:07:00Z",
+                "tree": "58edf20c9871d063b53a3ae4c3d457a3147108e2"
+              },
+              "passed": {
+                "at": "2026-11-28T11:09:17Z",
+                "tree": "37f3d13a441eb6b51543d9a573d9053221ec3fc0"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-1.3",
+          "tests": [
+            {
+              "test": "./internal/config:TestLoad_RejectsBadConfiguration",
+              "failed": {
+                "at": "2026-11-28T11:07:00Z",
+                "tree": "58edf20c9871d063b53a3ae4c3d457a3147108e2"
+              },
+              "passed": {
+                "at": "2026-11-28T11:09:17Z",
+                "tree": "37f3d13a441eb6b51543d9a573d9053221ec3fc0"
+              }
+            },
+            {
+              "test": "./internal/daemon:TestRun_ConfigFailureStartsNothing",
+              "failed": {
+                "at": "2026-11-28T11:07:00Z",
+                "tree": "58edf20c9871d063b53a3ae4c3d457a3147108e2"
+              },
+              "passed": {
+                "at": "2026-11-28T11:09:17Z",
+                "tree": "37f3d13a441eb6b51543d9a573d9053221ec3fc0"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 2,
