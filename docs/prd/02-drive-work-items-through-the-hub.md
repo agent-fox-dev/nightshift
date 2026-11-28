@@ -56,6 +56,16 @@ them.
   workspace can be paused and resumed.
 - **One brief a day.** Once a day `Unread` gets one item that says what
   landed, what waits for a decision and what was spent.
+- **A session cannot read nightshift's credentials or the person's files.**
+  Agent sessions, and the gate and health commands that run the code they
+  wrote, run as an operating-system user of their own.
+- **The person can say something to a running item, and can take it
+  over.** A note reaches the item's next session; a taken-over item waits
+  while the person pushes to its branch, and then goes on.
+- **The person is told when they are needed.** A configured command runs
+  when a decision opens.
+- **One item cannot run without end.** After a configured number of
+  sessions (12 unless configured) an item stops and asks.
 - **It survives a restart.** After `nightshiftd` stops, by signal or by crash,
   the next start continues every work item from the state it had reached,
   and no decision or thread is lost.
@@ -71,11 +81,12 @@ them.
   or time, as `01-drive-work-items-through-the-hub-under-mandates.md`
   specified. The plan's approval, the hub's policy and the daily limit
   take its place.
-- **Protection against a session that attacks its host.** A session runs on
-  the daemon's machine as the daemon's user and can read what that user can
-  read, nightshift's own credentials included. The checks nightshift reports
-  guard against an agent's mistakes, not against an agent that sets out to
-  bypass them. Isolating sessions is the later PRD that adds a runner.
+- **Isolation beyond a separate user.** A session runs on the daemon's
+  machine as another operating-system user. It cannot read nightshift's
+  credentials or the person's files, but its network access, its use of
+  processor, memory and disk, and what else that user may reach on the
+  machine are not restricted. Containers and sandboxes are the later PRD
+  that adds a runner.
 - **Running sessions in hub sandboxes.** Version 1 runs every session on the
   daemon's machine. A `sandbox` runner is a later PRD.
 - **Announcing work through claims.** nightshift creates no claims on the
@@ -180,11 +191,12 @@ The configuration holds the hub's endpoint, the two hub credentials
 document names.
 
 At start it checks, in this order, that the configuration loads, that the
-hub answers, that the credentials are accepted and fit their purpose, and
-that the roles are valid. A check that fails ends the process with exit
-code 1 and one line on stderr naming the check and the reason
-(`config: …`, `hub: connection refused`, `credentials: …`,
-`roles: reviewer names no model`); nothing is started.
+hub answers, that the credentials are accepted and fit their purpose, that
+the roles are valid, and that sessions can be run as their own user (see
+*Roles and sessions*). A check that fails ends the process with exit code
+1 and one line on stderr naming the check and the reason (`config: …`,
+`hub: connection refused`, `credentials: …`, `roles: reviewer names no
+model`, `sessions: …`); nothing is started.
 
 On its first start it writes a client token to `~/.nightshift/token`, readable
 by its owner only. Every API request carries it as a bearer token; without
@@ -314,10 +326,12 @@ A work item belongs to one workspace and has a number unique in nightshift, a
 kind (`spec`, `defect`, `change_request`), a title, its source, a state and
 one thread. There are three ways to create one:
 
-- `nightshift item new <slug> --text "<text>" [--kind defect|change_request]`
-  creates an item from free text (default kind `change_request`). The text
-  is 1 to 20,000 characters; outside that the command exits 2.
-- `nightshift item import <slug> --issue <N>` reads the issue and its comments
+- `nightshift item new <slug> --text "<text>" [--kind defect|change_request]
+  [--no-plan-approval]` creates an item from free text (default kind
+  `change_request`). The text is 1 to 20,000 characters; outside that the
+  command exits 2.
+- `nightshift item import <slug> --issue <N> [--no-plan-approval]` reads the
+  issue and its comments
   through the hub's forge routes. The kind is `defect` when the issue
   carries `af:defect` or a label named `bug`, else `change_request`. An
   issue already imported is refused with exit code 1, naming the existing
@@ -402,6 +416,16 @@ once more with it, the comment as a finding the planner must follow) and
 `abandon`. On `approve` nightshift activates the package on the change's
 branch, which freezes its requirements and tasks, and the item is `ready`.
 
+**Without a plan approval.** An item created with `--no-plan-approval` is
+planned and its plan reviewed in the same way, but when the reviewer
+agrees, no decision is opened: nightshift activates the package, the item is
+`ready`, and the thread gets the entry `plan approved at creation` with a
+link to the draft change. When the reviewer objected to the end, the `plan`
+decision is opened all the same. `nightshift item plan <N>` takes the same
+option for an item that waits in `new`. A plan approved this way is still
+subject to everything after it: the gate, the review and the hub's
+policy.
+
 nightshift keeps the text of every package a planner wrote in its own store
 until the item is `done` or `abandoned`.
 
@@ -430,9 +454,27 @@ workspace with its role as `archetype`, its model, and the item's number in
 reports each session's token usage to the hub when the session ends, and
 marks it completed or failed.
 
-A session is a process on the daemon's machine, run as the daemon's user in
-a clone of the item's fork. The clone is kept between the sessions of one
-item and removed when the item is `done` or `abandoned`.
+A session is a process on the daemon's machine, in a clone of the item's
+fork. The clone is kept between the sessions of one item and removed when
+the item is `done` or `abandoned`.
+
+**The session user.** Sessions run as the operating-system user
+`[sessions].user` names, not as the daemon's user. So do the gate and the
+health command, which run code a session wrote. The clones belong to that
+user. The start check `sessions` fails, with these reasons, when the key is
+missing (`sessions: no user configured; set [sessions].user or
+[sessions].unisolated`), when the user does not exist or is the daemon's
+own (`sessions: user "<name>" does not exist`, `sessions: user "<name>" is
+the daemon's user`), when the daemon cannot start a process as that user
+(`sessions: cannot run as "<name>": <error>`), when that user can read the
+configuration file, the client token or the daemon's store (`sessions: user
+"<name>" can read <path>`), or when `claude` does not run as that user
+(`sessions: claude is not available to "<name>": <error>`).
+
+With `[sessions].unisolated = true` and no user, sessions run as the
+daemon's user. The daemon then prints `warning: sessions run as the
+daemon's user and can read its credentials` at start, and `status` reports
+`sessions: unisolated`.
 
 A session is ended and counts as failed:
 
@@ -447,7 +489,16 @@ error, counts as failed with that error's first line. After a failed
 session the step is started once more. After the second failure in a row
 for the same step, the item waits on a decision of kind `session_failed`,
 showing both reasons and the path of each session's stream; its options are
-`retry` and `abandon`.
+`retry`, `take_over` (see *Notes and taking over*) and `abandon`.
+
+**The limit per item.** nightshift counts the implementer and reviewer
+sessions started for an item since it became `ready`, or since the person
+last answered a decision of that item, whichever is later. When the count
+reaches `[items].max_sessions` (12 unless configured, 2 to 100), no further
+session starts for the item and it waits on a decision of kind
+`session_limit`, showing each session with its role, its outcome and its
+tokens; its options are `continue` (the count starts again), `take_over`
+and `abandon`.
 
 The full output stream of every session is kept on the daemon's machine for
 30 days and can be read with `nightshift session log <session-id>`.
@@ -492,6 +543,47 @@ at the resume. Pausing an item that is `done` or `abandoned`, or one
 already paused, exits 1 with the reason; so does resuming one that is not
 paused.
 
+### Notes and taking over
+
+**A note.** `nightshift item note <N> "<text>"` (1 to 20,000 characters;
+outside that the command exits 2) tells a running item something. The note
+is written to the item's thread and reaches the item's next session as a
+finding of the person, which that session must follow. A session that is
+running is not interrupted. What "next session" means depends on the
+item's state:
+
+- `new` or `planning`: the planner's next round, or one more round when
+  the reviewer had agreed already;
+- `awaiting_approval`: the planner is started with the note; the open
+  `plan` decision is closed as `superseded by a note` and a new one opens
+  when planning ends;
+- `ready`: the implementer's first session, beside the package;
+- `implementing` or `reviewing`: the next rework, which nightshift starts
+  when the running session ended, also when the gate and the reviewer had
+  nothing to send back;
+- `landing`, not yet landed: `nightshift-release` is reported `failed`
+  (`note from the owner`), a rework is started with the note, and its
+  version is gated and reviewed again.
+
+The command exits 1 for an item that is `verifying`, `publishing`, `done`
+or `abandoned` (`item <N> has landed; create a new item`). Several notes
+given before the next session reach it together, in the order given.
+
+**Taking over.** `nightshift item take-over <N>`, or the option `take_over`
+of a `session_failed`, `session_limit`, `review_disagreement`, `conflict` or
+`blocked` decision, hands the item's branch to the person. The item's
+running session is ended, recorded as interrupted; no session starts for
+it; it is not landed; and `item show` and `item list` mark it `taken
+over`. The command prints the fork's git URL and the branch. The person
+pushes to that branch with a credential of their own; every push is a
+version of the item's change, as a session's is. `nightshift item resume
+<N>` gives the item back: when the branch has a version newer than at the
+take-over, that version is gated and reviewed as any other; when it has
+not, the item continues with the step it was at. A reviewer's findings on
+the person's version start a rework, as on any version. `take-over` exits
+1 for an item that has no change yet, or is `verifying`, `publishing`,
+`done` or `abandoned`, with the reason.
+
 ### Implementation
 
 For a `ready` item nightshift creates the task fork and the draft change,
@@ -528,9 +620,9 @@ toward the two attempts of *Roles and sessions*.
 After every new version nightshift reads the hub's evaluation of it:
 
 - when a requirement of it blocks, the item waits at once on a decision of
-  kind `blocked`, naming the rule and the files; its only options are
-  `revise` (with a comment, required; the implementer is started with it)
-  and `abandon`;
+  kind `blocked`, naming the rule and the files; its options are `revise`
+  (with a comment, required; the implementer is started with it),
+  `take_over` and `abandon`;
 - the files of the version that the package's tasks did not name in
   `touches` are listed in one thread entry, `outside the plan: <files>`
   (the first 50). Nothing is held back for them.
@@ -540,7 +632,7 @@ each become a
 new work item of kind `defect` in state `new`, linked to the item they came
 from, and are listed in the thread. Unlike an item a person created, which
 is planned at once, such an item stays `new`, with no session, until the
-person runs `nightshift item plan <N>`.
+person runs `nightshift item plan <N> [--no-plan-approval]`.
 
 **A fork that expired.** nightshift extends the lifetime of an item's fork
 while the item does not wait on a decision. While it does, the fork may
@@ -563,7 +655,7 @@ version. On `object`, it reports `failed`, and the implementer is started
 with the findings; its new version is gated and reviewed again. After 3
 reviews of one item without `agree`, the item waits on a decision of kind
 `review_disagreement`, showing each open finding with the implementer's
-reply; its options are `side_with_reviewer` (the implementer gets one more
+reply; its options are `take_over`, `side_with_reviewer` (the implementer gets one more
 session with the findings marked as binding), `side_with_implementer`
 (`nightshift-review` is reported `passed`, the summary naming the person's
 decision) and `abandon`.
@@ -609,7 +701,8 @@ What the hub answers to the land decides:
 - **conflict**: the implementer is started with the hub's conflict report
   and resolves it in the fork; the new version is gated and reviewed
   again. After 2 conflicts in a row on one item, it waits on a decision of
-  kind `conflict`, with the report; its options are `retry` and `abandon`.
+  kind `conflict`, with the report; its options are `retry`, `take_over`
+  and `abandon`.
 - **the version is no longer the current one**: the new version is gated
   and reviewed, as any version.
 - **failed** for another reason: the land is asked again after 1 minute,
@@ -716,12 +809,25 @@ sessions' streams and the texts named above for its kind), its options
 with one marked as recommended and one line on what each does, what it
 blocks, and, once answered, the option, the comment and the time. The
 kinds and their options are the ones this document names: `plan`,
-`session_failed`, `review_disagreement`, `approval`, `blocked`, `conflict`,
-`main_red`, `origin`, `policy` and `rule`.
+`session_failed`, `session_limit`, `review_disagreement`, `approval`,
+`blocked`, `conflict`, `main_red`, `origin`, `policy` and `rule`.
 
 A decision waits until it is answered; it never takes an option by
 itself. One that has been open for 24 hours puts one reminder entry in its
 thread, marking it unread, and again every 24 hours.
+
+**Telling the person.** When `[notify].command` is configured, nightshift
+runs that command, as the daemon's user, each time a decision opens, a
+reminder is due, a workspace turns `red` or `held`, the hub has been
+unreachable for 15 minutes, or a brief is written. The command gets one
+JSON document on its standard input: `event` (`decision_opened`,
+`decision_reminder`, `workspace_red`, `workspace_held`, `hub_unreachable`
+or `brief`), `time`, the `workspace` and `item` where there are any, the
+thread's URL path, and for a decision its `id`, `kind`, `question` and
+option keys. A command that exits other than 0, or runs longer than 30
+seconds and is ended, is noted in the daemon's log with its exit code and
+the first line of its error output; it is not run again for that event,
+and nothing waits for it. Without the key, nothing is run.
 
 The API serves `GET /api/v1/threads` (with `view=all|unread|action`, a
 workspace filter, newest activity first, 50 per page), `GET
@@ -775,6 +881,22 @@ A day with no item changed and no decision open gets no brief.
 `nightshift brief` prints the same for the time since the last brief without
 storing it.
 
+**Outcome numbers.** The brief ends with these numbers per workspace, over
+the last 30 days, and `nightshift stats [<slug>] [--days <N>]` (1 to 365,
+default 30) prints them at any time:
+
+- the items that reached `done`, and the items abandoned;
+- of the `done` items, the share that needed no rework session (`first
+  pass`), and the median number of sessions per item;
+- the items reverted after a failed health command, and the items taken
+  over;
+- the decisions answered per `done` item, and the median time a decision
+  waited for its answer;
+- the median time from an item's creation to `done`;
+- the tokens per `done` item, median.
+
+A number with no item to count is printed as `-`.
+
 ### Writing back to the forge
 
 For an item imported from an issue, and for no other, nightshift writes to
@@ -827,6 +949,17 @@ Its two running sessions finish; its three `ready` items stay `ready`; an
 item whose review had passed still lands and is published. The workspace's
 thread says `daily limit reached`. After midnight the three items start.
 
+**A small fix, a note and a take-over.** The person runs `nightshift item
+new demo --kind defect --text "Greeting drops the name" --no-plan-approval`.
+The planner writes a one-requirement package, the reviewer agrees, and the
+item is `ready` with no decision. While the implementer runs, the person
+adds `nightshift item note 21 "Keep the old log line"`; the session
+finishes, and a rework is started with the note. The gate then fails twice;
+the `session_failed` decision opens and the configured command posts it to
+the person's chat. They answer `take_over`, push a fix to the branch, and
+run `nightshift item resume 21`. The new version is gated, reviewed, landed,
+verified and published.
+
 **A restart in the middle.** `nightshiftd` is killed while two implementers
 run. At the next start both items get a new session for the same step;
 the open decisions are still in `Action` with their evidence; a client
@@ -855,8 +988,10 @@ missed.
    owner's API key.** The owner decided it. A sign-in elsewhere revokes an
    API key, and the hub counts an approval only from a credential that
    created no version of the change, which the worker does when it reverts.
-9. **Sessions run on the daemon's machine without isolation, and the PRD
-   says what that does not protect against.** The owner decided it.
+9. **Sessions run on the daemon's machine as an operating-system user of
+   their own.** The owner decided it, replacing an earlier decision to run
+   them as the daemon's user: every system compared (see decision 37)
+   isolates the agent before it lets it run without permission prompts.
 10. **The `sandbox` runner is a later PRD.** The owner decided it: the hub's
     sandbox runtime client cannot yet start a main process or serve its
     logs.
@@ -921,14 +1056,15 @@ missed.
 30. **Open items a session reports become unplanned `defect` items.** Kept
     from PRD 01.
 31. **The numbers** (3 parallel sessions, 3 review rounds, 2 attempts per
-    step, a 30-minute stall, 10,000,000 tokens per session, 50,000,000 per
+    step, 12 sessions per item, a 30-minute stall, 10,000,000 tokens per session, 50,000,000 per
     workspace and day, 24-hour reminders) are chosen here as starting
     values; each that the text calls configured can be changed without a
     new release.
-32. **Size.** This PRD covers 18 areas and is expected to be split into
+32. **Size.** This PRD covers 19 areas and is expected to be split into
     several packages: the daemon, its API and the credentials first; then
     workspaces with the policy commands; work items and the inbox;
-    planning; sessions, scheduling, the daily limit and pausing;
+    planning; sessions, scheduling, the daily limit, pausing, notes and
+    taking over;
     implementation and review; landing; the handling after a landing and
     publishing; the rules, the brief and the forge write-back.
 33. **A defect is proven when it is implemented, not when it is planned.**
@@ -943,6 +1079,30 @@ missed.
 36. **Work is sent back through `af-impl`'s rework mode, and every session
     reports through a result file.** The owner decided the first; the
     second is chosen in PRD 09 of `agent-fox-dev/spec`.
+37. **Seven changes after a comparison with other internal coding agents.**
+    The owner decided each, on a comparison with LangChain's Open SWE and
+    the write-ups it cites on Stripe's Minions and Ramp's Inspect: the
+    session user (decision 9), creation without a plan approval, notes to
+    a running item, taking an item over, the notification command, the
+    session limit per item, and the outcome numbers.
+38. **`--no-plan-approval` still plans and still has the plan reviewed.**
+    Chosen here: the implementer works from a package either way, and the
+    reviewer's objection is the one case where a person should still see
+    the plan first.
+39. **A note is queued for the next session and never interrupts one.**
+    Chosen here: an interrupted session's work is lost, and the rework
+    mode already takes a person's finding.
+40. **A person's pushed version is gated and reviewed as an agent's.**
+    Chosen here: taking over changes who writes, not what must hold before
+    a landing.
+41. **The gate and the health command run as the session user.** Chosen
+    here: they execute code a session wrote.
+42. **Telling the person is one command, not a list of integrations.**
+    Chosen here: a command can post to any chat or pager, and keeps
+    clients out of version 1.
+43. **The session limit counts from the person's last answer.** Chosen
+    here: an answer is the person saying "go on", so the count starts
+    again.
 
 ## Dependencies
 
@@ -1062,6 +1222,12 @@ missed.
 - **worker token, approver token**: the two Parley personal access tokens
   nightshift holds: one for its own actions, one for the person's
   approvals.
+- **session user**: the operating-system user that sessions, the gate and
+  the health command run as.
+- **note**: a text the person gives a running item, which its next session
+  must follow.
+- **taken over**: an item whose branch the person works on themselves,
+  until they resume it.
 - **daily limit**: the tokens a workspace's sessions may use between two
   midnights before no further session starts.
 - **health command**: the command a workspace configures that must exit 0
