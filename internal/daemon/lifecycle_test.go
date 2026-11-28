@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -332,5 +333,73 @@ func TestDaemon_AbandonsAStuckShutdownStep(t *testing.T) {
 	}
 	if got := r.stderr.String(); !strings.Contains(got, `"stuck"`) {
 		t.Errorf("stderr = %q, want a line naming the step \"stuck\"", got)
+	}
+}
+
+func TestDaemon_ClosesAStreamThatStopsReading(t *testing.T) {
+	t.Parallel()
+	h := hubtest.New(t)
+	worker, approver := h.GoodTokens()
+	f := writeConfig(t, hubLines(h.URL(), worker, approver))
+	r := startDaemon(t, f, daemon.Env{StepDeadline: 2 * time.Second, ExitDeadline: 3 * time.Second})
+	var calls atomic.Int32
+	r.d.OnShutdown("count", func(context.Context) error {
+		calls.Add(1)
+		return nil
+	})
+
+	// A client that requests the stream and then never reads, with a small
+	// receive buffer, so that the daemon's writes to it block.
+	token, err := os.ReadFile(f.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", r.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	conn.(*net.TCPConn).SetReadBuffer(4096)
+	fmt.Fprintf(conn, "GET /api/v1/events HTTP/1.1\r\nHost: nightshiftd\r\nAuthorization: Bearer %s\r\n\r\n", strings.TrimSpace(string(token)))
+	waitFor(t, "the stream to subscribe", func() bool { return r.d.Log().Subscribers() == 1 })
+
+	big := strings.Repeat("x", 64<<10)
+	for range 2 * 256 {
+		if _, err := r.d.Log().Append(t.Context(), "test.big", big); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := r.d.Log().Subscribers(); n != 0 {
+		t.Fatalf("Subscribers() = %d after the stalled client fell behind, want 0", n)
+	}
+	// The stalled client does not hold up a stop, which still runs every
+	// shutdown step.
+	start := time.Now()
+	if code := r.stop(t); code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
+	if elapsed := time.Since(start); elapsed >= time.Second {
+		t.Errorf("the stop took %v, want well under the step deadline", elapsed)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("the shutdown step ran %d times, want once", n)
+	}
+	// The connection was closed: reading what was sent ends, rather than
+	// waiting for more.
+	conn.SetReadDeadline(time.Now().Add(startTimeout))
+	if _, err := io.Copy(io.Discard, conn); err != nil {
+		t.Errorf("reading the dropped stream ended with %v, want the connection closed", err)
+	}
+}
+
+// waitFor fails the test unless cond becomes true within startTimeout.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(startTimeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/agent-fox-dev/nightshift/internal/event"
 )
@@ -34,6 +36,7 @@ func streamEvents(stop context.Context, log *event.Log, w http.ResponseWriter, r
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	rc := http.NewResponseController(w)
+	defer cutWritesOn(rc, stop.Done(), sub.Done())()
 	if rc.Flush() != nil {
 		return
 	}
@@ -106,6 +109,37 @@ func parseCursor(v string) (int64, bool) {
 	}
 	seq, err := strconv.ParseInt(v, 10, 64)
 	return seq, err == nil
+}
+
+// cutWritesOn makes a write to a client that does not read fail at once
+// when stop or dropped is closed: such a write blocks for as long as the
+// client does not read, and would otherwise hold the stream open after its
+// subscriber was dropped, and the daemon's shutdown with it. The returned
+// function ends the watch; it is called before the handler returns, after
+// which the response must not be touched.
+func cutWritesOn(rc *http.ResponseController, stop, dropped <-chan struct{}) (end func()) {
+	var mu sync.Mutex
+	ended := false
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-stop:
+		case <-dropped:
+		case <-done:
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if !ended {
+			rc.SetWriteDeadline(time.Now())
+		}
+	}()
+	return func() {
+		mu.Lock()
+		ended = true
+		mu.Unlock()
+		close(done)
+	}
 }
 
 // writeEvent writes ev as one server-sent event and flushes it.

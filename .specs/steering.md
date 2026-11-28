@@ -114,7 +114,6 @@ grepping for declarations.
 
 ## Repository Specifics
 
-<!-- TBD -->
 - **Language and layout.** Go (the module `github.com/agent-fox-dev/nightshift`),
   the programs in `cmd/`, everything else under `internal/`. `make check` runs
   the gofmt check, `go vet` and every test; `make help` lists the targets.

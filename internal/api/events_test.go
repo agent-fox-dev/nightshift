@@ -48,8 +48,6 @@ type eventServer struct {
 	url   string
 	log   *event.Log
 	clock *testClock
-	// stop ends every stream, as the daemon does when it shuts down.
-	stop context.CancelFunc
 }
 
 func newEventServer(t *testing.T) *eventServer {
@@ -66,7 +64,7 @@ func newEventServer(t *testing.T) *eventServer {
 	// Cleanups run last first: the streams end before Close waits for them.
 	t.Cleanup(srv.Close)
 	t.Cleanup(stop)
-	return &eventServer{api: s, url: srv.URL, log: l, clock: c, stop: stop}
+	return &eventServer{api: s, url: srv.URL, log: l, clock: c}
 }
 
 func (e *eventServer) append(t *testing.T, n int, typ string) {
@@ -289,28 +287,5 @@ func TestEvents_RefusesAMalformedCursor(t *testing.T) {
 
 			assertError(t, w, http.StatusBadRequest, "invalid_request")
 		})
-	}
-}
-
-func TestEvents_EndsTheStreamWhenStopped(t *testing.T) {
-	t.Parallel()
-	e := newEventServer(t)
-	s := e.openStream(t, nil)
-	if s.resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", s.resp.StatusCode)
-	}
-
-	e.stop()
-
-	select {
-	case f, ok := <-s.frames:
-		if ok {
-			t.Errorf("got event %q, want the stream to end", f.id)
-		}
-	case <-time.After(frameTimeout):
-		t.Fatalf("the stream did not end within %v of the stop", frameTimeout)
-	}
-	if n := e.log.Subscribers(); n != 0 {
-		t.Errorf("Subscribers() = %d after the stream ended, want 0", n)
 	}
 }

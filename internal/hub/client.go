@@ -160,9 +160,11 @@ func (c *Client) WithTokens(worker, approver string) *Client {
 // SetTokens takes worker and approver into use for every later request and
 // clears the credential errors, which were the previous tokens'.
 func (c *Client) SetTokens(worker, approver string) {
+	// Under the lock, so that a 401 to the previous tokens that Do is
+	// recording cannot land after the errors are cleared.
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.worker, c.approver = worker, approver
-	c.mu.Unlock()
 	if c.monitor != nil {
 		c.monitor.clearCredentials()
 	}
@@ -175,6 +177,11 @@ func (c *Client) Endpoint() string { return c.endpoint }
 func (c *Client) token(cred Credential) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	return c.tokenLocked(cred)
+}
+
+// tokenLocked is token for a caller that holds c.mu.
+func (c *Client) tokenLocked(cred Credential) string {
 	if cred == Approver {
 		return c.approver
 	}
@@ -198,9 +205,14 @@ func (c *Client) Do(ctx context.Context, cred Credential, req *http.Request) (*h
 	resp, err := c.send(req)
 	var he *Error
 	// A 401 to a token a reload has replaced meanwhile is not the new
-	// token's error.
-	if c.monitor != nil && errors.As(err, &he) && he.Status == http.StatusUnauthorized && c.token(cred) == token {
-		c.monitor.refuse(cred)
+	// token's error; the comparison and the record are made under the lock
+	// SetTokens takes, so that a reload cannot fall between them.
+	if c.monitor != nil && errors.As(err, &he) && he.Status == http.StatusUnauthorized {
+		c.mu.RLock()
+		if c.tokenLocked(cred) == token {
+			c.monitor.refuse(cred)
+		}
+		c.mu.RUnlock()
 	}
 	return resp, err
 }

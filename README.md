@@ -38,9 +38,12 @@ bin/nightshift status
 ```
 
 ```
-nightshiftd dev
+nightshiftd <version>
 hub: https://hub.example reachable
 ```
+
+The version is the one `make build` takes from `git describe`, or `dev` for
+a plain `go build`.
 
 At its first start the daemon writes the client token to
 `~/.nightshift/token`, which the client reads. Stop the daemon with

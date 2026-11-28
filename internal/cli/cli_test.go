@@ -3,6 +3,8 @@ package cli_test
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,23 @@ import (
 
 	"github.com/agent-fox-dev/nightshift/internal/cli"
 )
+
+// show-addr, a command of the tests' own, prints the address a command
+// sends its requests to, so that the default address is checked without a
+// daemon listening on it.
+func init() {
+	cli.Register(cli.Command{
+		Name:     "show-addr",
+		Synopsis: "show-addr",
+		Summary:  "print the daemon's address as resolved",
+		Setup: func(*flag.FlagSet) func(*cli.Call, []string) int {
+			return func(c *cli.Call, _ []string) int {
+				fmt.Fprintln(c.Stdout, c.Addr())
+				return 0
+			}
+		},
+	})
+}
 
 // fakeDaemon stands in for nightshiftd: it answers every request with one
 // status and body, and records each request's path and Authorization
@@ -195,15 +214,13 @@ func TestRun_ResolvesAddressAndToken(t *testing.T) {
 			var args []string
 			switch {
 			case tt.defaultAddr:
-				// The default address is fixed, so this case needs it free.
-				ln, err := net.Listen("tcp", "127.0.0.1:7878")
-				if err != nil {
-					t.Skipf("the default address is in use: %v", err)
+				// The default address is fixed and may be another daemon's,
+				// so the address is read from the command, not served.
+				code, stdout, stderr := c.run("show-addr")
+				if code != 0 || stdout != "127.0.0.1:7878\n" {
+					t.Errorf("show-addr = %d %q (stderr %q), want 0 \"127.0.0.1:7878\\n\"", code, stdout, stderr)
 				}
-				srv := httptest.NewUnstartedServer(nil)
-				srv.Listener.Close()
-				srv.Listener = ln
-				want = serveFake(t, srv, http.StatusOK, reachableStatus)
+				return
 			case tt.flagAddr:
 				want = newFakeDaemon(t, http.StatusOK, reachableStatus)
 				args = append(args, "--addr", want.addr())

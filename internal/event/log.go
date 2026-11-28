@@ -112,6 +112,7 @@ func (l *Log) Append(ctx context.Context, typ string, data any) (Event, error) {
 		default:
 			delete(l.subs, sub)
 			close(ch)
+			close(sub.done)
 		}
 	}
 	return ev, nil
@@ -201,7 +202,14 @@ type Subscription struct {
 	C <-chan Event
 
 	log *Log
+	// done is closed with C, when the subscription is closed or dropped.
+	done chan struct{}
 }
+
+// Done is closed when the subscription is closed or dropped. Unlike C, it
+// is closed at once, before the events still waiting in C are read, so that
+// a reader blocked on a slow client can give up.
+func (s *Subscription) Done() <-chan struct{} { return s.done }
 
 // Subscribe returns a subscription to the events after afterSeq: those
 // kept in its Replay, and those appended from now on in its C, none missed
@@ -238,7 +246,7 @@ func (l *Log) SubscribeNow() *Subscription {
 // subscribe registers a subscription; l.mu is held.
 func (l *Log) subscribe() *Subscription {
 	ch := make(chan Event, Buffer)
-	sub := &Subscription{C: ch, log: l}
+	sub := &Subscription{C: ch, log: l, done: make(chan struct{})}
 	l.subs[sub] = ch
 	return sub
 }
@@ -251,6 +259,7 @@ func (s *Subscription) Close() {
 	if ch, ok := l.subs[s]; ok {
 		delete(l.subs, s)
 		close(ch)
+		close(s.done)
 	}
 }
 

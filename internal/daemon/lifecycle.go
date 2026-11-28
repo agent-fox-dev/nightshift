@@ -18,6 +18,8 @@ import (
 const (
 	defaultStepDeadline = 25 * time.Second
 	defaultExitDeadline = 30 * time.Second
+	// serverShutdownTimeout bounds the wait for open connections to close.
+	serverShutdownTimeout = 5 * time.Second
 )
 
 // shutdownStep is a named step a package runs when the daemon stops.
@@ -95,9 +97,13 @@ func (d *Daemon) shutdown(signalled time.Time, srv *http.Server, served <-chan e
 		// The streams end first, because the server's shutdown waits for
 		// every open connection and a stream never ends by itself.
 		stopStreams()
-		if err := srv.Shutdown(stepCtx); err != nil {
+		// The server gets a share of the steps' time of its own, so that a
+		// connection that does not close cannot use all of it up.
+		srvCtx, cancelSrv := context.WithTimeout(stepCtx, serverShutdownTimeout)
+		if err := srv.Shutdown(srvCtx); err != nil {
 			srv.Close()
 		}
+		cancelSrv()
 		<-served
 		d.runShutdownSteps(stepCtx)
 		stopLoops()
