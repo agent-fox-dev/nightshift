@@ -3,7 +3,7 @@
   "spec_id": "01",
   "spec_name": "daemon_api_and_credentials",
   "schema_version": 3,
-  "updated_at": "2026-11-28T11:18:03Z",
+  "updated_at": "2026-11-28T11:26:41Z",
   "tasks": [
     {
       "id": 1,
@@ -536,7 +536,201 @@
     },
     {
       "id": 3,
-      "state": "pending"
+      "state": "done",
+      "evidence": [
+        {
+          "covers": "REQ-1.6",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestDaemon_FirstStartAnswersTheStatus",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-1.7",
+          "tests": [
+            {
+              "test": "./internal/daemon:TestRun_FailuresAfterTheChecksServeNothing",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-3.1",
+          "tests": [
+            {
+              "test": "./internal/api:TestEnsureClientToken_WritesANewToken",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-3.2",
+          "tests": [
+            {
+              "test": "./internal/api:TestEnsureClientToken_KeepsAnExistingFile",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-3.3",
+          "tests": [
+            {
+              "test": "./internal/api:TestServer_RejectsRequestsWithoutTheClientToken",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-3.4",
+          "tests": [
+            {
+              "test": "./internal/api:TestServer_AnswersErrorsAsJSON",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-4.1",
+          "tests": [
+            {
+              "test": "./internal/api:TestStatus_ReportsVersionHubAndSources",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-4.2",
+          "tests": [
+            {
+              "test": "./internal/cli:TestStatus_PrintsTheDaemonsState",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-4.3",
+          "tests": [
+            {
+              "test": "./internal/cli:TestRun_ResolvesAddressAndToken",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-4.4",
+          "tests": [
+            {
+              "test": "./internal/cli:TestRun_FailsWithoutDaemonOrToken",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-4.5",
+          "tests": [
+            {
+              "test": "./internal/cli:TestRun_PrintsTheErrorMessageOfAnErrorAnswer",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-4.6",
+          "tests": [
+            {
+              "test": "./internal/cli:TestRun_UsageErrorsSendNoRequest",
+              "failed": {
+                "at": "2026-11-28T11:23:41Z",
+                "tree": "c27bb2d0ad7eae57433a7ace4e07d65e522236ca"
+              },
+              "passed": {
+                "at": "2026-11-28T11:26:40Z",
+                "tree": "5aaa7e7b2469c88dcf8bcb1d47fd9965ff36f974"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 4,

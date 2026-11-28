@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -168,4 +170,83 @@ func TestRun_HubCheckFailures(t *testing.T) {
 			assertNothingCreated(t, f)
 		})
 	}
+}
+
+func TestRun_FailuresAfterTheChecksServeNothing(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		// edit changes the configuration's paths and listen address so that
+		// one of them fails, and returns the edited file's content.
+		edit       func(t *testing.T, f files, h *hubtest.Hub) string
+		wantPrefix string
+	}{
+		{
+			name: "store path under a regular file",
+			edit: func(t *testing.T, f files, h *hubtest.Hub) string {
+				notADir := filepath.Join(f.dir, "plain")
+				if err := os.WriteFile(notADir, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return configWith(t, h, "127.0.0.1:0", f.token, filepath.Join(notADir, "store.db"))
+			},
+			wantPrefix: "store: ",
+		},
+		{
+			name: "token file in a read-only directory",
+			edit: func(t *testing.T, f files, h *hubtest.Hub) string {
+				readOnly := filepath.Join(f.dir, "read-only")
+				if err := os.Mkdir(readOnly, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(readOnly, 0o700) })
+				return configWith(t, h, "127.0.0.1:0", filepath.Join(readOnly, "token"), f.store)
+			},
+			wantPrefix: "token: ",
+		},
+		{
+			name: "listen address already held",
+			edit: func(t *testing.T, f files, h *hubtest.Hub) string {
+				ln, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { ln.Close() })
+				return configWith(t, h, ln.Addr().String(), f.token, f.store)
+			},
+			wantPrefix: "listen: ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := hubtest.New(t)
+			f := writeConfig(t, "")
+			if err := os.WriteFile(f.config, []byte(tt.edit(t, f, h)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// A daemon that serves anyway stops at once on this signal, so
+			// that the test ends and reports it.
+			signals := make(chan os.Signal, 1)
+			signals <- syscall.SIGTERM
+
+			code, stderr := run(t, f, daemon.Env{Signals: signals})
+
+			if code != 1 {
+				t.Errorf("exit code = %d, want 1", code)
+			}
+			if lines := strings.Split(strings.TrimSuffix(stderr, "\n"), "\n"); len(lines) != 1 || !strings.HasPrefix(stderr, tt.wantPrefix) {
+				t.Errorf("stderr = %q, want one line starting %q", stderr, tt.wantPrefix)
+			}
+		})
+	}
+}
+
+// configWith is a configuration against h's two good tokens with the
+// listen address and the paths given.
+func configWith(t *testing.T, h *hubtest.Hub, listen, token, store string) string {
+	t.Helper()
+	worker, approver := h.GoodTokens()
+	return fmt.Sprintf("listen = %q\ntoken_file = %q\n[store]\npath = %q\n[hub]\n", listen, token, store) +
+		hubLines(h.URL(), worker, approver)
 }
