@@ -21,6 +21,7 @@ import (
 	"github.com/agent-fox-dev/nightshift/internal/hub"
 	"github.com/agent-fox-dev/nightshift/internal/hubtest"
 	"github.com/agent-fox-dev/nightshift/internal/policy"
+	"github.com/agent-fox-dev/nightshift/internal/store"
 	"github.com/agent-fox-dev/nightshift/internal/store/storetest"
 	"github.com/agent-fox-dev/nightshift/internal/workspace"
 )
@@ -46,9 +47,12 @@ func complete() hubtest.Requirement {
 // fixture is a fake hub holding the workspace demo and a workspace service
 // over a store copied from the template, mounted on an API server.
 type fixture struct {
-	hub    *hubtest.Hub
-	repo   *hubtest.Repository
-	worker string
+	hub              *hubtest.Hub
+	repo             *hubtest.Repository
+	worker, approver string
+	// st is the store at path, which the service reads and writes.
+	st     *store.Store
+	path   string
 	svc    *workspace.Service
 	srv    *api.Server
 	clones string
@@ -68,11 +72,25 @@ func newFixture(t *testing.T, edit func(*hubtest.Workspace)) *fixture {
 	}
 	repo := h.AddWorkspace(t, ws)
 	h.SetPolicy("demo", hubtest.Policy{Default: complete()})
-	clones := filepath.Join(t.TempDir(), "clones")
-	svc := workspace.New(storetest.Open(t), hub.New(h.URL(), worker, approver), &command.Runner{}, clones)
-	srv := api.New(clientToken, api.HubReporterFunc(func() api.HubState { return api.HubState{} }))
-	svc.Mount(srv)
-	return &fixture{hub: h, repo: repo, worker: worker, svc: svc, srv: srv, clones: clones}
+	f := &fixture{hub: h, repo: repo, worker: worker, approver: approver,
+		path: storetest.Path(t), clones: filepath.Join(t.TempDir(), "clones")}
+	f.open(t)
+	return f
+}
+
+// open opens the fixture's store and builds the service over it, mounted
+// on a new API server, as a start of the daemon does.
+func (f *fixture) open(t *testing.T) {
+	t.Helper()
+	st, err := store.Open(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	f.st = st
+	f.svc = workspace.New(st, hub.New(f.hub.URL(), f.worker, f.approver), &command.Runner{}, f.clones)
+	f.srv = api.New(clientToken, api.HubReporterFunc(func() api.HubState { return api.HubState{} }))
+	f.svc.Mount(f.srv)
 }
 
 // answer is the API's answer: its status and its JSON body.
@@ -635,13 +653,22 @@ func TestRegister_WarnsWhenNoPathIsSensitive(t *testing.T) {
 
 func TestRoutes_AnswerUnavailableWhileTheHubIsDown(t *testing.T) {
 	t.Parallel()
-	tests := []struct{ method, path, body string }{
-		{http.MethodPost, "/api/v1/workspaces", `{"slug": "demo", "health_command": "true"}`},
+	tests := []struct {
+		method, path, body string
+		// registered inserts demo into the store before the request, for a
+		// route of a registered workspace.
+		registered bool
+	}{
+		{method: http.MethodPost, path: "/api/v1/workspaces", body: `{"slug": "demo", "health_command": "true"}`},
+		{method: http.MethodGet, path: "/api/v1/workspaces/demo", registered: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t, nil)
+			if tt.registered {
+				f.insert(t, "demo")
+			}
 			f.hub.Stop()
 
 			r := f.do(context.Background(), tt.method, tt.path, tt.body)
@@ -652,7 +679,16 @@ func TestRoutes_AnswerUnavailableWhileTheHubIsDown(t *testing.T) {
 			if msg, _ := r.body["message"].(string); msg == "" {
 				t.Error("the answer has no message")
 			}
-			f.assertNoneStored(t)
+			if !tt.registered {
+				f.assertNoneStored(t)
+				return
+			}
+			// The list does not ask the hub, so it answers while the hub is
+			// down.
+			list := f.do(context.Background(), http.MethodGet, "/api/v1/workspaces", "")
+			if list.status != http.StatusOK || !slices.Equal(slugsOf(t, list), []string{"demo"}) {
+				t.Errorf("the list answered %d %s while the hub is down, want 200 with demo", list.status, list.raw)
+			}
 		})
 	}
 }

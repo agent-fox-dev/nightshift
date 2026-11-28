@@ -1,36 +1,177 @@
 package workspace
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/agent-fox-dev/nightshift/internal/api"
+	"github.com/agent-fox-dev/nightshift/internal/hub"
+	"github.com/agent-fox-dev/nightshift/internal/policy"
 )
 
 // maxBody bounds the body of a request to the workspace routes.
 const maxBody = 1 << 20
 
 // Mount registers the workspace routes on srv, each behind its client
-// token check.
+// token check, and makes the service the source of the status's
+// workspaces.
 func (s *Service) Mount(srv *api.Server) {
 	srv.Handle("POST /api/v1/workspaces", http.HandlerFunc(s.handleRegister))
+	srv.Handle("GET /api/v1/workspaces", http.HandlerFunc(s.handleList))
+	srv.Handle("GET /api/v1/workspaces/{slug}", http.HandlerFunc(s.handleShow))
+	srv.Handle("PATCH /api/v1/workspaces/{slug}", http.HandlerFunc(s.handleSet))
+	srv.Handle("DELETE /api/v1/workspaces/{slug}", http.HandlerFunc(s.handleRemove))
+	srv.SetStatusSource("workspaces", s.statusWorkspaces)
 }
 
-// object is the workspace object the API answers for w; a route adds its
-// own members to it.
+// object is the workspace object the API answers for w, with the members
+// the Decorate functions add; a route adds its own members to it.
 func (s *Service) object(w Workspace) map[string]any {
-	return map[string]any{
+	obj := map[string]any{
 		"slug":              w.Slug,
 		"state":             w.State,
 		"health_command":    w.HealthCommand,
 		"health_timeout":    w.HealthTimeout.String(),
 		"daily_tokens":      w.DailyTokens,
-		"tokens_used_today": int64(0),
+		"tokens_used_today": s.tokensUsedToday(w.Slug),
 		"created_at":        w.CreatedAt.UTC().Format(time.RFC3339),
 	}
+	s.extMu.RLock()
+	decorators := slices.Clone(s.decorators)
+	s.extMu.RUnlock()
+	for _, fn := range decorators {
+		fn(w.Slug, obj)
+	}
+	return obj
+}
+
+// statusWorkspaces is the status's workspaces member: the slug, state and
+// tokens used today of every workspace, ordered by slug.
+func (s *Service) statusWorkspaces(ctx context.Context) (any, error) {
+	list, err := s.list(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, w := range list {
+		out = append(out, map[string]any{"slug": w.Slug, "state": w.State, "tokens_used_today": s.tokensUsedToday(w.Slug)})
+	}
+	return out, nil
+}
+
+// handleList is GET /api/v1/workspaces; it does not ask the hub.
+func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
+	list, err := s.list(r.Context())
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	objects := make([]map[string]any, 0, len(list))
+	for _, ws := range list {
+		objects = append(objects, s.object(ws))
+	}
+	api.WriteJSON(w, http.StatusOK, map[string]any{"workspaces": objects})
+}
+
+// handleShow is GET /api/v1/workspaces/{slug}: the workspace object with
+// the sensitive rules of the policy as the hub holds it now.
+func (s *Service) handleShow(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.get(r.Context(), r.PathValue("slug"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	rules, err := s.sensitiveRules(r.Context(), ws.Slug)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	obj := s.object(ws)
+	obj["sensitive_rules"] = rules
+	api.WriteJSON(w, http.StatusOK, obj)
+}
+
+// sensitiveRules reads the policy of slug from the hub and gives its
+// sensitive rules.
+func (s *Service) sensitiveRules(ctx context.Context, slug string) ([]policy.SensitiveRule, error) {
+	if !s.hub.Available(hub.Worker) {
+		return nil, ErrHubUnavailable
+	}
+	doc, err := policy.Read(ctx, s.hub, slug)
+	if err != nil {
+		return nil, s.hubFailure(ctx, err)
+	}
+	return policy.Sensitive(doc), nil
+}
+
+// handleSet is PATCH /api/v1/workspaces/{slug}.
+func (s *Service) handleSet(w http.ResponseWriter, r *http.Request) {
+	ch, err := decodeSettings(w, r)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	ws, err := s.Set(r.Context(), r.PathValue("slug"), ch)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, s.object(ws))
+}
+
+// settingMembers are the members a PATCH of a workspace may carry.
+var settingMembers = []string{"health_command", "health_timeout", "daily_tokens"}
+
+func decodeSettings(w http.ResponseWriter, r *http.Request) (Settings, error) {
+	members, err := decodeObject(w, r)
+	if err != nil {
+		return Settings{}, err
+	}
+	for _, name := range slices.Sorted(maps.Keys(members)) {
+		if !slices.Contains(settingMembers, name) {
+			return Settings{}, &invalidRequest{"unknown member " + strconv.Quote(name) + "; give health_command, health_timeout or daily_tokens"}
+		}
+	}
+	var ch Settings
+	if _, ok := members["health_command"]; ok {
+		command, err := nonEmptyString(members, "health_command")
+		if err != nil {
+			return Settings{}, err
+		}
+		ch.HealthCommand = &command
+	}
+	if raw, ok := members["health_timeout"]; ok {
+		timeout, err := parseHealthTimeout(raw)
+		if err != nil {
+			return Settings{}, err
+		}
+		ch.HealthTimeout = &timeout
+	}
+	if raw, ok := members["daily_tokens"]; ok {
+		tokens, err := parseDailyTokens(raw)
+		if err != nil {
+			return Settings{}, err
+		}
+		ch.DailyTokens = &tokens
+	}
+	return ch, nil
+}
+
+// handleRemove is DELETE /api/v1/workspaces/{slug}; it does not ask the
+// hub.
+func (s *Service) handleRemove(w http.ResponseWriter, r *http.Request) {
+	if err := s.Remove(r.Context(), r.PathValue("slug")); err != nil {
+		writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleRegister is POST /api/v1/workspaces. The request stays open until
@@ -136,14 +277,17 @@ func parseDailyTokens(raw json.RawMessage) (int64, error) {
 }
 
 // writeError answers err as the workspace routes do: 400 invalid_request
-// for a body that breaks the format, 409 conflict for a refusal with its
-// output where it has one, 503 hub_unavailable without the hub, and 500
+// for a body that breaks the format, 404 not_found for the route's slug
+// when it is not registered, 409 conflict for a refusal with its output
+// where it has one, 503 hub_unavailable without the hub, and 500
 // otherwise. Nothing is answered to a client that went away.
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var invalid *invalidRequest
 	var refusal *Refusal
 	switch {
 	case r.Context().Err() != nil:
+	case errors.Is(err, ErrNotFound):
+		api.WriteError(w, http.StatusNotFound, "not_found", "workspace "+r.PathValue("slug")+" is not registered")
 	case errors.As(err, &invalid):
 		api.WriteError(w, http.StatusBadRequest, "invalid_request", invalid.message)
 	case errors.As(err, &refusal):

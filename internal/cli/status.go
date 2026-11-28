@@ -38,6 +38,11 @@ func runStatus(c *Call, args []string) int {
 			UnreachableSince *string `json:"unreachable_since"`
 			CredentialError  *string `json:"credential_error"`
 		} `json:"hub"`
+		Workspaces []struct {
+			Slug            string `json:"slug"`
+			State           string `json:"state"`
+			TokensUsedToday int64  `json:"tokens_used_today"`
+		} `json:"workspaces"`
 	}
 	if err := json.Unmarshal(body, &st); err != nil {
 		fmt.Fprintf(c.Stderr, "nightshiftd answered a status that is not JSON: %v\n", err)
@@ -54,6 +59,9 @@ func runStatus(c *Call, args []string) int {
 	}
 	if st.Hub.CredentialError != nil {
 		fmt.Fprintln(c.Stdout, *st.Hub.CredentialError)
+	}
+	for _, w := range st.Workspaces {
+		fmt.Fprintf(c.Stdout, "workspace %s: %s, %d tokens today\n", w.Slug, w.State, w.TokensUsedToday)
 	}
 	return 0
 }

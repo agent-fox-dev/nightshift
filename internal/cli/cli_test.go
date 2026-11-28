@@ -154,6 +154,13 @@ func TestStatus_PrintsTheDaemonsState(t *testing.T) {
 			want: "nightshiftd 1.2.3\nhub: https://hub.example reachable\nworker token: 401 unauthenticated\n",
 		},
 		{
+			name: "workspaces",
+			body: `{"version":"1.2.3","hub":{"endpoint":"https://hub.example","reachable":true,"unreachable_since":null,"credential_error":null},"sessions":[],` +
+				`"workspaces":[{"slug":"demo","state":"green","tokens_used_today":0},{"slug":"web","state":"held","tokens_used_today":12}]}`,
+			want: "nightshiftd 1.2.3\nhub: https://hub.example reachable\n" +
+				"workspace demo: green, 0 tokens today\nworkspace web: held, 12 tokens today\n",
+		},
+		{
 			name: "json",
 			body: reachableStatus,
 			json: true,

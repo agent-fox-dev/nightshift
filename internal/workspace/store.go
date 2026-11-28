@@ -83,3 +83,92 @@ func (s *Service) insert(ctx context.Context, w Workspace) error {
 		w.CreatedAt.UTC().Format(time.RFC3339))
 	return err
 }
+
+// notFound is ErrNotFound for slug when res changed no row.
+func notFound(res sql.Result, slug string) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%s: %w", slug, ErrNotFound)
+	}
+	return nil
+}
+
+func (s *Service) setState(ctx context.Context, slug string, state State) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE workspaces SET state = ? WHERE slug = ?`, string(state), slug)
+	if err != nil {
+		return fmt.Errorf("storing the state of %s: %w", slug, err)
+	}
+	return notFound(res, slug)
+}
+
+// setSettings stores the members of ch that are not nil; a NULL argument
+// keeps the column as it is.
+func (s *Service) setSettings(ctx context.Context, slug string, ch Settings) error {
+	var timeout *int64
+	if ch.HealthTimeout != nil {
+		ns := int64(*ch.HealthTimeout)
+		timeout = &ns
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE workspaces SET
+			health_command = COALESCE(?, health_command),
+			health_timeout_ns = COALESCE(?, health_timeout_ns),
+			daily_tokens = COALESCE(?, daily_tokens)
+		WHERE slug = ?`, ch.HealthCommand, timeout, ch.DailyTokens, slug)
+	if err != nil {
+		return fmt.Errorf("storing the settings of %s: %w", slug, err)
+	}
+	return notFound(res, slug)
+}
+
+// delete deletes the workspace slug and its recorded rule names in one
+// transaction.
+func (s *Service) delete(ctx context.Context, slug string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_rules WHERE slug = ?`, slug); err != nil {
+		return fmt.Errorf("removing the rules of %s: %w", slug, err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM workspaces WHERE slug = ?`, slug)
+	if err != nil {
+		return fmt.Errorf("removing %s: %w", slug, err)
+	}
+	if err := notFound(res, slug); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// recordRule stores name as a rule protect wrote for the workspace slug.
+func (s *Service) recordRule(ctx context.Context, slug, name string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO workspace_rules (slug, name) VALUES (?, ?)`, slug, name)
+	if err != nil {
+		return fmt.Errorf("recording the rule %s of %s: %w", name, slug, err)
+	}
+	return nil
+}
+
+// ruleRecorded reports whether name is recorded as a rule protect wrote for
+// the workspace slug.
+func (s *Service) ruleRecorded(ctx context.Context, slug, name string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM workspace_rules WHERE slug = ? AND name = ?`, slug, name).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("reading the rules of %s: %w", slug, err)
+	}
+	return n > 0, nil
+}
+
+// forgetRule removes the record of the rule name of the workspace slug.
+func (s *Service) forgetRule(ctx context.Context, slug, name string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM workspace_rules WHERE slug = ? AND name = ?`, slug, name)
+	if err != nil {
+		return fmt.Errorf("forgetting the rule %s of %s: %w", name, slug, err)
+	}
+	return nil
+}
