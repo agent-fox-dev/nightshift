@@ -3,11 +3,125 @@
   "spec_id": "02",
   "spec_name": "workspaces_and_policy",
   "schema_version": 3,
-  "updated_at": "",
+  "updated_at": "2026-11-28T12:15:23Z",
   "tasks": [
     {
       "id": 1,
-      "state": "pending"
+      "state": "done",
+      "evidence": [
+        {
+          "covers": "REQ-6.1",
+          "tests": [
+            {
+              "test": "./internal/command:TestRun_KeepsTheTailOfStandardOutputAndError",
+              "failed": {
+                "at": "2026-11-28T12:12:31Z",
+                "tree": "766f6d8e00474bf12d200a53ae44d4f93976102f"
+              },
+              "passed": {
+                "at": "2026-11-28T12:15:21Z",
+                "tree": "0626ee0d393faeaf295b95f6031de668f61987e5"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-6.2",
+          "tests": [
+            {
+              "test": "./internal/command:TestRun_KillsTheProcessGroupOnTimeoutOrCancellation",
+              "failed": {
+                "at": "2026-11-28T12:12:31Z",
+                "tree": "766f6d8e00474bf12d200a53ae44d4f93976102f"
+              },
+              "passed": {
+                "at": "2026-11-28T12:15:21Z",
+                "tree": "0626ee0d393faeaf295b95f6031de668f61987e5"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-6.3",
+          "tests": [
+            {
+              "test": "./internal/command:TestRun_RefusesAnUnusableSpecWithoutStartingAProcess",
+              "failed": {
+                "at": "2026-11-28T12:12:31Z",
+                "tree": "766f6d8e00474bf12d200a53ae44d4f93976102f"
+              },
+              "passed": {
+                "at": "2026-11-28T12:15:21Z",
+                "tree": "0626ee0d393faeaf295b95f6031de668f61987e5"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-6.4",
+          "tests": [
+            {
+              "test": "./internal/command:TestRun_AppliesTheIdentityBeforeTheStart",
+              "failed": {
+                "at": "2026-11-28T12:12:31Z",
+                "tree": "766f6d8e00474bf12d200a53ae44d4f93976102f"
+              },
+              "passed": {
+                "at": "2026-11-28T12:15:21Z",
+                "tree": "0626ee0d393faeaf295b95f6031de668f61987e5"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-6.5",
+          "tests": [
+            {
+              "test": "./internal/gitclone:TestSync_ClonesAtTheCommitWithoutKeepingTheToken",
+              "failed": {
+                "at": "2026-11-28T12:12:31Z",
+                "tree": "766f6d8e00474bf12d200a53ae44d4f93976102f"
+              },
+              "passed": {
+                "at": "2026-11-28T12:15:21Z",
+                "tree": "0626ee0d393faeaf295b95f6031de668f61987e5"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-6.6",
+          "tests": [
+            {
+              "test": "./internal/gitclone:TestSync_BringsAnExistingDirectoryToTheCommit",
+              "failed": {
+                "at": "2026-11-28T12:12:31Z",
+                "tree": "766f6d8e00474bf12d200a53ae44d4f93976102f"
+              },
+              "passed": {
+                "at": "2026-11-28T12:15:21Z",
+                "tree": "0626ee0d393faeaf295b95f6031de668f61987e5"
+              }
+            }
+          ]
+        },
+        {
+          "covers": "REQ-6.7",
+          "tests": [
+            {
+              "test": "./internal/gitclone:TestSync_FailsWithoutLeavingAHalfMadeClone",
+              "failed": {
+                "at": "2026-11-28T12:12:31Z",
+                "tree": "766f6d8e00474bf12d200a53ae44d4f93976102f"
+              },
+              "passed": {
+                "at": "2026-11-28T12:15:21Z",
+                "tree": "0626ee0d393faeaf295b95f6031de668f61987e5"
+              }
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 2,
