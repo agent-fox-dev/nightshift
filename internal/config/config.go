@@ -15,8 +15,10 @@ import (
 // Config is the daemon's configuration. Later packages add their keys
 // here; a key the struct does not hold is refused by Load.
 type Config struct {
-	Listen    string      `toml:"listen"`
-	TokenFile string      `toml:"token_file"`
+	Listen    string `toml:"listen"`
+	TokenFile string `toml:"token_file"`
+	// ClonesDir holds the workspaces' clones, one directory per slug.
+	ClonesDir string      `toml:"clones_dir"`
 	Store     StoreConfig `toml:"store"`
 	Hub       HubConfig   `toml:"hub"`
 }
@@ -38,6 +40,7 @@ const (
 	DefaultListen    = "127.0.0.1:7878"
 	DefaultTokenFile = "~/.nightshift/token"
 	DefaultStorePath = "~/.nightshift/store.db"
+	DefaultClonesDir = "~/.nightshift/clones"
 )
 
 // DefaultPath is the configuration file read when no path is given.
@@ -92,11 +95,17 @@ func Load(path, home string) (Config, error) {
 	if cfg.Store.Path == "" {
 		cfg.Store.Path = DefaultStorePath
 	}
+	if cfg.ClonesDir == "" {
+		cfg.ClonesDir = DefaultClonesDir
+	}
 	if cfg.TokenFile, err = expandHome(cfg.TokenFile, home); err != nil {
 		return Config{}, fmt.Errorf("token_file: %w", err)
 	}
 	if cfg.Store.Path, err = expandHome(cfg.Store.Path, home); err != nil {
 		return Config{}, fmt.Errorf("store.path: %w", err)
+	}
+	if cfg.ClonesDir, err = expandHome(cfg.ClonesDir, home); err != nil {
+		return Config{}, fmt.Errorf("clones_dir: %w", err)
 	}
 	return cfg, nil
 }

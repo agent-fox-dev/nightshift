@@ -38,13 +38,16 @@ func (c Credential) String() string {
 }
 
 // Error is a hub's answer with a status of 400 or more, decoded from
-// Parley's envelope {"error": {"code", "message", "error_type"}}. An answer
-// without the envelope leaves the names empty.
+// Parley's envelope {"error": {"code", "message", "error_type", "details"}}.
+// An answer without the envelope leaves the names empty.
 type Error struct {
 	Status    int
 	Code      string
 	ErrorType string
 	Message   string
+	// Details is the envelope's error.details as the hub sent it, or nil;
+	// a refused policy names the rule and the field in it.
+	Details json.RawMessage
 }
 
 // Error is "<status> <name>", the name being the error_type, else the code.
@@ -235,9 +238,10 @@ func (c *Client) send(req *http.Request) (*http.Response, error) {
 func decodeError(resp *http.Response) *Error {
 	var envelope struct {
 		Error struct {
-			Code      string `json:"code"`
-			Message   string `json:"message"`
-			ErrorType string `json:"error_type"`
+			Code      string          `json:"code"`
+			Message   string          `json:"message"`
+			ErrorType string          `json:"error_type"`
+			Details   json.RawMessage `json:"details"`
 		} `json:"error"`
 	}
 	// A body that is not the envelope still makes an error with the status.
@@ -247,6 +251,7 @@ func decodeError(resp *http.Response) *Error {
 		Code:      envelope.Error.Code,
 		ErrorType: envelope.Error.ErrorType,
 		Message:   envelope.Error.Message,
+		Details:   envelope.Error.Details,
 	}
 }
 

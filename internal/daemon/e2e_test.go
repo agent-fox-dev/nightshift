@@ -5,8 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +23,7 @@ import (
 	"github.com/agent-fox-dev/nightshift/internal/daemon"
 	"github.com/agent-fox-dev/nightshift/internal/hub"
 	"github.com/agent-fox-dev/nightshift/internal/hubtest"
+	"github.com/agent-fox-dev/nightshift/internal/policy"
 )
 
 // startTimeout bounds how long startDaemon waits for the daemon to listen
@@ -130,14 +134,48 @@ func (r *runningDaemon) stop(t *testing.T) int {
 
 // status runs `nightshift status` against the daemon with its token file.
 func (r *runningDaemon) status(args ...string) (int, string, string) {
+	return r.nightshift(append([]string{"status"}, args...)...)
+}
+
+// nightshift runs the client with args against the daemon, with its address
+// and token file given after args, and returns the exit code, stdout and
+// stderr.
+func (r *runningDaemon) nightshift(args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
-	code := cli.Run(append([]string{"status", "--addr", r.addr, "--token-file", r.token}, args...), cli.Env{
+	code := cli.Run(append(slices.Clone(args), "--addr", r.addr, "--token-file", r.token), cli.Env{
 		Home:   r.dir,
 		Getenv: func(string) string { return "" },
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
 	return code, stdout.String(), stderr.String()
+}
+
+// hubWorkspace is a fake hub holding one workspace with a repository, and
+// the files of a daemon configured against that hub.
+type hubWorkspace struct {
+	files
+	hub  *hubtest.Hub
+	repo *hubtest.Repository
+	slug string
+}
+
+// withWorkspace starts a fake hub holding the workspace slug, owned by the
+// worker token's user, with sync_enabled on, a repository whose default
+// branch main follows origin, and no policy set (revision 0), and writes a
+// daemon configuration against it.
+func withWorkspace(t *testing.T, slug string) hubWorkspace {
+	t.Helper()
+	h := hubtest.New(t)
+	worker, approver := h.GoodTokens()
+	repo := h.AddWorkspace(t, hubtest.Workspace{Slug: slug})
+	return hubWorkspace{files: writeConfig(t, hubLines(h.URL(), worker, approver)), hub: h, repo: repo, slug: slug}
+}
+
+// cloneDir is the clone of the workspace in the default clones_dir, which
+// the daemon's home puts in the test's directory.
+func (w hubWorkspace) cloneDir() string {
+	return filepath.Join(w.dir, ".nightshift", "clones", w.slug)
 }
 
 // hubLine is the line of `nightshift status` that reports the hub.
@@ -432,5 +470,148 @@ func TestDaemon_RidesOutAHubOutage(t *testing.T) {
 	}
 	if r.exited() {
 		t.Errorf("the daemon returned %d during the outage", r.code)
+	}
+}
+
+func TestDaemon_RegistersAWorkspaceAndAdoptsItsPolicy(t *testing.T) {
+	t.Parallel()
+	w := withWorkspace(t, "demo")
+	r := startDaemon(t, w.files, daemon.Env{})
+
+	code, stdout, stderr := r.nightshift("workspace", "add", "demo", "--health", "test -f README.md", "--adopt-policy")
+
+	if code != 0 {
+		t.Fatalf("workspace add exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if want := "registered demo\npolicy adopted at revision 1\n"; stdout != want {
+		t.Errorf("workspace add printed %q, want %q", stdout, want)
+	}
+	if want := "no path of demo is marked sensitive; every change lands without you\n"; stderr != want {
+		t.Errorf("workspace add wrote %q on stderr, want %q", stderr, want)
+	}
+	p := w.hub.Policy("demo")
+	if p.Revision != 1 || !slices.Equal(p.Default.Checks, policy.Checks) || !p.Default.FreshChecks {
+		t.Errorf("the hub's policy is at revision %d with default %+v, want revision 1 requiring the three checks with fresh_checks",
+			p.Revision, p.Default)
+	}
+	code, stdout, stderr = r.status()
+	if code != 0 || !strings.HasSuffix(stdout, "\nworkspace demo: green, 0 tokens today\n") {
+		t.Errorf("nightshift status = %d %q (stderr %q), want it to end with the line of demo", code, stdout, stderr)
+	}
+
+	if code := r.stop(t); code != 0 {
+		t.Fatalf("the daemon returned %d after SIGTERM, want 0", code)
+	}
+	again := startDaemon(t, w.files, daemon.Env{})
+	code, stdout, stderr = again.nightshift("workspace", "list")
+	if code != 0 || !strings.HasPrefix(stdout, "demo  green") {
+		t.Errorf("after a restart, workspace list = %d %q (stderr %q), want a line of demo, green", code, stdout, stderr)
+	}
+}
+
+func TestDaemon_RefusesARegistrationThenRegistersAndRemovesTheWorkspace(t *testing.T) {
+	t.Parallel()
+	w := withWorkspace(t, "demo")
+	r := startDaemon(t, w.files, daemon.Env{})
+	list := func() string {
+		t.Helper()
+		code, stdout, stderr := r.nightshift("workspace", "list")
+		if code != 0 {
+			t.Fatalf("workspace list exit code = %d, want 0 (stderr %q)", code, stderr)
+		}
+		return stdout
+	}
+
+	code, stdout, stderr := r.nightshift("workspace", "add", "demo", "--health", "echo broken; exit 3", "--adopt-policy")
+
+	if code != 1 || stdout != "" || stderr != "health command exited 3\nbroken\n" {
+		t.Errorf("the failing workspace add = %d, stdout %q, stderr %q; want 1, nothing, \"health command exited 3\\nbroken\\n\"",
+			code, stdout, stderr)
+	}
+	if got := list(); got != "no workspaces\n" {
+		t.Errorf("after the refusal, workspace list printed %q, want \"no workspaces\\n\"", got)
+	}
+	if rev := w.hub.Policy("demo").Revision; rev != 0 {
+		t.Errorf("after the refusal, the hub's policy is at revision %d, want 0", rev)
+	}
+
+	if code, _, stderr := r.nightshift("workspace", "add", "demo", "--health", "true", "--adopt-policy"); code != 0 {
+		t.Fatalf("the second workspace add exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if code, stdout, stderr := r.nightshift("workspace", "set", "demo", "--daily-tokens", "1000"); code != 0 || stdout != "updated demo\n" {
+		t.Fatalf("workspace set = %d %q (stderr %q), want 0 \"updated demo\\n\"", code, stdout, stderr)
+	}
+	if got, want := list(), "demo  green  0/1000 tokens  health: true (30m0s)\n"; got != want {
+		t.Errorf("after the set, workspace list printed %q, want %q", got, want)
+	}
+	adopted := w.hub.Policy("demo")
+	requests := w.hub.APIRequests()
+
+	if code, stdout, stderr := r.nightshift("workspace", "remove", "demo"); code != 0 || stdout != "removed demo\n" {
+		t.Fatalf("workspace remove = %d %q (stderr %q), want 0 \"removed demo\\n\"", code, stdout, stderr)
+	}
+
+	if got := list(); got != "no workspaces\n" {
+		t.Errorf("after the removal, workspace list printed %q, want \"no workspaces\\n\"", got)
+	}
+	if _, err := os.Stat(w.cloneDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the clone of demo is left (stat error %v), want it removed", err)
+	}
+	if n := w.hub.APIRequests() - requests; n != 0 {
+		t.Errorf("the removal sent %d requests to the hub, want none", n)
+	}
+	if p := w.hub.Policy("demo"); p.Revision == 0 || !reflect.DeepEqual(p, adopted) {
+		t.Errorf("after the removal the hub's policy is %+v, want the adopted one %+v kept", p, adopted)
+	}
+}
+
+func TestDaemon_ProtectsAPathShowsItAndUnprotectsIt(t *testing.T) {
+	t.Parallel()
+	w := withWorkspace(t, "demo")
+	r := startDaemon(t, w.files, daemon.Env{})
+	if code, _, stderr := r.nightshift("workspace", "add", "demo", "--health", "true", "--adopt-policy"); code != 0 {
+		t.Fatalf("workspace add exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if rev := w.hub.Policy("demo").Revision; rev != 1 {
+		t.Fatalf("after the registration the hub's policy is at revision %d, want 1", rev)
+	}
+	show := func() string {
+		t.Helper()
+		code, stdout, stderr := r.nightshift("workspace", "show", "demo")
+		if code != 0 {
+			t.Fatalf("workspace show exit code = %d, want 0 (stderr %q)", code, stderr)
+		}
+		return stdout
+	}
+
+	code, stdout, stderr := r.nightshift("workspace", "protect", "demo", "deploy/**")
+
+	if want := "rule nightshift-1 (approval): deploy/**\npolicy revision 2\n"; code != 0 || stdout != want {
+		t.Fatalf("workspace protect = %d %q (stderr %q), want 0 %q", code, stdout, stderr, want)
+	}
+	p := w.hub.Policy("demo")
+	if p.Revision != 2 || len(p.Rules) == 0 || p.Rules[0].Name != "nightshift-1" ||
+		p.Rules[0].Require.Approvals != 1 || !slices.Equal(p.Rules[0].Require.Approvers, []string{"owner"}) ||
+		!slices.Equal(p.Rules[0].Require.Checks, policy.Checks) {
+		t.Errorf("after protect the hub's policy is %+v, want revision 2 with nightshift-1 first, requiring the owner's approval and the three checks", p)
+	}
+	if got := show(); !strings.Contains(got, "\n  nightshift-1 approval: deploy/**\n") {
+		t.Errorf("workspace show printed %q, want the line of nightshift-1", got)
+	}
+
+	code, stdout, stderr = r.nightshift("workspace", "unprotect", "demo", "nightshift-1")
+
+	if want := "removed rule nightshift-1\npolicy revision 3\n"; code != 0 || stdout != want {
+		t.Fatalf("workspace unprotect = %d %q (stderr %q), want 0 %q", code, stdout, stderr, want)
+	}
+	if p := w.hub.Policy("demo"); p.Revision != 3 || len(p.Rules) != 0 {
+		t.Errorf("after unprotect the hub's policy is %+v, want revision 3 with no rule", p)
+	}
+	if got := show(); !strings.HasSuffix(got, "\nsensitive paths: none\n") {
+		t.Errorf("workspace show printed %q, want it to end with \"sensitive paths: none\"", got)
+	}
+	code, stdout, stderr = r.nightshift("workspace", "unprotect", "demo", "nightshift-1")
+	if code != 1 || stdout != "" || stderr != "not a rule nightshift wrote\n" {
+		t.Errorf("a second unprotect = %d, stdout %q, stderr %q; want 1, nothing, \"not a rule nightshift wrote\\n\"", code, stdout, stderr)
 	}
 }

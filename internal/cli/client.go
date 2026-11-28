@@ -51,16 +51,49 @@ func (c *Call) UsageError(format string, args ...any) int {
 // the body itself on stdout with --json. A body that is not nil is sent as
 // JSON.
 func (c *Call) Request(method, path string, body io.Reader) ([]byte, int) {
+	a, code := c.send(method, path, body)
+	if code != 0 {
+		return nil, code
+	}
+	if a.status >= 400 {
+		c.reportError(a)
+		return nil, 1
+	}
+	return a.body, 0
+}
+
+// reply is the daemon's answer to a request.
+type reply struct {
+	status int
+	// statusLine is the status as the answer gave it, such as "404 Not
+	// Found".
+	statusLine string
+	body       []byte
+}
+
+// errorBody is the body of an error answer of the daemon.
+type errorBody struct {
+	ErrorType string `json:"error_type"`
+	Message   string `json:"message"`
+	// Output is the last lines of a command's output, which a refusal
+	// caused by the command carries.
+	Output []string `json:"output"`
+}
+
+// send sends the request as Request does and returns the daemon's answer,
+// whatever its status. A request that gets no answer is printed here, and
+// its exit code returned.
+func (c *Call) send(method, path string, body io.Reader) (reply, int) {
 	content, err := os.ReadFile(c.tokenPath)
 	token := strings.TrimSpace(string(content))
 	if err != nil || token == "" {
 		fmt.Fprintf(c.Stderr, "cannot read the client token at %s\n", c.tokenPath)
-		return nil, 1
+		return reply{}, 1
 	}
 	req, err := http.NewRequest(method, "http://"+c.addr+path, body)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "cannot reach nightshiftd at %s\n", c.addr)
-		return nil, 1
+		return reply{}, 1
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	if body != nil {
@@ -69,26 +102,27 @@ func (c *Call) Request(method, path string, body io.Reader) ([]byte, int) {
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "cannot reach nightshiftd at %s\n", c.addr)
-		return nil, 1
+		return reply{}, 1
 	}
 	defer resp.Body.Close()
-	answer, err := io.ReadAll(resp.Body)
+	content, err = io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "cannot reach nightshiftd at %s\n", c.addr)
-		return nil, 1
+		return reply{}, 1
 	}
-	if resp.StatusCode >= 400 {
-		if c.JSON {
-			c.Stdout.Write(answer)
-		}
-		var e struct {
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(answer, &e) != nil || e.Message == "" {
-			e.Message = "nightshiftd answered " + resp.Status
-		}
-		fmt.Fprintln(c.Stderr, e.Message)
-		return nil, 1
+	return reply{status: resp.StatusCode, statusLine: resp.Status, body: content}, 0
+}
+
+// reportError prints the error answer a as Request does, its body on
+// stdout with --json and its message on stderr, and returns its body.
+func (c *Call) reportError(a reply) errorBody {
+	if c.JSON {
+		c.Stdout.Write(a.body)
 	}
-	return answer, 0
+	var e errorBody
+	if json.Unmarshal(a.body, &e) != nil || e.Message == "" {
+		e.Message = "nightshiftd answered " + a.statusLine
+	}
+	fmt.Fprintln(c.Stderr, e.Message)
+	return e
 }

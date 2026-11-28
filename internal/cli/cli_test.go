@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -36,8 +37,8 @@ func init() {
 }
 
 // fakeDaemon stands in for nightshiftd: it answers every request with one
-// status and body, and records each request's path and Authorization
-// header.
+// status and body, and records each request's method, path, Authorization
+// header and body.
 type fakeDaemon struct {
 	srv *httptest.Server
 
@@ -45,7 +46,7 @@ type fakeDaemon struct {
 	requests []seen
 }
 
-type seen struct{ path, authorization string }
+type seen struct{ method, path, authorization, body string }
 
 func newFakeDaemon(t *testing.T, status int, body string) *fakeDaemon {
 	t.Helper()
@@ -57,8 +58,9 @@ func serveFake(t *testing.T, srv *httptest.Server, status int, body string) *fak
 	t.Helper()
 	f := &fakeDaemon{srv: srv}
 	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
-		f.requests = append(f.requests, seen{r.URL.Path, r.Header.Get("Authorization")})
+		f.requests = append(f.requests, seen{r.Method, r.URL.Path, r.Header.Get("Authorization"), string(sent)})
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -150,6 +152,13 @@ func TestStatus_PrintsTheDaemonsState(t *testing.T) {
 			name: "credential error",
 			body: `{"version":"1.2.3","hub":{"endpoint":"https://hub.example","reachable":true,"unreachable_since":null,"credential_error":"worker token: 401 unauthenticated"},"sessions":[],"workspaces":[]}`,
 			want: "nightshiftd 1.2.3\nhub: https://hub.example reachable\nworker token: 401 unauthenticated\n",
+		},
+		{
+			name: "workspaces",
+			body: `{"version":"1.2.3","hub":{"endpoint":"https://hub.example","reachable":true,"unreachable_since":null,"credential_error":null},"sessions":[],` +
+				`"workspaces":[{"slug":"demo","state":"green","tokens_used_today":0},{"slug":"web","state":"held","tokens_used_today":12}]}`,
+			want: "nightshiftd 1.2.3\nhub: https://hub.example reachable\n" +
+				"workspace demo: green, 0 tokens today\nworkspace web: held, 12 tokens today\n",
 		},
 		{
 			name: "json",

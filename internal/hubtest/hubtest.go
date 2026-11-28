@@ -1,8 +1,11 @@
 // Package hubtest is a fake Parley hub for tests. It answers GET /readyz as
 // a test scripts it, holds personal access tokens with their permissions,
 // workspace binding and revocation, answers GET
-// /api/v1/user/tokens/{token_id} in the order Parley checks a request, and
-// keeps a log of every request it saw.
+// /api/v1/user/tokens/{token_id} in the order Parley checks a request,
+// serves real git repositories over smart HTTP at /git/<org>/<slug>.git,
+// answers the workspace object and the sync of the workspaces it holds,
+// holds each workspace's landing policy behind GET and PUT
+// /api/v1/workspaces/{slug}/policy, and keeps a log of every request it saw.
 package hubtest
 
 import (
@@ -64,6 +67,9 @@ type Request struct {
 	Method, Path string
 	// Bearer is the credential of an "Authorization: Bearer" header, or empty.
 	Bearer string
+	// Basic is the password of an "Authorization: Basic" header, or empty;
+	// git sends its credential so.
+	Basic string
 	// Status is the answer's status; 0 while unanswered.
 	Status int
 	// ErrorType is the error_type of an error answer.
@@ -74,14 +80,17 @@ type Request struct {
 type Hub struct {
 	addr string
 
-	mu       sync.Mutex
-	srv      *http.Server
-	ln       net.Listener
-	quit     chan struct{}
-	ready    []int
-	tokens   map[string]*Token // by PAT
-	nextID   int
-	requests []Request
+	mu         sync.Mutex
+	srv        *http.Server
+	ln         net.Listener
+	quit       chan struct{}
+	ready      []int
+	tokens     map[string]*Token // by PAT
+	nextID     int
+	requests   []Request
+	repos      map[string]*Repository  // by path, /git/<org>/<slug>.git
+	policies   map[string]*policyState // by workspace slug
+	workspaces map[string]*Workspace   // by slug
 }
 
 // New starts a fake hub on a loopback address and stops it when the test
@@ -149,6 +158,11 @@ func (h *Hub) serve(ln net.Listener) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /readyz", h.readyz)
 	mux.HandleFunc("GET /api/v1/user/tokens/{token_id}", h.userToken)
+	mux.HandleFunc("/git/", h.gitEndpoint)
+	mux.HandleFunc("GET /api/v1/workspaces/{slug}", h.getWorkspace)
+	mux.HandleFunc("POST /api/v1/workspaces/{slug}/sync", h.syncWorkspace)
+	mux.HandleFunc("GET /api/v1/workspaces/{slug}/policy", h.getPolicy)
+	mux.HandleFunc("PUT /api/v1/workspaces/{slug}/policy", h.putPolicy)
 	mux.HandleFunc("/api/v1/", h.unknownRoute)
 	srv := &http.Server{Handler: h.logged(mux)}
 	h.mu.Lock()
@@ -241,8 +255,9 @@ type entryKey struct{}
 func (h *Hub) logged(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		_, basic, _ := r.BasicAuth()
 		h.mu.Lock()
-		h.requests = append(h.requests, Request{Method: r.Method, Path: r.URL.Path, Bearer: bearer})
+		h.requests = append(h.requests, Request{Method: r.Method, Path: r.URL.Path, Bearer: bearer, Basic: basic})
 		idx := len(h.requests) - 1
 		h.mu.Unlock()
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), entryKey{}, idx)))
@@ -252,15 +267,21 @@ func (h *Hub) logged(next http.Handler) http.Handler {
 // answer notes the answer in the log before any of it reaches the client,
 // so that a client that read the answer finds it logged.
 func (h *Hub) answer(w http.ResponseWriter, r *http.Request, status int, errorType string, body any) {
+	h.note(r, status, errorType)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(body)
+}
+
+// note enters the answer's status and error type in the request's log
+// entry.
+func (h *Hub) note(r *http.Request, status int, errorType string) {
 	if idx, ok := r.Context().Value(entryKey{}).(int); ok {
 		h.mu.Lock()
 		h.requests[idx].Status = status
 		h.requests[idx].ErrorType = errorType
 		h.mu.Unlock()
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body)
 }
 
 // fail answers Parley's error envelope. The error's name is in both code
