@@ -1,0 +1,260 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "08",
+  "spec_name": "health_and_publishing",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/health/... ./internal/publish/... ./internal/inbox/... ./internal/hub/... ./internal/hubtest/... ./internal/cli/... ./internal/daemon/... -count=1"
+  },
+  "dependencies": [
+    {
+      "spec": "01",
+      "reason": "uses the store and its migrations, the hub client with its typed error and `Available`, the fake hub `internal/hubtest` and the e2e helper, and adds the revert and the push to the hub client"
+    },
+    {
+      "spec": "02",
+      "reason": "runs the health command through `workspace.Service.RunHealth`, sets `red`, `held` and `green` with `SetState`, and syncs through the hub client's `Sync`"
+    },
+    {
+      "spec": "03",
+      "reason": "moves items with `Transition`, writes thread entries with `Append`, declares the kinds `main_red` and `origin` and their handlers in the inbox's registry, adds `urgent` to its decisions, and calls `Notify`"
+    },
+    {
+      "spec": "04",
+      "reason": "registers the steps of `verifying` and `publishing` with `Scheduler.RegisterStep`, asks for repairs in `sched.ClassRepair`, uses `Paused`, `OnResume` and `Wake`, and reads an item's tokens from the session table"
+    },
+    {
+      "spec": "05",
+      "reason": "reads the item's change with `change.Service.Get` and has the item's `plan` decision opened again with `plan.Service.Reopen` and the failure's output"
+    },
+    {
+      "spec": "06",
+      "reason": "runs a repair as an item through `Rework` and `SetClass` of `internal/impl`, adds `UsePackageOf` to it, and reports the three checks on a reverting change with the hub client's `ReportCheck`"
+    },
+    {
+      "spec": "07",
+      "reason": "marks the repair item with `SetRepair`, lands reverting changes with `LandChange`, asks for their approval with `OpenApproval` and `OnApprovalAnswered`, registers `HandleSync` with `OnSyncResult` and syncs with `SyncOrigin`"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Run the health command on every landed commit and turn the workspace red",
+      "criteria": [
+        "REQ-1.1",
+        "REQ-1.2",
+        "REQ-1.3",
+        "REQ-1.4"
+      ],
+      "steps": [
+        "Add the behaviours to internal/health/verify_test.go and confirm they fail; keep the fixtures in internal/health/helpers_test.go, the one helpers file of the package: a health service over a copy of the store template of internal/store with the real item service and inbox, a recording stub of the workspace functions, a recording notifier, recording stubs of the functions of packages 05, 06 and 07 named in step 4, and a helper that walks an item to `verifying` with a landed change on the fake hub",
+        "Add to the change the hub client's `Change` of package 06 answers the members `landed` (with `sha`), `reverts` and `reverted_by` where they are missing, and let internal/hubtest seed a change as landed with a commit of the workspace's repository",
+        "Add internal/health with a store migration registered with internal/store: incidents (id, workspace, item or none, the commit, the phase `repairing`, `reverting`, `main_red` or `closed`, the reason, the output of each failed health command, the commits tried with their results, the repair item with what was already asked of it, the reverting changes with their stage and landed commits, the open `main_red` decision), the tips that await a health command, and the items that waited while their workspace was red",
+        "Construct the service with health.New from small interfaces declared in internal/health, each holding only the methods used, so that tests use stubs and daemon.Run passes the real services: the workspace functions `Get`, `RunHealth` and `SetState` (package 02), the item service and the inbox (package 03), `Get` of package 05's change.Service and `Reopen` of its plan.Service, `Rework`, `SetClass` and `UsePackageOf` of package 06's impl.Service, `SetRepair`, `LandChange`, `OpenApproval` and `OnApprovalAnswered` of package 07's land.Service, the hub client's `Change`, `Workspace`, `ReportCheck` and `Revert`, and a notifier; keep no package-level state",
+        "Add Service.VerifyStep(ctx, item), the step function of `verifying`: for an item that belongs to no incident and whose workspace is `green`, take the change's number from change.Service.Get and its `landed.sha` from the hub client's Change, call RunHealth with a tail of 200 lines, and on exit code 0 in time append the `health` entry and move the item to `publishing` with the item service's Transition",
+        "On another exit code or the timeout: SetState `red`, store the incident in the phase `repairing` with the commit and the tail, append `health_failed`, and call Notify once per incident with `workspace_red`, the workspace, the item and the thread's URL path; the item stays `verifying`. Add Service.Incident(slug) for the open incident of a workspace",
+        "Return an error from the step, changing nothing, when the change cannot be read or is not landed, or RunHealth returns an error instead of a result; never end the process",
+        "While the workspace is `red` and the item is neither the item nor the repair item of the open incident, run nothing for it and record that it waited; at its first call after the workspace is `green`, run the command on `head_sha` from the hub client's Workspace instead of the landed commit",
+        "Build the service in daemon.Run after the services of packages 05, 06 and 07 exist and register VerifyStep with Scheduler.RegisterStep for `verifying`",
+        "Give the e2e helper of internal/daemon/e2e_test.go a function that walks an item to `verifying` with its change landed on the fake hub, for the flows of the last task",
+        "Add internal/health with VerifyStep and the incident to docs/architecture.md"
+      ],
+      "touches": [
+        "internal/health/health.go",
+        "internal/health/verify.go",
+        "internal/health/verify_test.go",
+        "internal/health/helpers_test.go",
+        "internal/hub",
+        "internal/hubtest",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/architecture.md"
+      ],
+      "done_when": [
+        "`go test ./internal/health/... -count=1` passes"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Start one repair item for a red workspace and verify what it landed",
+      "criteria": [
+        "REQ-2"
+      ],
+      "steps": [
+        "Add the behaviours to internal/health/repair_test.go and confirm they fail",
+        "New in package 06's internal/impl, added here: `(*impl.Service).UsePackageOf(ctx, item, of int) error`, which stores for the item the package directory package 06 resolves for the item `of` (its source's directory for an imported package, the directory of package 05's kept text otherwise), so that the implementing, gate and review steps of package 06 work on that package for an item that has no source package and no plan; cover it in package 06's test file of the implementing step with a linked item that is implemented as a rework of its parent's package",
+        "Continue VerifyStep for the item of an incident in the phase `repairing` that has no repair item: create it with the item service's CreateLinked (kind `defect`, the text `Repair main after change <ref>: the health command failed on <commit>` followed by the tail) and store its number with the incident in the same call, before anything else",
+        "Then, each recorded with the incident when it succeeded so that a repeated call asks only for what is missing: UsePackageOf(repair, item), SetClass(repair, sched.ClassRepair), land's SetRepair(repair, true), Rework(repair, one finding of the source `health` with the text and the tail as Output), Transition of the repair item from `new` to `ready`, and the `repair` entry with the unread mark in the thread of the item whose landing failed",
+        "From there packages 06 and 07 drive the repair item as any item: a fork and a change of its own, the implementer as a rework, the gate, the review and the landing, which the repair mark lets through although the workspace is `red`. The step of the item whose landing failed returns nil while the repair item is on its way",
+        "At each call of that step, read the repair item: when it waits on a decision of a kind other than `approval`, close the decision with the inbox's Close and the reason `repair ended; the landing is reverted` and abandon the repair item with the item service's Abandon; when it is `abandoned`, by this or by the person, store the reason with the incident (`session failed twice`, `review disagreement`, `repair stopped: <kind>`, `repair abandoned`) for the revert of the next task",
+        "Let VerifyStep, called for a repair item in `verifying`, take the incident it belongs to: read the `landed.sha` of its change, run RunHealth on it with a tail of 200 lines, and add the commit and its result to the incident's commits tried",
+        "On exit code 0 in time: SetState `green`, SetRepair(repair, false), close the incident, append `health` and `workspace_green` to the thread of the item whose landing failed, and move both items to `publishing`; a failed command stores its output and leaves the incident to the next task",
+        "Serialise the two steps of one incident with a lock per incident, so that the item's step and the repair item's step never advance it at once",
+        "Add the repair item, UsePackageOf and what ends a repair to docs/architecture.md"
+      ],
+      "touches": [
+        "internal/health/repair.go",
+        "internal/health/repair_test.go",
+        "internal/health/verify.go",
+        "internal/health/helpers_test.go",
+        "internal/impl",
+        "docs/architecture.md"
+      ],
+      "done_when": [
+        "`go test ./internal/health/... ./internal/impl/... -count=1` passes"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Revert a landing the repair did not heal, and ask when the branch stays unhealthy",
+      "criteria": [
+        "REQ-1.5",
+        "REQ-3"
+      ],
+      "steps": [
+        "Add the behaviours to internal/health/revert_test.go and internal/health/mainred_test.go, the urgent cases to internal/inbox/decision_test.go, internal/inbox/routes_test.go and internal/cli/inbox_test.go, and confirm they fail",
+        "Add `Revert(ctx, slug, number)` to the hub client of internal/hub, sent with the worker credential and no body, answering the reverting change or Parley's error as the typed error of package 01 with its `details`; add the revert route to internal/hubtest: a landed change gets a reverting change on a branch `revert/<number>` at version 1 whose landing undoes the original's commit in the repository, with scriptable refusals",
+        "Move an incident to the phase `reverting` when its repair ended or the health command failed on the repair item's landed commit, storing the reason, and append the `revert` entry once with the unread mark",
+        "Revert in a fixed order, each stage stored before the next begins: the repair item's change where it landed, its checks, its land; then the item's change, its checks, its land. Take `409 already_reverted` as the change `error.details.reverted_by` names",
+        "For each reverting change call the hub client's ReportCheck three times (`nightshift-gate`, `nightshift-review`, `nightshift-release`) with the status `passed`, the change's version and the summary `revert after failed health command on <the landed commit of the item whose landing failed>`, then package 07's LandChange with the workspace, the change and the version; store `LandedSHA` of an outcome `landed`; return an error of LandChange from the step",
+        "New in package 03's internal/inbox, added here: `Urgent` on OpenRequest and on the stored decision (a migration), `SetUrgent(ctx, decision, urgent)`, the member `urgent` of every decision answered, and the order of the open decisions of GET /api/v1/decisions with the urgent ones first; check that `nightshift inbox` prints the order served and change it where it sorts by itself",
+        "On the outcome `pending_approval` call package 07's OpenApproval with the item whose landing failed, the reverting change, its version, the outcome's requirements and the owner `revert`, mark the decision with SetUrgent and store its id; register with OnApprovalAnswered for the owner `revert` a function that stores the option with the incident and wakes the scheduler: after `approve` the step asks the same land again",
+        "After the last land run RunHealth on its commit; on exit code 0 in time SetState `green`, SetRepair(repair, false), append `health` and `workspace_green`, move a repair item that is `verifying` to `awaiting_approval` and abandon it, call plan.Service.Reopen with the reason `reverted after failed health command` and the two pieces of evidence, and close the incident when Reopen returned nil; for plan.ErrNotFound move the item to `awaiting_approval` with Transition, write the unread `revert` entry the criterion gives and close the incident",
+        "Declare the decision kind `main_red` with the inbox's RegisterKind: one option, `resume` (`runs the health command once more on the main branch`), no comment required",
+        "On a failed health command after the reverts, a refused revert, a land outcome other than `landed` and `pending_approval`, or an approval answered `reject` or `abandon`: move the incident to `main_red` and open the decision on the item's thread with the question, the two pieces of evidence and `blocks` the criteria give, storing its id with the incident so that a second call opens none",
+        "Make every stage safe to repeat after a restart: read the incident from the store at each call of a step and go on from its phase and stage, asking the hub for nothing the record says is done",
+        "Describe the member `urgent` and the order of the decision list in docs/api.md, the order of `nightshift inbox --action` in docs/cli.md, and the revert, the kind `main_red`, `Urgent` and `SetUrgent` in docs/architecture.md"
+      ],
+      "touches": [
+        "internal/health/revert.go",
+        "internal/health/revert_test.go",
+        "internal/health/mainred.go",
+        "internal/health/mainred_test.go",
+        "internal/health/helpers_test.go",
+        "internal/inbox",
+        "internal/inbox/decision_test.go",
+        "internal/inbox/routes_test.go",
+        "internal/cli/inbox_test.go",
+        "internal/hub",
+        "internal/hubtest",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md"
+      ],
+      "done_when": [
+        "`go test ./internal/health/... ./internal/inbox/... ./internal/cli/... -count=1` passes"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Push the default branch to origin and finish the item",
+      "criteria": [
+        "REQ-4"
+      ],
+      "steps": [
+        "Add the behaviours to internal/publish/push_test.go and confirm they fail; keep the fixtures in internal/publish/helpers_test.go: a publish service over a copy of the store template with the real item service, inbox and session table, a recording stub of the workspace functions, a stub of the health service's TipPending and VerifyTip, a recording notifier and an injected clock",
+        "Add `Push(ctx, slug, branch)` to the hub client of internal/hub, sent with the worker credential and without `force`, answering `{branch, sha, result}` or the typed error; add to internal/hubtest a push route with an origin head per workspace (a push moves it to the hub's head) and scriptable answers, and a request log tests read",
+        "Add internal/publish with a store migration: per workspace the count of failed pushes in a row with the time of the next try, and the same for syncs; construct the service with publish.New from interfaces as internal/health does, with the interval (default 1 minute) and the number of further tries (default 5) as parameters",
+        "Add to the session service of internal/session a read of an item's tokens: the sum of the input, cache-creation and output tokens of every session of the item in the session table",
+        "Add Service.PublishStep(ctx, item), the step function of `publishing`: return nil without a request while the workspace is `red` or `held`, an item of it is `verifying`, the health service reports a pending tip, the hub is not available to the worker token, or the time of the next try has not come",
+        "Otherwise push the workspace's default branch (from the hub client's Workspace); on `pushed` or `up_to_date` set the count to zero, append `push`, move the item to `done` and append `published` with the change's number, its `landed.sha` and the item's tokens, with the unread mark; send nothing about the fork",
+        "On `409 non_fast_forward` call the service's own Sync for the workspace, which runs package 07's SyncOrigin (the next task gives it the handling of every result; until then it passes `up_to_date`, `ahead` and `created` and refuses the others with an error) and, when it returned nil, push once more; leave the item `publishing` on a second `non_fast_forward`",
+        "Declare the decision kind `origin` with RegisterKind: one option, `retry` (`syncs from origin and pushes again`), no comment required. Add the function that holds a workspace: SetState `held`, Notify `workspace_held`, Open an `origin` decision on the given thread with the question, the evidence and `blocks`, and nothing at all when the workspace has an open `origin` decision already",
+        "Hold the workspace, with the decision on the item's thread, for every error answer of the push other than `non_fast_forward`, `origin_unreachable`, `upstream_error` and `origin_timeout`",
+        "For those three: add one to the count and store the time of the next try; at the sixth in a row hold the workspace with that error as the reason and set the count to zero",
+        "Build the service in daemon.Run after the health service and register PublishStep with Scheduler.RegisterStep for `publishing`",
+        "Add internal/publish with PublishStep, the kind `origin` and the hub client's Push to docs/architecture.md"
+      ],
+      "touches": [
+        "internal/publish/publish.go",
+        "internal/publish/push.go",
+        "internal/publish/push_test.go",
+        "internal/publish/helpers_test.go",
+        "internal/session",
+        "internal/hub",
+        "internal/hubtest",
+        "internal/daemon/run.go",
+        "docs/architecture.md"
+      ],
+      "done_when": [
+        "`go test ./internal/publish/... -count=1` passes"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Handle every result of a sync from origin",
+      "criteria": [
+        "REQ-5"
+      ],
+      "steps": [
+        "Add the behaviours to internal/publish/sync_test.go and confirm they fail; make the sync route of internal/hubtest scriptable where it is not: the result, `local_sha` and `origin_sha` of the default branch, a missing branch, and an error answer",
+        "Add Service.HandleSync(ctx, r), where r is package 07's land.SyncResult{Workspace, Branch, Result, LocalSHA, OriginSHA, Err}, and Service.Sync(ctx, slug), which calls package 07's land.Service.SyncOrigin and hands its result, or its error as Err, to HandleSync",
+        "Return nil and change nothing for `up_to_date`, `ahead` and `created`",
+        "Add to internal/health Service.VerifyTip(ctx, slug, commit), TipPending(slug) and Recover(ctx): VerifyTip stores the tip as pending, runs RunHealth on it with a tail of 200 lines, and on exit code 0 in time removes the mark and appends `health` to the thread WorkspaceThread gives; Recover, called in daemon.Run before the scheduler starts, runs VerifyTip for every mark left in the store",
+        "On another exit code or the timeout VerifyTip sets the workspace `red`, notifies `workspace_red` without an item, stores an incident without an item in the phase `main_red`, opens the `main_red` decision on the workspace's thread with the output and the tip, removes the mark and returns an error; it creates no repair item and asks for no revert",
+        "For `fast_forward` HandleSync calls VerifyTip with `local_sha` and returns what it returns",
+        "For `diverged` hold the workspace through the function of the task before, with the decision on the workspace's thread, the question the criterion gives and the evidence `hub head` and `origin head`, and return an error",
+        "For a failed sync (Err set, the result `reset` or `name_conflict`, or no entry for the default branch) return an error with the reason; when no try is pending for the workspace, add one to the count and start a timer for the interval that calls Sync again (package 07 itself does not sync a workspace again for 1 minute after a sync that did not pass); ignore a failure handed over while a try is pending; at the sixth failure in a row hold the workspace with the reason, the decision on the workspace's thread, and set the count to zero; a try that succeeds sets it to zero",
+        "Stop the timers in a named shutdown step of package 01, and at start begin a try for every workspace whose stored count is above zero",
+        "Register HandleSync with package 07's `land.Service.OnSyncResult` in daemon.Run",
+        "Add HandleSync, Sync, VerifyTip and the hook to docs/architecture.md"
+      ],
+      "touches": [
+        "internal/publish/sync.go",
+        "internal/publish/sync_test.go",
+        "internal/publish/helpers_test.go",
+        "internal/health/tip.go",
+        "internal/health/mainred.go",
+        "internal/hubtest",
+        "internal/daemon/run.go",
+        "docs/architecture.md"
+      ],
+      "done_when": [
+        "`go test ./internal/publish/... ./internal/health/... -count=1` passes"
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Carry out the answers `resume` and `retry`, and prove the flows end to end",
+      "criteria": [
+        "REQ-6"
+      ],
+      "steps": [
+        "Add the behaviours to internal/health/mainred_test.go and internal/publish/decision_test.go and confirm they fail",
+        "Add health.Service.Resume and register it with the inbox's OnAnswer for `main_red` and `resume`: read `head_sha` with the hub client's Workspace and run RunHealth on it with a tail of 200 lines; a hub or command error is returned, so that the inbox calls the handler again",
+        "On exit code 0 in time: SetState `green`, close the incident, append `health` and `workspace_green` to the decision's thread; for an incident with an item, read whether the reverting change of the item's change has landed and call plan.Service.Reopen as after a revert, or move the item to `publishing`; a repair item still `verifying` is abandoned as after a revert where its change's revert has landed and moved to `publishing` where it has not, and its repair mark is removed",
+        "On another exit code or the timeout: add the commit and its result to the incident's commits tried and open a new `main_red` decision on the same thread with the new output, storing its id with the incident",
+        "Add publish.Service.Retry and register it with OnAnswer for `origin` and `retry`: call package 07's SyncOrigin and judge the default branch's result without the timed tries (pass `up_to_date`, `ahead`, `created` and a `fast_forward` whose VerifyTip returned nil), then push the default branch once",
+        "When both succeeded: SetState `green`, append `push` and `workspace_green` to the decision's thread, set both counts to zero and call the scheduler's Wake. When one did not: open a new `origin` decision on the same thread with the new reason, the workspace staying `held` and no notification sent; an unhealthy tip leaves the workspace `red` as VerifyTip set it",
+        "Record with each decision of the two kinds that its answer was carried out, in the same store transaction as the effect's last write, and return nil at once from a handler called for such a decision",
+        "For a decision whose item Scheduler.Paused reports as paused, store the decision's id and return nil; register one function with Scheduler.OnResume in each package that carries the stored answers of the resumed item out, reading each answer from the inbox",
+        "Add the three flows of the execution paths to internal/daemon/e2e_test.go, with the helper of the first task, the fake `claude` helper of package 04, the fake `speca` helper of package 06, a faux provider for the reviewer, a notification script and the fake hub's revert, push and sync routes",
+        "Add the kinds `main_red` and `origin` with their one option each and what an answer does to docs/api.md, a paragraph on verifying and publishing to README.md, and the handlers to docs/architecture.md; say in docs/cli.md and docs/configuration.md that this package adds no command and no key; run `make doc`",
+        "Name the additions to the shared helpers under Repository Specifics in .specs/steering.md: the fake hub's revert and push routes, its scriptable sync and its origin head, and the e2e helper that walks an item to `verifying`"
+      ],
+      "touches": [
+        "internal/health/mainred.go",
+        "internal/health/mainred_test.go",
+        "internal/publish/decision.go",
+        "internal/publish/decision_test.go",
+        "internal/publish/helpers_test.go",
+        "internal/health/helpers_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/configuration.md",
+        "docs/architecture.md",
+        "docs/generated",
+        "README.md",
+        ".specs/steering.md"
+      ],
+      "done_when": [
+        "`go test ./internal/health/... ./internal/publish/... ./internal/daemon/... -count=1` passes",
+        "`make check` passes"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,812 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "02",
+  "spec_name": "workspaces_and_policy",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "Registering a workspace",
+      "rationale": "A workspace that cannot follow origin or whose main branch is already unhealthy would fail every item nightshift drives in it.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `POST /api/v1/workspaces` with `{\"slug\", \"health_command\", \"health_timeout\"?, \"daily_tokens\"?, \"adopt_policy\"?}` and all five registration checks pass",
+          "action": "run the checks in the order owner, `sync_enabled`, sync, policy, health command, each with the worker token, then store the workspace with the state `green`",
+          "contract": "status 201 with body `{\"slug\", \"state\": \"green\", \"health_command\", \"health_timeout\", \"daily_tokens\", \"tokens_used_today\": 0, \"created_at\", \"policy_revision\": null, \"warning\": string or null}`; `health_timeout` is the duration as Go prints it (`30m0s`); the hub saw, in this order, one `GET /api/v1/workspaces/{slug}`, one `POST …/sync`, one `GET …/policy` and one fetch over `/git/`; the health command ran once, in a clone at the `local_sha` the sync reported for the default branch",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) holding the workspace `demo`, owned by the worker token's user, with a git repository of one commit, `sync_enabled` on, a sync result `up_to_date` and a policy whose `default` requires the three checks with `fresh_checks`",
+              "a workspace service over a store copied from the template and a clones directory in a temporary directory"
+            ],
+            "pseudocode": "new file internal/workspace/register_test.go, through the router: r = post('/api/v1/workspaces', {slug: 'demo', health_command: 'test -f README.md && git rev-parse HEAD > \"$OUT\"'}); assert r.status == 201; assert r.json.state == 'green'; assert r.json.policy_revision == null; assert the fake hub's request log is [GET workspace, POST sync, GET policy, git fetch]; assert the file $OUT holds the sync's local_sha; assert service.Get('demo') returns the stored workspace"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "unwanted",
+          "condition": "the hub answers the read of the workspace with `404`, or the workspace object's `access` is not `owner`",
+          "action": "refuse the registration without running a later check",
+          "contract": "status 409 with body `{\"error_type\": \"conflict\", \"message\"}` where `message` is `workspace not found` for the 404 and `not the owner of <slug>` otherwise; no workspace is stored; the hub saw no sync request",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub and service of the registration test above; each row changes one thing on the fake hub"
+            ],
+            "pseudocode": "in internal/workspace/register_test.go, one table for every way a registration is refused before the health command; these rows: {no such workspace -> 'workspace not found', access 'member' -> 'not the owner of demo', access 'admin' -> 'not the owner of demo'}: r = post('/api/v1/workspaces', body); assert r.status == 409; assert r.json.error_type == 'conflict'; assert r.json.message == want; assert service.List() is empty; assert the fake hub saw no request after the one that decided the row"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "unwanted",
+          "condition": "the workspace's setting `sync_enabled` is `false`, or the sync is answered with an error, or it reports the default branch with a result other than `up_to_date`, `fast_forward` or `created`, or does not report it",
+          "action": "refuse the registration without running a later check",
+          "contract": "status 409 `conflict` with `message`: `sync is disabled for <slug>` (and no sync request sent); `default branch is ahead of origin` for `ahead`; `default branch has diverged from origin` for `diverged`; `default branch: sync reported <result>` for another result; `default branch <name> is not on origin` for a missing entry; `hub answered <status> <error_type>: <message>` for an error of the hub; no workspace is stored and no policy request is sent",
+          "check": {
+            "same_as": "REQ-1.2"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "unwanted",
+          "condition": "the health command exits with a code other than 0, or has not ended when the health timeout has passed, or cannot be started, or the workspace cannot be cloned at the tip of its default branch",
+          "action": "refuse the registration, ending the command and every process it started when it timed out",
+          "contract": "status 409 `conflict` with `message` `health command exited <N>`, `health command timed out`, `health command could not be started: <error>` or `cannot clone <slug>: <error>`, and for the first two the member `output`, a list of the last 50 lines the command wrote to standard output and standard error; no workspace is stored; no `PUT …/policy` is sent, also with `adopt_policy: true`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub and service of the registration test above"
+            ],
+            "pseudocode": "in internal/workspace/register_test.go, a table over {health_command 'seq 1 60; exit 3' -> 'health command exited 3' and output == lines 11..60, health_command 'echo started; sleep 60' with health_timeout '100ms' -> 'health command timed out' and output == ['started'] and the answer arrives within 5s, the fake hub's git endpoint answering 500 -> message starts with 'cannot clone demo: '}, each also with adopt_policy true against a policy that lacks the checks: assert r.status == 409; assert service.List() is empty; assert the fake hub saw no PUT of the policy"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "unwanted",
+          "condition": "the body of `POST /api/v1/workspaces` is not a JSON object, or has an empty `slug` or an empty `health_command`, or a `health_timeout` that is not a Go duration greater than zero, or a `daily_tokens` that is not an integer of 1 or more",
+          "action": "reject the request without asking the hub",
+          "contract": "status 400 with body `{\"error_type\": \"invalid_request\", \"message\"}` naming the member; no workspace is stored; the hub saw no request",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/workspace/register_test.go, through the router, a table over the bodies {'[]', slug '', no health_command, health_timeout 'soon', health_timeout '0s', health_timeout '-1m', daily_tokens 0, daily_tokens -5, daily_tokens 'many'}: r = post('/api/v1/workspaces', body); assert r.status == 400; assert r.json.error_type == 'invalid_request'; assert the fake hub's request count == 0"
+          }
+        },
+        {
+          "id": "REQ-1.6",
+          "pattern": "unwanted",
+          "condition": "a registration names a slug that is registered already, or one whose registration is still running",
+          "action": "refuse the registration without asking the hub and leave the stored workspace unchanged",
+          "contract": "status 409 `conflict` with `message` `<slug> is registered already` or `registration of <slug> is in progress`; of two registrations of one slug sent at once exactly one is answered 201",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub and service of the registration test above; a health command that waits for a file the test creates"
+            ],
+            "pseudocode": "in internal/workspace/register_test.go: start post(demo) in a goroutine; once the health command runs, r2 = post(demo); assert r2.status == 409 and r2.json.message == 'registration of demo is in progress'; create the file; assert the first answer is 201; r3 = post(demo with another health_command); assert r3.status == 409 and r3.json.message == 'demo is registered already'; assert service.Get('demo').HealthCommand is the first one"
+          }
+        },
+        {
+          "id": "REQ-1.7",
+          "pattern": "ubiquitous",
+          "action": "for any registration that omits `health_timeout` or `daily_tokens`, store 30 minutes and the service's `DefaultDailyTokens` (50,000,000 unless another package set it) respectively, as they are at the time of the registration",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/workspace/register_test.go, a table over {both omitted -> '30m0s' and 50000000, DefaultDailyTokens set to 7 before -> 7, health_timeout '90s' and daily_tokens 12 -> '1m30s' and 12}: r = post('/api/v1/workspaces', body); assert r.json.health_timeout and r.json.daily_tokens; set DefaultDailyTokens to 9 afterwards; assert service.Get(slug).DailyTokens is unchanged"
+          }
+        },
+        {
+          "id": "REQ-1.8",
+          "pattern": "unwanted",
+          "condition": "a route of this package that asks the hub (registration, show, protect, unprotect) is requested while the hub client reports the worker credential as not available, or a request to the hub fails with a connection error or a timeout",
+          "action": "answer without storing or writing anything",
+          "contract": "status 503 with body `{\"error_type\": \"hub_unavailable\", \"message\"}`; no workspace is stored and no rule is recorded",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the service over a hub client whose fake hub was stopped, with one workspace inserted directly into the store"
+            ],
+            "pseudocode": "in internal/workspace/register_test.go, a table over {POST /api/v1/workspaces, GET /api/v1/workspaces/demo, POST /api/v1/workspaces/demo/policy/rules, DELETE /api/v1/workspaces/demo/policy/rules/x}: assert r.status == 503; assert r.json.error_type == 'hub_unavailable'; and GET /api/v1/workspaces answers 200 with demo"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "The policy's three checks and its sensitive rules",
+      "rationale": "A change lands without the person only because the hub refuses it until nightshift's own checks passed on exactly that version.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "ubiquitous",
+          "action": "for any policy document, name as lacking the checks the `default` requirement and every rule whose requirement has `block` false, where the requirement's `checks` do not hold all of `nightshift-gate`, `nightshift-review` and `nightshift-release` or its `fresh_checks` is false, in the order `default` first and then the rules in document order, and never a rule whose requirement blocks",
+          "contract": "`policy.Missing(document)` returns the names, `default` for the default requirement; an empty list means the policy requires the three checks",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/policy/policy_test.go, a table over documents {revision 0 with no rules -> ['default'], default complete and no rules -> [], default complete and a rule with two of the three -> [that rule], a rule with all three and fresh_checks false -> [that rule], a blocking rule with no checks -> not named, default and two rules lacking -> ['default', rule1, rule2] in document order, a rule naming the three among other checks with fresh_checks true -> not named}: assert policy.Missing(doc) == want"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "unwanted",
+          "condition": "a registration without `adopt_policy` finds that the workspace's policy lacks the three checks in `default` or in a rule that does not block",
+          "action": "refuse the registration without running the health command and without writing the policy",
+          "contract": "status 409 `conflict` with `message` `policy of <slug> does not require nightshift's checks in: <names joined by \", \">; run again with --adopt-policy`; no workspace is stored; the hub saw no `PUT …/policy` and no fetch over `/git/`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub and service of the registration test, with a policy whose `default` is empty and which has the rules `docs` (no checks) and `secrets` (block)"
+            ],
+            "pseudocode": "in internal/workspace/register_test.go: r = post('/api/v1/workspaces', {slug: 'demo', health_command: 'true'}); assert r.status == 409; assert r.json.message == \"policy of demo does not require nightshift's checks in: default, docs; run again with --adopt-policy\"; assert the fake hub's policy revision is unchanged; assert no git fetch was seen; assert service.List() is empty"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "event_driven",
+          "condition": "a registration with `adopt_policy: true` finds the policy lacking the three checks and the health command has exited 0",
+          "action": "append the missing ones of `nightshift-gate`, `nightshift-review` and `nightshift-release`, in that order, to the `checks` of every requirement named as lacking and set its `fresh_checks` to true, changing no other member and no blocking rule, write the document with `PUT …/policy` and `If-Match` set to the revision it read, and then store the workspace",
+          "contract": "status 201 whose `policy_revision` is the revision the hub answered; the hub's policy afterwards passes the check of REQ-2.1, keeps every rule in its place with its `paths`, `exclude`, `targets`, `approvals`, `approvers` and the checks it had; a registration with `adopt_policy: true` of a policy that lacks nothing sends no `PUT` and answers `policy_revision: null`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub with the policy of the refusal test above, at revision 2, the rule `docs` naming the check `spell`"
+            ],
+            "pseudocode": "in internal/workspace/register_test.go: r = post('/api/v1/workspaces', {slug: 'demo', health_command: 'true', adopt_policy: true}); assert r.status == 201; assert r.json.policy_revision == 3; p = fakeHub.Policy('demo'); assert p.default.checks == the three and p.default.fresh_checks; assert p.rules[docs].checks == ['spell', the three]; assert p.rules[secrets] is unchanged; assert the PUT carried If-Match 2; assert policy.Missing(p) is empty. Second case, a complete policy with adopt_policy true: assert no PUT and policy_revision == null. The pure step in internal/policy/policy_test.go: assert policy.Missing(policy.Adopt(doc)) is empty for every document of the table above"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "unwanted",
+          "condition": "the hub answers the adopting `PUT …/policy` with `412 revision_mismatch`",
+          "action": "refuse the registration and store nothing",
+          "contract": "status 409 `conflict` with `message` `policy changed meanwhile; run the command again`; no workspace is stored; the write is not sent a second time",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub replaces the policy of `demo` while the health command runs"
+            ],
+            "pseudocode": "in internal/workspace/register_test.go: the health command signals the test, which calls fakeHub.ReplacePolicy; assert r.status == 409; assert r.json.message == 'policy changed meanwhile; run the command again'; assert the fake hub saw exactly one PUT; assert service.List() is empty"
+          }
+        },
+        {
+          "id": "REQ-2.5",
+          "pattern": "ubiquitous",
+          "action": "for any policy document, treat as sensitive the `default` requirement and every rule whose requirement has `approvals` of 1 or more or `block` true, and no other",
+          "contract": "`policy.Sensitive(document)` returns them in the order `rules` first in document order, then `default`, each with its name (`default` for the default requirement), its `paths`, its `approvals` and its `block`",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/policy/policy_test.go, a table over documents {no rules and an empty default -> [], a rule with approvals 1 -> [it], a rule with block -> [it], a rule with checks only -> [], default with approvals 2 -> [default with no paths], a mix -> the rules in document order then default}: assert policy.Sensitive(doc) == want"
+          }
+        },
+        {
+          "id": "REQ-2.6",
+          "pattern": "event_driven",
+          "condition": "a registration succeeds and the policy, as it is after an adoption, has no sensitive rule",
+          "action": "answer the registration with the warning `no path of <slug> is marked sensitive; every change lands without you`",
+          "contract": "the 201 body's `warning` is that line; it is `null` when a rule or `default` requires an approval or blocks",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/workspace/register_test.go, a table over policies {complete default only -> warning == 'no path of demo is marked sensitive; every change lands without you', plus a blocking rule -> null, plus a rule with approvals 1 and the three checks -> null}: r = post('/api/v1/workspaces', body); assert r.json.warning == want"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "Marking and unmarking sensitive paths",
+      "rationale": "The person says where they are needed in the one place the hub enforces it, without writing policy JSON by hand.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `POST /api/v1/workspaces/{slug}/policy/rules` with `{\"globs\": [string, …], \"block\"?: false, \"name\"?}` for a registered workspace",
+          "action": "read the policy, insert before every other rule one rule with the globs as `paths` and the requirement `{\"approvals\": 1, \"approvers\": [\"owner\"], \"checks\": [\"nightshift-gate\", \"nightshift-review\", \"nightshift-release\"], \"fresh_checks\": true}`, write the document with `If-Match` set to the revision it read, and record the rule's name for that workspace in its store",
+          "contract": "status 201 with body `{\"rule\": {\"name\", \"paths\", \"require\"}, \"revision\": <the revision the hub answered>}`; the hub's policy holds the rule at index 0 and every earlier rule after it, unchanged and in the same order",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub whose workspace `demo` has a policy at revision 3 with the rule `docs`",
+              "a service with `demo` inserted directly into its store"
+            ],
+            "pseudocode": "new file internal/workspace/protect_test.go, through the router: r = post('/api/v1/workspaces/demo/policy/rules', {globs: ['deploy/**', 'ops/*.yaml']}); assert r.status == 201; assert r.json.revision == 4; assert r.json.rule.name == 'nightshift-1'; p = fakeHub.Policy('demo'); assert p.rules[0] == {name: 'nightshift-1', paths: both globs, require: approvals 1, approvers ['owner'], the three checks, fresh_checks true, block false}; assert p.rules[1].name == 'docs'; assert the PUT carried If-Match 3"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "optional",
+          "condition": "the request to protect carries `\"block\": true`",
+          "action": "write the rule with the requirement `{\"block\": true}` in place of the approval and the checks",
+          "contract": "the hub's rule at index 0 has `block` true, `approvals` 0 and no checks; the answer's `rule.require.block` is true",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/workspace/protect_test.go: r = post('/api/v1/workspaces/demo/policy/rules', {globs: ['deploy/secrets/**'], block: true}); assert r.status == 201; assert fakeHub.Policy('demo').rules[0].require == {approvals: 0, approvers: ['owner'], checks: [], fresh_checks: false, block: true}"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "ubiquitous",
+          "action": "for any rule it writes, use the `name` the request gives, and without one the name `nightshift-<n>` where n is one greater than the highest number among the policy's rules named `nightshift-<number>`, and 1 when there is none",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/policy/policy_test.go, a table over the rule names a document holds {none -> 'nightshift-1', ['nightshift-1'] -> 'nightshift-2', ['nightshift-1', 'nightshift-7', 'docs'] -> 'nightshift-8', ['nightshift-x', 'nightshift-02'] -> 'nightshift-3'}: assert policy.NextName(doc) == want. In internal/workspace/protect_test.go: post with name 'deploy' writes a rule named 'deploy'"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "unwanted",
+          "condition": "a glob of the request is empty, longer than 255 characters or starts with `/`, or the list of globs is empty, or the hub answers the write with `400 invalid_policy` whose `details.field` begins with `paths`",
+          "action": "refuse the protection, sending no write to the hub for a glob it refused itself",
+          "contract": "status 400 with body `{\"error_type\": \"invalid_glob\", \"message\": \"glob \\\"<glob>\\\" is refused: <reason>\"}`, the hub's message as the reason where the hub refused; the hub's policy is unchanged and no rule is recorded",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/workspace/protect_test.go, a table over globs {[''], ['/etc/**'], [256 characters], [] -> 400 invalid_glob and the fake hub saw no PUT; ['a[b'] which the fake hub is scripted to refuse with invalid_policy details.field 'paths[0]' -> 400 invalid_glob}: assert r.status == 400; assert r.json.error_type == 'invalid_glob'; assert the fake hub's policy revision is unchanged; assert a later unprotect of the name answers 'not a rule nightshift wrote'"
+          }
+        },
+        {
+          "id": "REQ-3.5",
+          "pattern": "unwanted",
+          "condition": "the hub answers the write of a protection or of an unprotection with `412 revision_mismatch`",
+          "action": "refuse the request without sending the write again and leave its record of rules unchanged",
+          "contract": "status 409 with body `{\"error_type\": \"conflict\", \"message\": \"policy changed meanwhile; run the command again\"}`; the hub saw exactly one `PUT`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub replaces the policy between the service's read and its write, through a hook on its GET"
+            ],
+            "pseudocode": "in internal/workspace/protect_test.go, a table over {protect, unprotect of a recorded rule}: assert r.status == 409; assert r.json.message == 'policy changed meanwhile; run the command again'; assert the fake hub saw one PUT; for protect assert the name is not recorded, for unprotect assert it still is"
+          }
+        },
+        {
+          "id": "REQ-3.6",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `DELETE /api/v1/workspaces/{slug}/policy/rules/{name}` for a rule that the store records as written by a protection of that workspace",
+          "action": "read the policy, write it without that rule with `If-Match` set to the revision it read, and forget the record; where the policy no longer holds the rule, forget the record and write nothing",
+          "contract": "status 200 with body `{\"revision\": <the policy's revision after the request>}`; every other rule is unchanged and in the same order; a second request for the same name is answered as for a rule nightshift did not write",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/workspace/protect_test.go: protect ['deploy/**'] -> nightshift-1 at revision 4; r = delete('/api/v1/workspaces/demo/policy/rules/nightshift-1'); assert r.status == 200 and r.json.revision == 5; assert fakeHub.Policy('demo').rules names == ['docs']; assert a second delete answers 409. Second case: protect, then the fake hub drops the rule by itself; delete answers 200 with the hub's current revision and the fake hub saw no further PUT"
+          }
+        },
+        {
+          "id": "REQ-3.7",
+          "pattern": "unwanted",
+          "condition": "a request to unprotect names a rule that the store does not record as written by a protection of that workspace",
+          "action": "refuse it without asking the hub",
+          "contract": "status 409 with body `{\"error_type\": \"conflict\", \"message\": \"not a rule nightshift wrote\"}`; the hub's policy is unchanged, also when it holds a rule of that name",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/workspace/protect_test.go, a table over names {'docs' (in the policy, written by the person), 'nope' (nowhere), a rule protect wrote for another workspace, a rule protect wrote for demo before demo was removed and inserted again}: r = delete(route); assert r.status == 409; assert r.json.message == 'not a rule nightshift wrote'; assert the fake hub saw no PUT"
+          }
+        },
+        {
+          "id": "REQ-3.8",
+          "pattern": "unwanted",
+          "condition": "a request to protect gives a `name` that a rule of the policy carries already, or one that is `default`, longer than 63 characters or holds a character other than a lower-case letter, a digit, `_` or `-`",
+          "action": "refuse the protection without writing the policy",
+          "contract": "status 409 `conflict` with `message` `rule <name> exists already` for a taken name; status 400 `invalid_request` for a name outside the format; the hub saw no `PUT` and no rule is recorded",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/workspace/protect_test.go, a table over names {'docs' -> 409 'rule docs exists already', 'default' -> 400, 'Deploy' -> 400, 64 characters -> 400, 'a b' -> 400}: r = post(route, {globs: ['x/**'], name}); assert r.status and r.json.error_type; assert the fake hub saw no PUT"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "Settings, state and removal",
+      "rationale": "The person has to see what nightshift believes about a workspace and be able to change what they told it.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/workspaces/{slug}` for a registered workspace",
+          "action": "answer the workspace object with the sensitive rules of the policy as the hub holds it at that moment",
+          "contract": "status 200 with the workspace object plus `sensitive_rules`, a list of `{\"name\", \"paths\", \"approvals\", \"block\"}` in the order of REQ-2.5, empty when there is none",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub whose policy of `demo` has the rules `nightshift-1` (approvals 1, paths deploy/**), `docs` (checks only) and `secrets` (block)",
+              "a service with `demo` inserted directly into its store"
+            ],
+            "pseudocode": "new file internal/workspace/workspace_test.go, through the router: r = get('/api/v1/workspaces/demo'); assert r.status == 200; assert r.json.slug == 'demo' and r.json.state == 'green'; assert r.json.sensitive_rules == [{name: 'nightshift-1', paths: ['deploy/**'], approvals: 1, block: false}, {name: 'secrets', paths: [...], approvals: 0, block: true}]; after fakeHub.ReplacePolicy(empty): assert the next GET has sensitive_rules == []"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `PATCH /api/v1/workspaces/{slug}` with one or more of `health_command`, `health_timeout` and `daily_tokens`",
+          "action": "store the given values, leave the others, run no check and ask the hub nothing, so that the next run of the health command and the next read of the limit use them",
+          "contract": "status 200 with the workspace object carrying the new values; `service.Get(slug)` returns them; the hub saw no request",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/workspace/workspace_test.go, a table over bodies {health_command only, health_timeout '45s' only, daily_tokens 9 only, all three}: r = patch('/api/v1/workspaces/demo', body); assert r.status == 200; assert the given members changed and the others did not, in r.json and in service.Get('demo'); assert the fake hub's request count == 0"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "unwanted",
+          "condition": "the body of a `PATCH /api/v1/workspaces/{slug}` names none of the three members, an unknown member, an empty `health_command`, a `health_timeout` that is not a Go duration greater than zero, or a `daily_tokens` that is not an integer of 1 or more",
+          "action": "reject the request and change nothing",
+          "contract": "status 400 with body `{\"error_type\": \"invalid_request\", \"message\"}`; the stored workspace is as before",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/workspace/workspace_test.go, a table over bodies {'{}', {state: 'red'}, {health_command: ''}, {health_timeout: '0s'}, {daily_tokens: 0}, {daily_tokens: 1.5}}: r = patch(route, body); assert r.status == 400; assert r.json.error_type == 'invalid_request'; assert service.Get('demo') equals the workspace before"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/workspaces` or `GET /api/v1/status`",
+          "action": "report every registered workspace in the order of its slug, with `tokens_used_today` taken from the source registered with `SetTokensUsed` and 0 while none is registered, and with the members every function registered with `Decorate` adds to the workspace object",
+          "contract": "`GET /api/v1/workspaces` answers 200 `{\"workspaces\": [<workspace object>, …]}`, an empty list when none is registered; the `workspaces` member of `GET /api/v1/status` is a list of `{\"slug\", \"state\", \"tokens_used_today\"}` in the same order; neither asks the hub",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "an API server of package 01 with this package's routes and its `workspaces` status source registered; the workspaces `zeta` and `alpha` inserted directly into the store"
+            ],
+            "pseudocode": "in internal/workspace/workspace_test.go: r = get('/api/v1/workspaces'); assert slugs == ['alpha', 'zeta'] and every tokens_used_today == 0; service.SetTokensUsed(func(slug) -> 42 for 'zeta'); service.Decorate(func(slug, obj) { obj['paused'] = slug == 'alpha' }); r = get('/api/v1/workspaces'); assert zeta.tokens_used_today == 42 and alpha.paused == true; s = get('/api/v1/status'); assert s.json.workspaces == [{slug: 'alpha', state: 'green', tokens_used_today: 0}, {slug: 'zeta', state: 'green', tokens_used_today: 42}]; with an empty store assert both lists == []; assert the fake hub's request count == 0"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "event_driven",
+          "condition": "another package calls `SetState(ctx, slug, state)` with `green`, `red` or `held` for a registered workspace",
+          "action": "store the state, so that every later read of the workspace reports it, also after a restart of nightshiftd",
+          "contract": "the call returns no error; `GET /api/v1/workspaces/{slug}`, the list and the status report the new `state`; a store closed and opened again reports it",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a service over a store file in a temporary directory"
+            ],
+            "pseudocode": "in internal/workspace/workspace_test.go, a table over {red, held, green after red}: service.SetState(ctx, 'demo', state); assert service.Get('demo').State == state; assert get('/api/v1/workspaces').json.workspaces[0].state == state; close the store, open it again with a new service; assert Get('demo').State == state and its settings are as stored"
+          }
+        },
+        {
+          "id": "REQ-4.6",
+          "pattern": "unwanted",
+          "condition": "`SetState` is called with a state other than `green`, `red` or `held`, or a route or function of this package names a slug that is not registered",
+          "action": "return an error and change nothing",
+          "contract": "`SetState` with an unknown state returns an error naming the state; a function given an unregistered slug returns `workspace.ErrNotFound`; `GET`, `PATCH` and `DELETE /api/v1/workspaces/{slug}` and both routes under `…/policy/rules` answer status 404 with body `{\"error_type\": \"not_found\", \"message\": \"workspace <slug> is not registered\"}` without asking the hub",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/workspace/workspace_test.go: assert service.SetState(ctx, 'demo', 'blue') != nil and Get('demo').State == 'green'; assert errors.Is(service.SetState(ctx, 'nope', 'red'), workspace.ErrNotFound); a table over {GET /api/v1/workspaces/nope, PATCH …/nope, DELETE …/nope, POST …/nope/policy/rules, DELETE …/nope/policy/rules/x}: assert r.status == 404; assert r.json.message == 'workspace nope is not registered'; assert the fake hub's request count == 0"
+          }
+        },
+        {
+          "id": "REQ-4.7",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `DELETE /api/v1/workspaces/{slug}` for a registered workspace and every guard registered with `AddRemoveGuard` returns no error",
+          "action": "remove the workspace's row, its recorded rule names and its clone directory, then call every function registered with `OnRemoved` with the slug, in the order they were registered, and send no request to the hub",
+          "contract": "status 204; the list no longer holds the slug; the clone directory does not exist; each hook was called once; the fake hub saw no request and its policy still holds the rules protect wrote; the slug can be registered again",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a registered `demo` with a clone directory and one recorded rule; two `OnRemoved` hooks that append to a list"
+            ],
+            "pseudocode": "in internal/workspace/workspace_test.go: reset the fake hub's request log; r = delete('/api/v1/workspaces/demo'); assert r.status == 204; assert service.List() is empty; assert the clone directory is gone; assert hooks ran as ['first:demo', 'second:demo']; assert the fake hub's request count == 0; assert a new registration of demo answers 201"
+          }
+        },
+        {
+          "id": "REQ-4.8",
+          "pattern": "unwanted",
+          "condition": "a guard registered with `AddRemoveGuard` returns an error for the slug of a removal",
+          "action": "refuse the removal with the first such guard's error, calling no later guard and no `OnRemoved` function",
+          "contract": "status 409 with body `{\"error_type\": \"conflict\", \"message\": <the guard's error text>}`; the workspace, its recorded rules and its clone directory are as before",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/workspace/workspace_test.go: service.AddRemoveGuard(func -> error 'demo has open work items: 4, 7'); service.AddRemoveGuard(second, which records its call); r = delete('/api/v1/workspaces/demo'); assert r.status == 409; assert r.json.message == 'demo has open work items: 4, 7'; assert second was not called; assert no OnRemoved hook ran; assert service.Get('demo') succeeds"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "The workspace commands of the client",
+      "rationale": "The person works from a terminal; each route is of use to them only as a command with output they can read and an exit code a script can test.",
+      "system": "nightshift",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift workspace add <slug> --health \"<command>\" [--health-timeout <duration>] [--daily-tokens <N>] [--adopt-policy]`",
+          "action": "send `POST /api/v1/workspaces` with the slug, the command, `adopt_policy`, and the timeout and the limit only where their flags were given, wait for the answer without a deadline of its own, and print `registered <slug>`, then `policy adopted at revision <N>` when the answer's `policy_revision` is not null, and the answer's `warning` on stderr when it is not null",
+          "contract": "exit code 0; the lines on stdout and the warning line on stderr; with `--json` stdout is the response body and stderr is empty",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an httptest server standing in for the daemon, recording the request and answering a fixed body"
+            ],
+            "pseudocode": "new file internal/cli/workspace_test.go, a table over {flags none but --health -> body == {slug, health_command, adopt_policy: false} with no health_timeout and no daily_tokens member, all flags -> body carries '45m' and 9 and adopt_policy true; answer with policy_revision 3 and a warning -> stdout == 'registered demo\\npolicy adopted at revision 3\\n' and stderr == the warning + '\\n'; answer with both null -> stdout == 'registered demo\\n' and stderr == ''; --json -> stdout parses to the served body}: code, stdout, stderr = cli.Run(args); assert code == 0"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "unwanted",
+          "condition": "the daemon answers a workspace command with a 4xx or 5xx status",
+          "action": "end the command, printing the error's `message` on stderr, followed by each line of the error's `output` member where it has one",
+          "contract": "exit code 1, and exit code 2 where the `error_type` is `invalid_glob`; stderr holds the message and then the output lines; stdout is empty, or with `--json` holds the error body",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/workspace_test.go, a table over {add answered 409 {message: 'health command exited 3', output: ['a', 'b']} -> code 1 and stderr == 'health command exited 3\\na\\nb\\n', add answered 409 'not the owner of demo' -> code 1, protect answered 400 invalid_glob -> code 2 and stderr == its message + '\\n', protect answered 409 'policy changed meanwhile; run the command again' -> code 1, unprotect answered 409 'not a rule nightshift wrote' -> code 1, remove answered 409 -> code 1, show answered 404 -> code 1, show answered 503 -> code 1}: assert code, stderr and stdout == ''"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift workspace show <slug>`",
+          "action": "request `GET /api/v1/workspaces/{slug}` and print `<slug>: <state>`, `health: <command> (timeout <timeout>)`, `daily limit: <daily_tokens> tokens, <tokens_used_today> used today`, and then `sensitive paths: none` when `sensitive_rules` is empty, else `sensitive paths:` followed by one line per rule, two spaces, the name, `approval` or `block`, a colon and the rule's paths joined by `, `, with `every other path` as the paths of the rule named `default`",
+          "contract": "exit code 0; the lines on stdout; with `--json` stdout is the response body",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/workspace_test.go, a table over served bodies {no sensitive rules -> last line 'sensitive paths: none', rules nightshift-1 (approvals 1, two paths), secrets (block) and default (approvals 1) -> 'sensitive paths:\\n  nightshift-1 approval: deploy/**, ops/*.yaml\\n  secrets block: deploy/secrets/**\\n  default approval: every other path\\n'}: assert stdout starts with 'demo: green\\nhealth: make check (timeout 30m0s)\\ndaily limit: 50000000 tokens, 0 used today\\n'; assert code == 0"
+          }
+        },
+        {
+          "id": "REQ-5.4",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift workspace list`",
+          "action": "request `GET /api/v1/workspaces` and print one line per workspace with the columns slug, state, `<tokens_used_today>/<daily_tokens> tokens` and `health: <command> (<timeout>)`, followed by the value of every column another package registered with `AddWorkspaceListColumn`, the columns separated by two spaces, or `no workspaces` when the list is empty",
+          "contract": "exit code 0; the lines on stdout in the order the API answered; with `--json` stdout is the response body",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/workspace_test.go: served two workspaces -> stdout == 'alpha  green  0/50000000 tokens  health: make check (30m0s)\\nzeta  red  42/100 tokens  health: true (1m0s)\\n'; served none -> 'no workspaces\\n'; with a column registered that prints 'paused' for an object whose paused member is true -> alpha's line ends with '  paused' and zeta's is unchanged"
+          }
+        },
+        {
+          "id": "REQ-5.5",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift workspace set <slug>` with one or more of `--health`, `--health-timeout` and `--daily-tokens`, or `nightshift workspace remove <slug>`",
+          "action": "send `PATCH /api/v1/workspaces/{slug}` with only the members whose flags were given and print `updated <slug>`, or send `DELETE /api/v1/workspaces/{slug}` and print `removed <slug>`",
+          "contract": "exit code 0; the line on stdout; with `--json`, `set` prints the response body and `remove` prints nothing",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/workspace_test.go, a table over {set --daily-tokens 9 -> PATCH body == {daily_tokens: 9} and stdout 'updated demo\\n', set with all three flags -> the three members, remove -> DELETE /api/v1/workspaces/demo and stdout 'removed demo\\n'}: assert code == 0 and the recorded method, path and body"
+          }
+        },
+        {
+          "id": "REQ-5.6",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift workspace protect <slug> <glob>… [--block] [--name <rule>]` or `nightshift workspace unprotect <slug> <rule>`",
+          "action": "send `POST /api/v1/workspaces/{slug}/policy/rules` with every glob, `block` and the name where given, and print `rule <name> (approval): <paths joined by \", \">`, with `(block)` for a blocking rule, and `policy revision <N>`; or send `DELETE /api/v1/workspaces/{slug}/policy/rules/{rule}` and print `removed rule <rule>` and `policy revision <N>`",
+          "contract": "exit code 0; the two lines on stdout; with `--json` stdout is the response body; flags are accepted before and after the globs",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/workspace_test.go, a table over {protect demo 'deploy/**' 'ops/*' -> body {globs: both, block: false} and stdout 'rule nightshift-1 (approval): deploy/**, ops/*\\npolicy revision 4\\n', protect demo 'x/**' --block --name secrets -> body {globs, block: true, name: 'secrets'} and '(block)', protect demo --block 'x/**' -> the same body, unprotect demo nightshift-1 -> DELETE path and stdout 'removed rule nightshift-1\\npolicy revision 5\\n'}: assert code == 0"
+          }
+        },
+        {
+          "id": "REQ-5.7",
+          "pattern": "unwanted",
+          "condition": "a workspace command lacks its slug, `add` lacks `--health`, `protect` has no glob, `unprotect` lacks the rule, `set` has none of its three flags, a duration or a number flag does not parse, a command has an argument too many or an unknown flag, or `workspace` is followed by no command or an unknown one",
+          "action": "print the usage of the command, or of `nightshift workspace` when none was recognised, and send no request",
+          "contract": "exit code 2; the usage on stderr; stdout is empty; the daemon received no request",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/workspace_test.go, a table over {['workspace'], ['workspace', 'frob'], ['workspace', 'add'], ['workspace', 'add', 'demo'], ['workspace', 'add', 'demo', '--health', 'x', '--health-timeout', 'soon'], ['workspace', 'add', 'demo', '--health', 'x', '--daily-tokens', 'many'], ['workspace', 'protect', 'demo'], ['workspace', 'unprotect', 'demo'], ['workspace', 'set', 'demo'], ['workspace', 'show'], ['workspace', 'show', 'a', 'b'], ['workspace', 'list', 'x'], ['workspace', 'remove'], ['workspace', 'list', '--nope']}: code, stdout, stderr = cli.Run(args); assert code == 2; assert stderr contains 'usage: nightshift workspace'; assert stdout == ''; assert the httptest server saw no request"
+          }
+        },
+        {
+          "id": "REQ-5.8",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift status` and the status document's `workspaces` is not empty",
+          "action": "print, after the lines package 01 defines, one line `workspace <slug>: <state>, <tokens_used_today> tokens today` per workspace in the order the API answered",
+          "contract": "exit code 0; with no workspace the output is the one package 01 defines, unchanged",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/cli_test.go, extending the table of the status command's output: {workspaces [{demo, green, 0}, {web, held, 12}] -> the output ends with 'workspace demo: green, 0 tokens today\\nworkspace web: held, 12 tokens today\\n', workspaces [] -> the output is as before}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-6",
+      "title": "Running commands and cloning from the hub",
+      "rationale": "The health command here, and the gate and the session clones of later packages, all run foreign code in a checkout; one implementation bounds its time, its output and the user it runs as.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-6.1",
+          "pattern": "event_driven",
+          "condition": "a caller runs a command line through `(*command.Runner).Run(ctx, command.Spec{Dir, Line, Timeout, TailLines, Env})`",
+          "action": "run the line with `sh -c` in the directory, with the given variables added to the daemon's environment, wait for it, and keep the last `TailLines` lines of its standard output and standard error together, each line cut at 4,096 bytes",
+          "contract": "returns `command.Result{ExitCode, TimedOut: false, Tail}` and a nil error for a command that ran, whatever its exit code; `Tail` holds at most `TailLines` lines in the order written, without line ends",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/command/command_test.go, a table over {'echo out; echo err >&2; exit 0' -> code 0 and tail holds 'out' and 'err', 'exit 7' -> code 7 and an empty tail, 'seq 1 500' with TailLines 50 -> tail == lines 451..500, 'pwd' -> tail == [Dir], 'echo $FOO' with Env FOO=bar -> ['bar'], one line of 10,000 bytes -> one tail line of 4,096 bytes, 2 MB of output without a line end -> returns with one line of 4,096 bytes}: res, err = runner.Run(ctx, spec); assert err == nil; assert res"
+          }
+        },
+        {
+          "id": "REQ-6.2",
+          "pattern": "unwanted",
+          "condition": "a command has not ended when its `Timeout` has passed, or the context given to `Run` is cancelled",
+          "action": "kill the command's process group, so that the processes it started end with it, and return what it had written",
+          "contract": "returns `Result{TimedOut: true, Tail}` and a nil error for the timeout, and the context's error for a cancellation; `Run` returns within 5 seconds of the timeout; no process of the command's group is left running",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/command/command_test.go: res, err = runner.Run(ctx, {Line: 'echo started; sleep 300 & echo $! > pid; wait', Timeout: 100ms}); assert err == nil; assert res.TimedOut; assert res.Tail == ['started']; assert elapsed < 5s; assert the process whose id is in the file pid is gone. Second case: cancel ctx after 50ms; assert errors.Is(err, context.Canceled) and the child is gone"
+          }
+        },
+        {
+          "id": "REQ-6.3",
+          "pattern": "unwanted",
+          "condition": "the directory of a command does not exist, the line is empty, `Timeout` or `TailLines` is not greater than zero, or the process cannot be started",
+          "action": "return an error without starting a process, and never end the daemon's own process",
+          "contract": "`Run` returns a zero `Result` and a non-nil error naming the cause",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/command/command_test.go, a table over {Dir naming no directory, Line '', Timeout 0, TailLines 0}: res, err = runner.Run(ctx, spec); assert err != nil; assert res == command.Result{}"
+          }
+        },
+        {
+          "id": "REQ-6.4",
+          "pattern": "optional",
+          "condition": "another package has given the runner an identity with `(*command.Runner).SetIdentity(command.Identity)`",
+          "action": "apply the identity to every process `Run` starts from then on, before the process starts, and start no process when the identity returns an error",
+          "contract": "the identity function is called once per `Run` with the `*exec.Cmd` about to start; its error is returned by `Run` with a zero `Result`; without an identity, processes run as the daemon's user",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/command/command_test.go: runner.SetIdentity(func(cmd) { cmd.Env = append(cmd.Env, 'WHO=other'); calls++ }); res = runner.Run(ctx, {Line: 'echo $WHO'}); assert res.Tail == ['other'] and calls == 1; runner.SetIdentity(func -> error 'no such user'); res, err = runner.Run(ctx, {Line: 'touch ran'}); assert err names 'no such user'; assert the file ran does not exist; a runner without an identity: 'id -u' prints the test process's uid"
+          }
+        },
+        {
+          "id": "REQ-6.5",
+          "pattern": "event_driven",
+          "condition": "a caller asks `gitclone.Sync(ctx, gitclone.Options{URL, Token, Dir, Commit, Runner})` for a directory that does not exist or is empty",
+          "action": "clone the repository from the URL over HTTP, authenticating with HTTP Basic and the token as the password, running git through the given runner, and check the commit out detached",
+          "contract": "returns nil; `git rev-parse HEAD` in the directory prints the commit; the working tree holds exactly the commit's files; the token appears neither in an argument of a git process, nor in the URL of the remote `origin`, nor in a file under the directory",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) serving a repository of two commits at /git/acme/demo.git, which refuses a fetch without a token that holds git:read",
+              "the repository fixture is built once per test process and copied"
+            ],
+            "pseudocode": "new file internal/gitclone/gitclone_test.go: err = gitclone.Sync(ctx, {URL: hubURL + '/git/acme/demo.git', Token: worker, Dir: tmp + '/demo', Commit: first, Runner: runner}); assert err == nil; assert rev-parse HEAD == first; assert the tree's files == the first commit's; assert grep -r of the token under Dir finds nothing; assert `git remote get-url origin` holds no credential; assert the runner saw no Spec whose Line holds the token"
+          }
+        },
+        {
+          "id": "REQ-6.6",
+          "pattern": "event_driven",
+          "condition": "a caller asks `gitclone.Sync` for a directory that holds a clone of the same URL",
+          "action": "fetch from the URL into the clone, check the commit out detached, discard every change to tracked files and remove every untracked and ignored file",
+          "contract": "returns nil; `HEAD` is the commit; `git status --porcelain --ignored` prints nothing; a directory that holds something else than a clone of that URL is removed and cloned anew",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/gitclone/gitclone_test.go: Sync at the first commit; write an untracked file, an ignored file and a change to a tracked file; the fake hub's repository gains a third commit; Sync(Commit: third); assert rev-parse HEAD == third; assert git status --porcelain --ignored == ''. Second case: Dir holds a clone of another URL -> Sync succeeds and origin is the asked URL"
+          }
+        },
+        {
+          "id": "REQ-6.7",
+          "pattern": "unwanted",
+          "condition": "the hub refuses the credential, the URL cannot be reached, the repository does not hold the commit, or a git command has not ended after 10 minutes",
+          "action": "return an error and leave no half-made clone the next call would take for a clone",
+          "contract": "a non-nil error whose text holds git's last line of output or `commit <sha> not found`, and never the token; the next `Sync` of the same directory with a good request succeeds",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/gitclone/gitclone_test.go, a table over {a token the fake hub does not know, a token without git:read, a URL of a closed listener, a commit of forty zeros, the git timeout set to 50ms against a fake hub that never answers}: err = gitclone.Sync(ctx, opts); assert err != nil; assert the error text does not hold the token; for the unknown commit assert it holds 'commit 0000000000000000000000000000000000000000 not found'; then Sync with good options on the same Dir returns nil"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "Registering a workspace and adopting the policy",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift workspace add demo --health \"test -f README.md\" --adopt-policy`"
+        },
+        {
+          "actor": "nightshift",
+          "action": "sends `POST /api/v1/workspaces` with the client token and waits"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reads the workspace with the worker token, finds `access: owner` and `sync_enabled` on, and asks the hub to sync"
+        },
+        {
+          "actor": "hub",
+          "action": "answers the sync with the default branch `up_to_date`, and the policy at revision 0"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "finds `default` lacking the three checks, clones the workspace from the hub's git endpoint at the branch's tip and runs the health command, which exits 0"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "writes the policy with the three checks and `fresh_checks` in `default`, stores the workspace as `green` and answers 201"
+        },
+        {
+          "actor": "nightshift",
+          "action": "prints `registered demo`, `policy adopted at revision 1` and the warning line"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift status` and reads `workspace demo: green, 0 tokens today`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with the workspace service, the policy functions, the command runner, gitclone and the store on disk",
+          "the nightshift client's run function",
+          "git and sh as installed",
+          "the fake hub's HTTP routes and its git endpoint"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) holding the workspace `demo` with a repository that has a README.md, owned by the worker token's user, with no policy set",
+          "the daemon started in-process with the e2e helper of internal/daemon/e2e_test.go, `clones_dir` in the temporary directory"
+        ],
+        "end_state": [
+          "the command exits 0 with `registered demo` and `policy adopted at revision 1` on stdout and the warning line on stderr",
+          "the fake hub's policy of `demo` is at revision 1 and its `default` requires the three checks with `fresh_checks`",
+          "`nightshift status` prints `workspace demo: green, 0 tokens today`",
+          "after the daemon is stopped and started again over the same store, `nightshift workspace list` still prints `demo`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg); code, out, errOut = cli.Run(['workspace', 'add', 'demo', '--health', 'test -f README.md', '--adopt-policy', '--addr', d.addr, '--token-file', tokenFile]); assert code == 0; assert out == 'registered demo\\npolicy adopted at revision 1\\n'; assert errOut == 'no path of demo is marked sensitive; every change lands without you\\n'; assert fakeHub.Policy('demo').revision == 1; assert cli status output ends with 'workspace demo: green, 0 tokens today\\n'; restart d; assert cli workspace list output starts with 'demo  green'"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "Marking a path, reading it back and unmarking it",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift workspace protect demo \"deploy/**\"`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reads the policy, puts the rule `nightshift-1` at its top and writes it with `If-Match`"
+        },
+        {
+          "actor": "hub",
+          "action": "stores the policy as a new revision"
+        },
+        {
+          "actor": "nightshift",
+          "action": "prints the rule and the new revision"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift workspace show demo` and reads `nightshift-1 approval: deploy/**`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift workspace unprotect demo nightshift-1`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "writes the policy without the rule and forgets its record"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift workspace show demo` and reads `sensitive paths: none`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with the workspace service, the policy functions and the store on disk",
+          "the nightshift client's run function",
+          "the fake hub's policy routes with their revisions"
+        ],
+        "setup": [
+          "the daemon and the registered workspace `demo` of PATH-1, its policy at revision 1"
+        ],
+        "end_state": [
+          "after `protect` the fake hub's policy is at revision 2 with `nightshift-1` as its first rule, requiring one approval of the owner and the three checks",
+          "`show` lists the rule with its path",
+          "after `unprotect` the policy is at revision 3 with no rule, and `show` prints `sensitive paths: none`",
+          "a second `unprotect` exits 1 with `not a rule nightshift wrote`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: code, out, _ = cli.Run(['workspace', 'protect', 'demo', 'deploy/**', …]); assert code == 0 and out == 'rule nightshift-1 (approval): deploy/**\\npolicy revision 2\\n'; assert fakeHub.Policy('demo').rules[0].require.approvals == 1; assert cli workspace show output contains '  nightshift-1 approval: deploy/**'; assert cli unprotect exits 0 with 'removed rule nightshift-1\\npolicy revision 3\\n'; assert cli show output ends with 'sensitive paths: none\\n'; code, _, errOut = cli unprotect again; assert code == 1 and errOut == 'not a rule nightshift wrote\\n'"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "A registration that is refused, and a removal",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift workspace add demo --health \"echo broken; exit 3\" --adopt-policy`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "passes the first four checks, runs the health command in the clone, reads exit code 3 and refuses without writing the policy"
+        },
+        {
+          "actor": "nightshift",
+          "action": "prints `health command exited 3` and `broken` on stderr and exits 1"
+        },
+        {
+          "actor": "person",
+          "action": "runs the command again with `--health \"true\"`, then `nightshift workspace set demo --daily-tokens 1000`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "stores the workspace, then the new limit"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift workspace remove demo`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "removes the workspace, its rule records and its clone, and sends nothing to the hub"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with the workspace service, the command runner, gitclone and the store on disk",
+          "the nightshift client's run function",
+          "git and sh as installed"
+        ],
+        "setup": [
+          "a fake Parley hub holding the workspace `demo` with no policy set",
+          "the daemon started in-process with the e2e helper"
+        ],
+        "end_state": [
+          "the first `add` exits 1 with stderr `health command exited 3` and `broken`; `workspace list` prints `no workspaces`; the fake hub's policy is still at revision 0",
+          "the second `add` exits 0; after `set`, `workspace list` prints `demo  green  0/1000 tokens  health: true (30m0s)`",
+          "after `remove`, `workspace list` prints `no workspaces`, the clone directory is gone, and the fake hub still holds the workspace with the policy the second registration adopted"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: code, out, errOut = cli add with the failing command; assert code == 1 and errOut == 'health command exited 3\\nbroken\\n' and out == ''; assert cli list == 'no workspaces\\n'; assert fakeHub.Policy('demo').revision == 0; assert cli add with 'true' exits 0; cli set --daily-tokens 1000; assert cli list == 'demo  green  0/1000 tokens  health: true (30m0s)\\n'; rev = fakeHub.Policy('demo').revision; assert cli remove == 'removed demo\\n'; assert cli list == 'no workspaces\\n'; assert no directory <clones_dir>/demo; assert fakeHub.Policy('demo').revision == rev"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "GET /api/v1/workspaces/{slug}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}",
+          "signature": "scope workspaces:read (satisfied by workspaces:write); 200 workspace object {slug, kind: repository|fork, default_branch, owner_id, org_id, org_slug, status, head_sha, origin_head_sha, settings: {sync_enabled: bool, …every setting with its effective value}, hub_url: string|null, access: owner|member|admin, …}; 404 not_found for a workspace that does not exist or that the caller cannot read"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/sync",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/sync",
+          "signature": "scope workspaces:write, write access; no body; query reset_to_origin default false; 200 workspace object plus branches: [{name, result: created|up_to_date|fast_forward|ahead|diverged|reset|name_conflict, local_sha, origin_sha}]; 400 fork_has_no_origin; 400 sync_disabled; 409 workspace_busy|workspace_not_ready|workspace_archived; 502 upstream_error; 500 internal"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/policy",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/policy",
+          "signature": "scope changes:read (satisfied by changes:write); 200 {revision: int, default: requirement, rules: [{name, paths: [glob], exclude: [glob], targets?: [glob], require: requirement}], updated_at, updated_by}; requirement = {approvals: 0..10, approvers: [owner|member|user:<username>], checks: [string], fresh_checks: bool, block: bool}, every member present; header ETag: \"<revision>\"; revision 0 for a workspace that never set a policy"
+        },
+        {
+          "name": "PUT /api/v1/workspaces/{slug}/policy",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/policy",
+          "signature": "scope workspaces:write, owner only; body {default?, rules?}; header If-Match: <revision> or \"<revision>\"; 200 the policy of the new revision; 400 invalid_policy with error.details {rule, index, field}; 400 not_supported_on_fork; 412 revision_mismatch; 409 workspace_archived; a rule name is lower-case letters, digits, _ and -, at most 63 characters, unique, not default; a path glob is 1 to 255 characters, not starting with /, with *, ** and ? as wildcards; at most 200 rules and 65,536 bytes"
+        },
+        {
+          "name": "git smart HTTP",
+          "import_path": "<hub_url> = <external URL of the hub>/git/<org slug>/<workspace slug>.git",
+          "signature": "GET …/info/refs?service=git-upload-pack and POST …/git-upload-pack; HTTP Basic, the credential as the password, any user name; a PAT needs git:read (included in git:write) and read access to the workspace; protocol versions 0 and 2"
+        },
+        {
+          "name": "GET /api/v1/user",
+          "import_path": "<hub.endpoint>/api/v1/user",
+          "signature": "scope users:read, which the worker token does not hold; not called by this package"
+        }
+      ]
+    },
+    {
+      "package": "Parley REST API: error details of a refused glob",
+      "version": "commit 7eabfb9",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "invalid_policy details.field for a path glob",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/policy",
+          "signature": "error.details.field == \"paths[<i>]\" (or beginning with \"paths\") when a rule's glob breaks the format; docs/api.md gives only the examples `require.approvals` and `approvers[0]`"
+        }
+      ]
+    }
+  ]
+}

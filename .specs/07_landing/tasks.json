@@ -1,0 +1,218 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "07",
+  "spec_name": "landing",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/land/... ./internal/hub/... ./internal/hubtest/... ./internal/daemon/... -count=1"
+  },
+  "dependencies": [
+    {
+      "spec": "01",
+      "reason": "uses its store and migrations, the hub client with the worker and approver credentials and Available, the fake hub internal/hubtest and the e2e helper of internal/daemon/e2e_test.go"
+    },
+    {
+      "spec": "02",
+      "reason": "reads and sets the workspace's state with workspace.Service (Get, SetState), judges and adopts the policy with internal/policy (Read, Write, Missing, Adopt) and syncs through the hub client's Sync"
+    },
+    {
+      "spec": "03",
+      "reason": "moves and abandons items with internal/item (Transition, Abandon, RegisterMarker), declares the decision kinds approval, conflict and policy and writes thread entries with internal/inbox, and calls Notify of internal/notify for workspace_held"
+    },
+    {
+      "spec": "04",
+      "reason": "registers the step of the state landing with the scheduler of internal/sched, reads Paused, registers an OnPause function and opens the session_failed decision with OpenSessionFailed"
+    },
+    {
+      "spec": "05",
+      "reason": "reads the item's change (its workspace and its number on the hub) with Get of internal/change"
+    },
+    {
+      "spec": "06",
+      "reason": "uses *impl.Service: Rework for a conflict and a rejection, ReportCheck for nightshift-release, OpenBlocked, RestoreFork, and OnAnswer for the handlers of its item decisions; reads a change with the hub client's Change; and hands a version that is not gated back to its implementing step by moving the item to implementing"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Ask the hub to land one version of a change and read its answer",
+      "criteria": [
+        "REQ-6.1",
+        "REQ-6.2",
+        "REQ-3.2",
+        "REQ-3.6"
+      ],
+      "steps": [
+        "Add the land-request behaviours to internal/land/land_test.go and confirm they fail",
+        "Extend internal/hubtest, which has changes with their versions and landing requirements from packages 05 and 06 and the check route with its Check accessor from package 06; new here: the credential that created each version, a session id and a `landed` member on a change, include=checks answering the results that apply to the current version, each with the version it was reported on, and the accessors Approvals and LandRequests",
+        "Add to internal/hubtest the land route and GET …/lands/{id}: a land answers from a queue of scripted answers (200 landed, 202 running with later reads of the attempt, 409 land_conflict with a report, 409 policy_blocked with a status and requirements, 409 version_mismatch, 409 land_in_progress, 503 land_failed, 400 unknown_session while the body carries a session id, any other refusal), each in Parley's error envelope with the attempt in error.details; with an empty queue it answers version_mismatch for an expected_version that is not current, policy_blocked with the requirements the test attached to the change while one of them is unsatisfied by the recorded checks and approvals (an approval counts when its credential created no version), and landed otherwise, setting the change to `landed`; every request is logged with its bearer, query and body",
+        "Add to the hub client of internal/hub, both new and sent with the worker credential: Land(ctx, slug, number, body, wait) returning the status, the attempt and the error envelope's type and message, and LandAttempt(ctx, slug, id). Read a change with the Change(ctx, slug, number, include...) that package 06 added, and add to its answer, as new members, what package 06 does not read: `checks` (with include=checks, each result with the version it was reported on), `session_id` and `landed`",
+        "Add internal/land with the Service type, built from the store, the hub client and the collaborators later tasks add, with a clock and the intervals as parameters: the poll interval (2 seconds), the poll limit (10 minutes), the retry interval (1 minute), the retry count (5) and the pass interval (5 seconds)",
+        "Add LandChange(ctx, Request{Workspace, Change, Version, SessionID}): send POST …/land?wait=30 with a body that holds expected_version and, when SessionID is not empty, session_id, and nothing else; never override, never stack; evaluate no condition, report no check, touch no item, and wait behind no other landing",
+        "Map the answer to Outcome{Kind, Attempt, LandedSHA, Requirements, Conflict, Reason}: landed; pending_approval for a pending answer with a requirement whose counted approvals are below the required; pending for another pending answer, with the reason `policy_blocked: check <name> is <status> under rule <rule>`; blocked, with the reason `policy_blocked: blocked: <the landing's reason>` where no requirement blocks; conflict with the report; version_mismatch; failed with `<error_type>: <attempt error or message>` for everything else; return an error only when the hub could not be asked",
+        "On 202 or land_in_progress read the attempt at the poll interval until it is final and map it the same way; after the poll limit answer failed with `land attempt <id> is still running`; on 400 unknown_session send the request once more without session_id",
+        "Add internal/land to docs/architecture.md with LandChange and its outcomes, and name the fake hub's land route and its accessors under Repository Specifics in .specs/steering.md"
+      ],
+      "touches": [
+        "internal/land/land.go",
+        "internal/land/land_test.go",
+        "internal/hub/client.go",
+        "internal/hubtest",
+        "docs/architecture.md",
+        ".specs/steering.md"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Evaluate the landing conditions, name the unmet one and sync before a landing",
+      "criteria": [
+        "REQ-1",
+        "REQ-6.3",
+        "REQ-6.4"
+      ],
+      "steps": [
+        "Add the condition and marker behaviours to internal/land/conditions_test.go and the sync behaviours to internal/land/sync_test.go and confirm they fail; put the fixture (the service over the store template, the real item service, inbox and workspace.Service, the fake hub and the recording stubs) and landingItem in internal/land/helpers_test.go, the one helpers file of the package",
+        "Declare in internal/land the interfaces the service is given, so that its tests stub them: the scheduler's part (Paused, OnPause, OpenSessionFailed), the item's change (Get of package 05's *change.Service), package 06's functions (Rework, ReportCheck, OpenBlocked, RestoreFork and OnAnswer of *impl.Service, with its types impl.Finding and impl.Requirement) and the notifier; daemon.Run passes the real services",
+        "Add the store migration of internal/land, registered with internal/store: one row per item (release version and status, a land request sent and not yet answered, landed commit, failed lands with their reasons and the time before which no land is asked, conflicts with the last report, approved version, repair mark, the time before which the hub is not asked after an error) and one row per workspace (the time before which it is not synced again); add Landing(ctx, item) returning the Record",
+        "Add Conditions(ctx, item): an error for an item that is not `landing`; then in order the pause, the conditions registered with AddCondition (a duplicate or empty name is refused), the workspace's state (`red` passing for an item marked with SetRepair), the policy (task 3; until then it passes) and the sync; stop at the first that does not hold and ask the hub only for the last two; answer `the hub` while Available(worker) is false or inside the minute after a hub error",
+        "Add SetRepair(ctx, item, on), stored, returning item.ErrNotFound for an unknown item",
+        "Add Waiting(item), computed from the store alone (pause, registered conditions, workspace state, a sync held less than a minute ago), and register with the item service's RegisterMarker the three markers `workspace red`, `workspace held` and `origin sync`, each true only for an item in `landing` whose Waiting is that name",
+        "Add SyncOrigin(ctx, slug) over the hub client's Sync: the entry of `branches` named by the answer's default_branch as SyncResult{Workspace, Branch, Result, LocalSHA, OriginSHA}, with Result empty when the branch is not reported; it calls no registered function",
+        "Add OnSyncResult(fn) and the sync condition: run the sync; with a function registered call it with the result, or with Err set when the hub answered an error, and pass only when it returns nil; with none pass for `up_to_date`, `ahead` and `fast_forward` and hold for everything else; on a hold store the time and send no sync for the workspace for the retry interval",
+        "Add the step function Step(ctx, item) for the state `landing` and register it with Scheduler.RegisterStep: evaluate the conditions that need no hub and return when one does not hold, so that an item waiting in a `red` or `held` workspace costs no request; then call RestoreFork and read the item's change through Get and the hub (an error starts the item's one-minute wait and returns nil); then the policy and the sync; tasks 4 to 6 add what follows",
+        "Serialise the part of the step from the sync to the hub's final answer with one lock per workspace, taken after the conditions that need no hub; a step that waits for the lock gives way when its context is cancelled",
+        "Build the land service in daemon.Run after the packages it uses, register its markers and its step, and hand it to the packages built after it and to the e2e helper"
+      ],
+      "touches": [
+        "internal/land/conditions.go",
+        "internal/land/conditions_test.go",
+        "internal/land/sync.go",
+        "internal/land/sync_test.go",
+        "internal/land/store.go",
+        "internal/land/step.go",
+        "internal/land/helpers_test.go",
+        "internal/daemon/run.go"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Hold a workspace whose policy lost the three checks, and ask",
+      "criteria": [
+        "REQ-2"
+      ],
+      "steps": [
+        "Add the policy-hold behaviours to internal/land/policyhold_test.go and confirm they fail",
+        "Declare the decision kind `policy` with the inbox's RegisterKind: the options `adopt` (`add nightshift's three checks and fresh_checks to the rules that lack them`) and `recheck` (`read the policy again; choose it after you changed the policy yourself`), neither requiring a comment",
+        "Add the policy condition to Conditions: policy.Read with the worker credential, then policy.Missing; an empty list passes; a hub error is the hub-error wait of task 2",
+        "When the list is not empty and no `policy` decision is open in the workspace's thread: SetState(held), append the entry `workspace_state` to inbox.WorkspaceThread, open the decision there with `adopt` recommended, one piece of evidence per name and `every landing in <slug>` as what it blocks, and call Notify with `workspace_held`, the workspace and the thread's path",
+        "When a `policy` decision is open already, open nothing and notify nobody; set the state to `held` again, without an entry, where it is `green`",
+        "Register the handler of `adopt` with OnAnswer: read the policy, write policy.Adopt of it with the revision read when Missing is not empty, read the result, and finish as the recheck does; return policy.ErrRevisionMismatch and every hub error as the handler's error, changing nothing",
+        "Register the handler of `recheck`: read the policy; with nothing missing set a `held` workspace to `green` with its entry (`held -> green: policy requires nightshift's checks`, or `policy adopted at revision <N>` after a write) and leave a `red` one alone; with something missing keep it `held` and open a new `policy` decision with the current names, without a notification",
+        "Carry a `policy` answer out at once also in a paused workspace: it is no item's decision",
+        "Describe the kind `policy`, its options and the `workspace_state` entries in docs/api.md beside the decision kinds of the earlier packages"
+      ],
+      "touches": [
+        "internal/land/policyhold.go",
+        "internal/land/policyhold_test.go",
+        "internal/land/conditions.go",
+        "docs/api.md"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Report the release check, request the land and follow the hub's answer",
+      "criteria": [
+        "REQ-3.1",
+        "REQ-3.3",
+        "REQ-3.4",
+        "REQ-3.5",
+        "REQ-3.7",
+        "REQ-3.8",
+        "REQ-6.5",
+        "REQ-6.6"
+      ],
+      "steps": [
+        "Add the release, land-answer, retry, withdrawal and restart behaviours to internal/land/step_test.go and confirm they fail",
+        "Record in the store that a land request is sent before LandChange is called and forget it when its answer is handled; at the start of a step that finds such a record, read the change before any condition. Wherever the step reads the change: a change the hub reports as `landed` stores its landed.sha and moves the item to `verifying` with item.Transition; a current version on which nightshift-gate or nightshift-review has no `passed` result reported on that version itself moves the item to `implementing` with the reason `version <v> is not gated and reviewed` and writes the entry `land of version <v>: the version is no longer current`",
+        "When every condition holds: call ReportCheck with nightshift-release, `passed` and the summary `conditions hold`, store the version read and the status, then call LandChange with that version and the change's session id",
+        "Write one entry of kind `land` per answer to the item's thread with inbox.Append, not marking it unread: `land of version <v>: landed as <sha>`, `…: the version is no longer current`, `…: waits for an approval under rule <names>`, `…: blocked by rule <name>`, `…: conflict in <n> files`, or `land of version <v> failed: <reason>`",
+        "On `landed`: store the commit and Transition to `verifying` with the reason `landed as <sha>`; on `version_mismatch`: move the item to `implementing` as above; hand `pending_approval`, a `blocked` with a blocking requirement and `conflict` to the functions tasks 5 and 6 add",
+        "On every other outcome (failed, pending, a blocked without a blocking requirement, a pending approval for the version already approved, with the reason `policy_blocked: <counted> of <required> approvals count under rule <rule>`): store the reason and the time, and return; a step called before the retry interval has passed returns at once without a request; the next one evaluates the conditions again and asks again",
+        "When the land asked for the fifth time again failed, call OpenSessionFailed(ctx, item, `land`, failures) with the six reasons and empty stream paths and set the count to zero; package 04's `retry` lets the step run again",
+        "Add Pass(ctx): for every item in `landing` with a stored `passed` release and no landed commit, read Waiting and, when it is `paused`, `workspace red`, `workspace held` or a registered condition's name, call ReportCheck with `failed` and that name and store `failed`; run it from a goroutine at the pass interval that stops with the daemon, and register with Scheduler.OnPause a function that does the same for the paused item at once",
+        "Before a land, report `passed` again when the stored status for the version read is not `passed`",
+        "Add Withdraw(ctx, item, summary) and the error ErrLanded: take the workspace's landing lock, so that no land of the item is being answered; ErrLanded for an item that has a landed commit or is past `landing`; another error for an item before `landing`; otherwise ReportCheck with `failed` and the summary, and store `failed`",
+        "Read every stored value back at start so that the counts, the waits and the release status continue across a restart"
+      ],
+      "touches": [
+        "internal/land/step.go",
+        "internal/land/release.go",
+        "internal/land/step_test.go",
+        "internal/land/store.go",
+        "internal/daemon/run.go"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Ask the person for an approval, and pass a blocking rule on",
+      "criteria": [
+        "REQ-4",
+        "REQ-6.7"
+      ],
+      "steps": [
+        "Add the approval, blocked, abandon, restored-fork, paused-answer and foreign-approval behaviours to internal/land/approval_test.go and confirm they fail",
+        "Add to internal/hubtest the approvals route: it records each verdict with its version, comment and the bearer's credential, answers 201 for a credential's first verdict on a version and 200 for a replacement, refuses a token without changes:approve, and can be scripted to answer an error; add Verdict(ctx, slug, number, verdict, version, comment) to the hub client of internal/hub, sent with the approver credential and with no other",
+        "Declare the decision kind `approval` with RegisterKind: `approve` (`record your approval on the hub and land the change`), `reject` (`record your rejection and send the change back with your comment`, comment required) and `abandon` (`end the item without landing`)",
+        "Add OpenApproval(ctx, ApprovalRequest{Item, Workspace, Change, Version, Requirements, Owner}): open the decision on the item's thread with the question of REQ-4.1, the change's path on the hub and one piece of evidence `rule <name>` per requirement that lacks an approval with its files one per line, `approve` recommended; store the decision's id with the workspace, the change, the version and the owner; refuse an Owner that has no function registered with OnApprovalAnswered",
+        "On a `pending_approval` outcome of an item's own land, for a version that is not the stored approved version, call OpenApproval with an empty Owner",
+        "Handler of `approve` for a decision with an empty Owner: call RestoreFork and read the item's change with Get; where it is no longer the decision's change return nil; fail while Available(approver) is false; send the verdict `approve` on the decision's version; store that version as approved; return nil, after which the scheduler calls the step again",
+        "Handler of `reject` for a decision with an empty Owner: the same start; send the verdict `reject` with the comment on the decision's version unless the change is no longer the decision's, then call Rework with one finding {ID: `approval-<decision id>`, Source: `person`, Text: the comment, Binding: true}; record in the store that the decision's rework was started, so that a second call starts none",
+        "Handler of `abandon`, registered for `approval` and for `conflict`, for a decision with an empty Owner: item.Abandon with the reason `abandoned at the <kind> decision`; nil for an item that is abandoned already",
+        "For a decision with an Owner: `approve` and `reject` send the verdict on the stored change and version with the approver credential, and every option then calls the function registered for the owner with Approval{Item, Workspace, Change, Version, Option, Comment}, returning its error; no land, no rework and no abandon follows from this package",
+        "On a `blocked` outcome with a requirement whose block is true: call OpenBlocked(ctx, item, those requirements) and write the entry `land of version <v>: blocked by rule <names>`",
+        "Register every handler of `approval`, and in task 6 of `conflict`, through (*impl.Service).OnAnswer of package 06 and not through the inbox directly, so that an answer to a paused item's decision is kept and carried out at the resume; this package keeps no answers of its own",
+        "Describe the kind `approval`, its options and its evidence in docs/api.md"
+      ],
+      "touches": [
+        "internal/land/approval.go",
+        "internal/land/approval_test.go",
+        "internal/land/step.go",
+        "internal/land/store.go",
+        "internal/hub/client.go",
+        "internal/hubtest",
+        "docs/api.md"
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Send a conflict back to the implementer, ask after the second, and document landing",
+      "criteria": [
+        "REQ-5"
+      ],
+      "steps": [
+        "Add the conflict behaviours to internal/land/conflict_test.go and confirm they fail",
+        "Declare the decision kind `conflict` with RegisterKind: `retry` (`start the implementer on the conflict once more`) and `abandon` (`end the item without landing`), no comment required; package 09 adds `take_over`",
+        "Write the conflict report as one text: the target head, the first commit that did not apply, one line per file `<path> (<kind>)`, and one line per landed change `#<number> <title>`",
+        "On a `conflict` outcome store the report and add one to the item's count; at 1 call Rework with one finding {ID: `conflict-<version>`, Source: `hub`, Text: the report, Binding: true}; at 2 start no rework and open the `conflict` decision on the item's thread with the report as evidence and `retry` recommended; no other outcome changes the count",
+        "Handler of `retry`: set the count to zero and call Rework with the stored report, once per decision; register it through (*impl.Service).OnAnswer as task 5 does",
+        "Add the three flows of the execution paths to internal/daemon/e2e_test.go: seed an item in `landing` with its change on the fake hub and recorded as package 05 records it, and drive the landing, the approval and the policy hold through the client's commands",
+        "Describe in docs/api.md the kind `conflict`, the `land` entries of a thread and the markers `workspace red`, `workspace held` and `origin sync`; in docs/cli.md what `item show` prints for an item that waits in `landing`; in docs/architecture.md the landing step and what later packages call: LandChange, SetRepair, OnSyncResult, SyncOrigin, Conditions, Waiting, AddCondition, Withdraw, OpenApproval, OnApprovalAnswered and Landing",
+        "Run `make doc` and `make check`"
+      ],
+      "touches": [
+        "internal/land/conflict.go",
+        "internal/land/conflict_test.go",
+        "internal/land/step.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md"
+      ],
+      "done_when": [
+        "`make check` passes on the whole tree"
+      ]
+    }
+  ]
+}

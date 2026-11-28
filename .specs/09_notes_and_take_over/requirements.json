@@ -1,0 +1,763 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "09",
+  "spec_name": "notes_and_take_over",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "A note is taken, kept and handed to the next session",
+      "rationale": "A person who sees an item going the wrong way must be able to say so without stopping it, and what they said must not be lost between sessions.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "event_driven",
+          "condition": "an authenticated client sends `POST /api/v1/items/{number}/notes` with a body `{\"text\"}` whose text has 1 to 20,000 Unicode code points, for an item in the state `new`, `planning`, `ready`, `implementing` or `reviewing`",
+          "action": "store a note with the next id (starting at 1, never given twice), the item, the text as given and the clock's time; hand it over as a finding of the person, for an item that is `new` or `planning` with package 05's `plan.Service.AddFinding(ctx, item, text)` and for one that is `ready`, `implementing` or `reviewing` with package 06's `impl.Service.Rework(ctx, item, [{ID: \"note-<id>\", Source: \"person\", Text: text}])`; append to the item's thread an entry of kind `note` whose text is the note's text, not marking the thread unread; and end no session and close no decision",
+          "contract": "status 201 with the note `{id, item, text, time, delivered: null}`; a session of the item that was running still runs; exactly one of `AddFinding` and `Rework` was called, once, and neither `Revise` nor `Withdraw`; an item of kind `spec` in `new`, for which `AddFinding` answers `plan.ErrNotPlanning`, keeps the note and has it handed over with `Rework` when the item becomes `ready`; `nightshift item note <N> \"<text>\"` prints `note <id> added to item <N>` and exits 0, and with `--json` prints the API's answer",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a note service over a copy of the store template of internal/store, a real item service and inbox, an injected clock, and recording stubs for the three interfaces the service calls: the planner (package 05's AddFinding and Revise, and the count of its pending findings of the person), the implementer (package 06's Rework and History) and the lander (package 07's Withdraw)",
+              "a test helper that puts an item into any state by walking allowed transitions, as internal/item's tests do"
+            ],
+            "pseudocode": "new file internal/note/routes_test.go, through the router, a table over the five states, each with one open decision of a test kind on the item: r = post('/api/v1/items/7/notes', {text: 'Keep the old log line'}); assert r.status == 201; assert r.json == {id: 1, item: 7, text: 'Keep the old log line', time: clock, delivered: null}; for new and planning assert the planner stub saw AddFinding(7, 'Keep the old log line') once and the implementer stub nothing; for ready, implementing and reviewing assert the implementer stub saw Rework(7, [{ID: 'note-1', Source: 'person', Text: 'Keep the old log line'}]) once and the planner stub nothing; assert the thread's last entry == {kind: 'note', text: 'Keep the old log line'} and the thread is not unread; assert the decision is still open; assert Revise and Withdraw were not called. One row, a spec item in new with AddFinding answering plan.ErrNotPlanning: 201, no Rework; then itemSvc.Transition(n, 'ready'); assert Rework(n, [{ID: 'note-1', …}]) once. In internal/cli/cli_test.go (package 01's file), against an httptest server: ['item','note','7','Keep the old log line'] -> code 0, stdout 'note 1 added to item 7\\n', the request body {text}; with --json stdout is the answer"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "unwanted",
+          "condition": "a note request carries a body that is not a JSON object with a string `text`, a text of 0 or of more than 20,000 Unicode code points, a number that is not a positive decimal integer, or the number of no item",
+          "action": "refuse the request and store nothing",
+          "contract": "status 400 `invalid_request` with the message `text must be 1 to 20,000 characters` for the text, and 400 `invalid_request` for the body and the number; status 404 `not_found` for the unknown item; no note, no entry and no event is written; `nightshift item note` with a missing argument, a third argument, a number that is no positive integer, or a text outside the bounds exits 2 with the usage on stderr and sends no request",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/note/routes_test.go, a table over {body 'x'; body {}; body {text: 5}; text ''; text of 20,001 code points -> 400 'text must be 1 to 20,000 characters'; text of 20,000 two-byte code points -> 201; /api/v1/items/abc/notes and /api/v1/items/0/notes -> 400; /api/v1/items/999/notes -> 404}: assert r.status and r.json.error_type; assert count(notes) and the entry count grew only for the 201 row. In internal/cli/cli_test.go, a table over {['item','note'], ['item','note','7'], ['item','note','7','a','b'], ['item','note','x','a'], ['item','note','7',''], ['item','note','7',<20,001 code points>]}: code 2, usage on stderr, the server saw no request"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "unwanted",
+          "condition": "a note names an item in the state `verifying`, `publishing`, `done` or `abandoned`",
+          "action": "refuse the note and store nothing",
+          "contract": "status 409 with `error_type` `conflict` and the message `item <N> has landed; create a new item`; `nightshift item note` exits 1 with that message on stderr; no note and no entry is written and no stub was called",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/note/routes_test.go, a table over the four states: r = post('/api/v1/items/7/notes', {text: 'x'}); assert r.status == 409; assert r.json == {error_type: 'conflict', message: 'item 7 has landed; create a new item'}; assert count(notes) == 0 and the entry count is unchanged. In internal/cli/cli_test.go: the server answers that 409 -> code 1, stderr 'item 7 has landed; create a new item\\n'"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "ubiquitous",
+          "action": "for any item, answer `Pending(ctx, item)` of the note service with the item's notes that are not delivered, in ascending order of id, which is the order they were given in, and answer `Pending(ctx, item)` of the findings source (`Service.Source()`) with the texts of those notes in that order and the id of the last one",
+          "contract": "an item with no pending note answers an empty list and the id 0; notes of another item are never among them; a note stays pending across a restart of nightshiftd",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a note service over a copy of the store template with an injected clock"
+            ],
+            "pseudocode": "new file internal/note/note_test.go: svc.Add(ctx, 7, 'first'); svc.Add(ctx, 8, 'other'); svc.Add(ctx, 7, 'second'); assert texts(svc.Pending(ctx, 7)) == ['first','second']; texts, through = svc.Source().Pending(ctx, 7); assert texts == ['first','second'] and through == 3; assert svc.Source().Pending(ctx, 9) == ([], 0); reopen the store and build a new service; assert texts(svc.Pending(ctx, 7)) == ['first','second']"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "event_driven",
+          "condition": "the event log delivers a `session.ended` event of a completed planner or implementer session of an item that has pending notes, and the package the notes were handed to no longer holds them as waiting: package 06's `History(item)` holds the finding `note-<id>` of a note handed to the implementer, or package 05 reports no pending finding of the person for an item whose notes were handed to the planner",
+          "action": "call `MarkDelivered(ctx, item, through, session)`, the function behind `Delivered` of the findings source, which marks every pending note of the item whose id is at most `through` as delivered to that session at the clock's time and appends to the item's thread one entry of kind `note_delivered` with the text `note <id>[, <id>…] given to session <session>`, not marking the thread unread",
+          "contract": "those notes are no longer answered by `Pending` and carry `delivered` `{session, time}`; a note the package still holds as waiting stays pending and is marked with the session that carries it; a session that failed or was interrupted marks nothing; a second call of `MarkDelivered` with the same arguments, a `through` of 0 and a call for an item with nothing pending write nothing and return nil",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/note/note_test.go: notes 1 and 2 on item 7 handed to the implementer stub, note 3 added later; the stub's History(7) answers [note-1, note-2]; deliver the event session.ended {item 7, role implementer, session 's-1', outcome completed} to the service's event function; assert texts(svc.Pending(ctx, 7)) == ['late']; assert the thread's last entry == {kind: 'note_delivered', text: 'note 1, 2 given to session s-1'} and the thread is not unread; assert notes 1 and 2 carry delivered {session: 's-1', time: clock}. A table over {the same event with outcome failed; outcome interrupted; a reviewer's session; History answering []}: assert nothing is marked. Planner case: notes 4 and 5 on item 8 handed to the planner stub; the stub reports 1 pending finding of the person -> a completed planner session marks nothing; it reports 0 -> the next one marks 'note 4, 5 given to session s-3'. svc.MarkDelivered(ctx, 7, 2, 's-1') again, MarkDelivered(ctx, 7, 0, 's-2') and MarkDelivered(ctx, 9, 5, 's-3'): assert the entry count is unchanged"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "What a note starts, by the item's state",
+      "rationale": "A note is only worth giving when a session is certain to read it, so every state before the landing must lead to one.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "event_driven",
+          "condition": "an implementer session of an item ends while a note of the item waits, also when the gate would pass on its version and the reviewer would agree; or the first implementer session of a `ready` item starts while a note waits",
+          "action": "give the waiting notes to the item's next implementer session as binding findings of the person, in the order given: to a first implementation in an input of their own beside the package, to a rework in its findings, starting a rework for them alone when nothing else waits; and have the version of the session that carried them gated and reviewed",
+          "contract": "the item does not reach `landing` while a note of it waits; the session's input holds each waiting note's text with the source `person`; the running session was not interrupted for the note; the note is marked delivered to the session that carried it",
+          "check": {
+            "same_as": "PATH-1"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "event_driven",
+          "condition": "a note is given to an item in the state `awaiting_approval`",
+          "action": "store the note, call package 05's `plan.Service.Revise(ctx, item, text)`, which stores the text as a pending finding of the person and moves the item to `planning` so that the planner runs once more on the draft, close every open decision of the item of the kind `plan` through the inbox's `Close` with the reason `superseded by a note`, and append the `note` entry",
+          "contract": "status 201 with the note; `Revise` was called once with the note's text, and `AddFinding` not at all; the former `plan` decision has the state `closed` and the `closed_reason` `superseded by a note` and is no longer in `Action`; a decision of the item of another kind stays open",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/note/routes_test.go: item 7 in awaiting_approval with an open decision of a kind 'plan' the test declares and an open decision of a test kind; r = post('/api/v1/items/7/notes', {text: 'Use the existing config key'}); assert r.status == 201; assert the planner stub saw Revise(7, 'Use the existing config key') once and no AddFinding; assert inbox.Decision(plan).State == 'closed' and ClosedReason == 'superseded by a note'; assert the other decision is open; assert the thread's entries end with decision_closed then note"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "event_driven",
+          "condition": "a planner round of an item starts while a note of the item waits, or the reviewer of a plan agrees while one waits",
+          "action": "give the waiting notes to the planner as findings of the person which it must follow, in the order given, run one more planner round for them when the reviewer had agreed already, and end planning only when no note waits",
+          "contract": "a `plan` decision opens, or the item becomes `ready` without one, only after the round that was given the notes; the planner's findings input holds each waiting note's text with the source `person`; the notes are marked delivered to that round's session",
+          "check": {
+            "same_as": "PATH-3"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "event_driven",
+          "condition": "a note is given to an item in the state `landing`",
+          "action": "call package 07's `land.Service.Withdraw(ctx, item, \"note from the owner\")`, which waits until no land of the item is being answered and reports the check `nightshift-release` as `failed` with that summary; then store the note, call package 06's `impl.Service.Rework(ctx, item, [{ID: \"note-<id>\", Source: \"person\", Text: text}])`, which moves the item to `implementing` and keeps the finding for its next session, close every open decision of the item with the reason `superseded by a note`, and append the `note` entry",
+          "contract": "status 201 with the note; `Withdraw` returned before anything was stored; every decision of the item that was open has the state `closed`",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/note/routes_test.go: item 7 in landing with an open decision of a kind 'approval' the test declares; the stubs record the order of their calls and the count of stored notes at each: r = post('/api/v1/items/7/notes', {text: 'Keep the old log line'}); assert r.status == 201; assert the call order == [Withdraw(7, 'note from the owner') with 0 notes stored, Rework(7, [{ID: 'note-1', Source: 'person', Text: 'Keep the old log line'}]) with 1 stored]; assert the approval decision's state == 'closed' and ClosedReason == 'superseded by a note'; assert the thread's last entry is the note"
+          }
+        },
+        {
+          "id": "REQ-2.5",
+          "pattern": "event_driven",
+          "condition": "a note is given to an item whose landing waits for the person's approval",
+          "action": "have the hub hold the check `nightshift-release` as `failed` with the summary `note from the owner` on the version that waited, start a rework of the item with the note, and have the rework's version gated and reviewed again",
+          "contract": "the hub's change has a newer version after the rework; the version that waited never lands",
+          "check": {
+            "same_as": "PATH-2"
+          }
+        },
+        {
+          "id": "REQ-2.6",
+          "pattern": "unwanted",
+          "condition": "`Withdraw` answers `land.ErrLanded` for a note to an item in `landing`",
+          "action": "refuse the note as for an item that is `verifying`, and store nothing",
+          "contract": "status 409 with `error_type` `conflict` and the message `item <N> has landed; create a new item`; no note and no entry is written, no decision is closed and `Rework` is not called",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/note/routes_test.go: item 7 in landing with an open decision, the lander stub's Withdraw returns land.ErrLanded: r = post('/api/v1/items/7/notes', {text: 'x'}); assert r.status == 409 and r.json.message == 'item 7 has landed; create a new item'; assert count(notes) == 0; assert the decision is open; assert Rework was not called"
+          }
+        },
+        {
+          "id": "REQ-2.7",
+          "pattern": "unwanted",
+          "condition": "`Withdraw` fails with another error than `land.ErrLanded`, or `AddFinding` (with another error than `plan.ErrNotPlanning`), `Revise` or `Rework` returns an error",
+          "action": "refuse the note, remove it where it was stored, write no entry and close no decision",
+          "contract": "status 503 `hub_unavailable` while the hub client's `Available(worker)` is false; else, for `Withdraw`, 502 `hub_error` with the error's first line as the message, and for the three others 500 `internal`; `Pending` answers no note of the request; the item's open decisions are still open; the `nightshift` command exits 1 with the message on stderr; the same request sent again when the cause is gone is accepted",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/note/routes_test.go, a table over {landing, Withdraw fails and Available false -> 503 hub_unavailable; landing, Withdraw fails with 'checks: 500 boom\\nmore' and Available true -> 502 hub_error 'checks: 500 boom'; landing, Rework fails -> 500 internal; implementing, Rework fails -> 500; planning, AddFinding fails -> 500; awaiting_approval, Revise fails -> 500; awaiting_approval, Revise fails and Available false -> 503}: assert r.status and r.json.error_type; assert len(svc.Pending(ctx, 7)) == 0; assert the entry count is unchanged; assert the open decision is still open; then let the stub succeed and post again: assert 201"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "Taking an item over with the command",
+      "rationale": "When the agents do not get an item right, the person must be able to do it themselves on the item's own branch, with nightshift out of the way.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "event_driven",
+          "condition": "an authenticated client sends `POST /api/v1/items/{number}/take-over` for an item that has a change, is in the state `planning`, `awaiting_approval`, `ready`, `implementing`, `reviewing` or `landing` and is not taken over, while the hub answers",
+          "action": "read the item's fork, branch and git URL from package 05's `change.Service.Get(ctx, item)` and the number of the change's current version from package 06's `impl.Service.Version(ctx, item)`; store the take-over with the item, that version, the time and how it came (`command`); hold the item with `Scheduler.HoldItem`, which ends its running session, recorded as interrupted; close the item's open decisions of the kinds `session_failed`, `session_limit`, `review_disagreement`, `conflict` and `blocked` with the reason `taken over`; append to the item's thread an entry of kind `taken_over` with the text `taken over at version <n>; push to branch <branch> of <git URL>, then run nightshift item resume <N>`, not marking the thread unread; and append the event `item.updated`",
+          "contract": "status 200 with `{item, git_url, branch, version}`, the item's `markers` holding `taken over`; the item's state is unchanged; an open decision of another kind stays open; `nightshift item take-over <N>` prints the three lines `item <N> taken over`, `git <git URL>` and `branch <branch>` and exits 0, and with `--json` prints the API's answer",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a take-over service over a copy of the store template, a real item service and inbox, an injected clock, and stubs: a change source answering package 05's Record {Workspace 'demo', Fork 'demo--i7', GitURL 'https://hub.example/git/acme/demo--i7.git', Branch 'item-7', Change 4} or change.ErrNotFound, a version source answering package 06's impl.Version with Number 3 or an error, and a holder recording HoldItem calls"
+            ],
+            "pseudocode": "new file internal/takeover/routes_test.go, through the router, a table over the six states: item 7 has one open decision of a declared kind 'session_failed' and one of a test kind: r = post('/api/v1/items/7/take-over'); assert r.status == 200; assert r.json.git_url == 'https://hub.example/git/acme/demo--i7.git', r.json.branch == 'item-7', r.json.version == 3; assert 'taken over' in r.json.item.markers; assert the holder saw HoldItem(7) once; assert the session_failed decision is closed with ClosedReason 'taken over' and the other is open; assert the thread's last entry == {kind: 'taken_over', text: 'taken over at version 3; push to branch item-7 of https://hub.example/git/acme/demo--i7.git, then run nightshift item resume 7'}; assert svc.Get(7).State is unchanged; assert the last event is item.updated for item 7. In internal/cli/cli_test.go: ['item','take-over','7'] -> code 0, stdout 'item 7 taken over\\ngit https://hub.example/git/acme/demo--i7.git\\nbranch item-7\\n'"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "state_driven",
+          "condition": "an item is taken over",
+          "action": "report the marker `taken over` for it unless it is `abandoned`, keep its pause flag set so that no step function is called for it, no session starts for it and it is not landed, answer false from the landing condition `taken over` registered with package 07's `land.Service.AddCondition`, and start nothing when the hub records a new version of its change",
+          "contract": "`GET /api/v1/items/{number}` and `GET /api/v1/items` carry `taken over` in `markers`, and `nightshift item show <N>` and `nightshift item list` print it; `Scheduler.Paused(item)` is true; a resume of the item's workspace leaves it held; the take-over and the hold survive a restart of nightshiftd; an abandoned item no longer carries the marker",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "new file internal/takeover/takeover_test.go, with a real scheduler over a fake session runner and a step function for 'implementing' that counts its calls: take item 7 over through svc.TakeOver(ctx, 7, 'command'); pass three times; assert the step function's count did not grow and no session was asked for; assert sched.Paused(7); assert the function registered as the condition 'taken over' answers false for 7 and true for item 8; raise the version stub to 4; pass; assert nothing started; pause and resume the workspace 'demo' through package 04's routes; pass; assert the count did not grow; assert get('/api/v1/items/7').json.markers contains 'taken over' and 'paused'; reopen the store and build new services; assert the marker and sched.Paused(7) still hold; item.Abandon(ctx, 7, ''); assert 'taken over' not in the markers"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "unwanted",
+          "condition": "a take-over names an item that has no change yet (`change.Service.Get` answers `change.ErrNotFound` or a record whose `Change` is 0), an item in the state `verifying`, `publishing`, `done` or `abandoned`, an item that is taken over already, a number that is not a positive decimal integer, or the number of no item",
+          "action": "refuse the take-over and change nothing",
+          "contract": "status 409 with `error_type` `conflict` and the message `item <N> has no change yet`, `item <N> is <state>` or `item <N> is already taken over`; status 400 `invalid_request` for the malformed number and 404 `not_found` for the unknown item; no hub request was sent, nothing is stored, the item is not held and its running session still runs; `nightshift item take-over` exits 1 with the message on stderr, and exits 2 without a request when the argument is missing or no positive integer",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/takeover/routes_test.go, a table over {item in new with change.ErrNotFound -> 409 'item 7 has no change yet'; planning with a record whose Change == 0 -> the same; verifying -> 409 'item 7 is verifying'; publishing; done; abandoned -> 'item 7 is abandoned'; taken over before -> 409 'item 7 is already taken over'; /api/v1/items/abc/take-over -> 400; /api/v1/items/999/take-over -> 404}: assert r.status and r.json.message; assert the version stub and the holder saw no call in that request; assert count(take-overs) and the entry count are unchanged. In internal/cli/cli_test.go: the server answers the 409 -> code 1 with the message on stderr; ['item','take-over'] and ['item','take-over','x'] -> code 2"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "unwanted",
+          "condition": "the change's current version cannot be read for a take-over: the hub client's `Available(worker)` is false, or `impl.Service.Version` returns an error",
+          "action": "refuse the take-over and change nothing",
+          "contract": "status 503 `hub_unavailable` while `Available(worker)` is false; else status 502 `hub_error` with the error's first line as the message; nothing is stored, `HoldItem` is not called, no decision is closed and no entry is written",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/takeover/routes_test.go, a table over {Available false -> 503; Version returns 'internal: boom\\nmore' -> 502 'internal: boom'}: r = post('/api/v1/items/7/take-over'); assert r.status and r.json.error_type; assert the holder saw no call; assert count(take-overs) == 0; assert the open session_failed decision is still open"
+          }
+        },
+        {
+          "id": "REQ-3.5",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls `Scheduler.HoldItem(ctx, item)` for an item that is neither `done` nor `abandoned`",
+          "action": "where the item's own pause flag is not set, set it, also while the pause flag of its workspace is set, cancel the item's running step, end its running session and record that session as `interrupted`, call the functions registered with `OnPause` and append the event `item.updated`; where the item's own flag is set already, change nothing",
+          "contract": "the call returns nil in both cases; `Scheduler.Paused(item)` is true; `POST /api/v1/items/{number}/resume` of package 04 clears the flag as it clears one its pause route set; a resume of the workspace does not; an unknown item returns `item.ErrNotFound` and a `done` or `abandoned` one an error, each setting nothing",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/sched/pause_test.go (package 04's file), with its fake session runner: a table over {item 7 implementing with a session running; item 8 of a paused workspace; item 9 paused before}: err = sched.HoldItem(ctx, n); assert err == nil; assert sched.Paused(n); for item 7 assert the session returned with outcome interrupted and the OnPause function saw it once; for item 9 assert the event count did not grow; resume the workspace of item 8; pass; assert item 8's step function is not called; post('/api/v1/items/8/resume') -> 200. A table over {999 -> item.ErrNotFound; a done item; an abandoned item}: assert an error and no flag set"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "The option `take_over` of five decision kinds",
+      "rationale": "The moments at which a person most wants to take an item over are the ones at which nightshift already asks them something.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "event_driven",
+          "condition": "nightshiftd wires its packages at start, after the packages that declare the decision kinds `session_failed`, `session_limit`, `review_disagreement`, `blocked` and `conflict` have declared them",
+          "action": "add to each of the five kinds, through the inbox's `AddOption`, the option with the key `take_over`, the line `hands the item's branch to you; nothing runs for it until you resume it` and no required comment, and register for each kind and that option, through the inbox's `OnAnswer`, the handler that takes the item over",
+          "contract": "a decision of any of the five kinds opened afterwards lists `take_over` after the options its kind was declared with, not recommended unless the opener names it; `POST /api/v1/decisions/{id}/answer` with `{\"option\": \"take_over\"}` is accepted without a comment",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a take-over service over a copy of the store template, a real item service and inbox, an injected clock, and stubs: a change source answering package 05's Record {Workspace 'demo', Fork 'demo--i7', GitURL 'https://hub.example/git/acme/demo--i7.git', Branch 'item-7', Change 4} or change.ErrNotFound, a version source answering package 06's impl.Version with Number 3 or an error, and a holder recording HoldItem calls"
+            ],
+            "pseudocode": "new file internal/takeover/decision_test.go, with a real inbox on which the test declares the five kinds with the options their packages give them (session_failed: retry, abandon; session_limit: continue, abandon; review_disagreement: side_with_reviewer, side_with_implementer, abandon; blocked: revise, abandon; conflict: retry, abandon): err = svc.RegisterOption(inbox); assert err == nil; a table over the five kinds: d = inbox.Open(ctx, {Kind: kind, Thread: t, Question: 'q', Recommended: first option}); assert the last of d.Options == {key: 'take_over', does: \"hands the item's branch to you; nothing runs for it until you resume it\", comment_required: false, recommended: false}; assert post('/api/v1/decisions/' + d.ID + '/answer', {option: 'take_over'}).status == 200"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "unwanted",
+          "condition": "one of the five kinds is not declared when the option is added",
+          "action": "fail the start of nightshiftd and start nothing",
+          "contract": "`RegisterOption` returns an error whose text is `take_over: decision kind \"<kind>\" is not declared`, naming the first missing kind in the order `session_failed`, `session_limit`, `review_disagreement`, `blocked`, `conflict`; nightshiftd writes that line to stderr and exits with code 1 without listening",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/takeover/decision_test.go: an inbox with only session_failed and session_limit declared: err = svc.RegisterOption(inbox); assert err.Error() == 'take_over: decision kind \"review_disagreement\" is not declared'. In internal/daemon/start_test.go (package 01's file): run the daemon with a wiring hook that leaves out the declaration of 'conflict'; assert exit code 1, stderr ends with 'take_over: decision kind \"conflict\" is not declared\\n' and the listen address refuses a connection"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "event_driven",
+          "condition": "a decision of one of the five kinds is answered `take_over` for an item that has a change and is not taken over, while the hub answers",
+          "action": "take the item over as the command does: read the fork's git URL, the branch and the current version, store the take-over with how it came (`decision <id>`), hold the item, and append the `taken_over` entry and the event `item.updated`",
+          "contract": "the handler returns nil, within the 5 seconds the inbox gives an answer; the item's `markers` hold `taken over`; its running session, if any, ended as `interrupted`; the item's other open decisions stay open; an item that was paused already is taken over at once; a second call of the handler for the same answer, and an answer for an item that is taken over already, store nothing, write no entry and return nil",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/takeover/decision_test.go, a table over the five kinds, and one row with the item paused before: open a decision of the kind on item 7's thread and one of a test kind; post the answer {option: 'take_over'}; eventually inbox.Pending() is empty; assert the holder saw HoldItem(7) once; assert the take-over row == {item 7, version 3, via 'decision <id>'}; assert the thread's last entry has the kind 'taken_over' and names the branch and the git URL; assert the test-kind decision is open; call the registered handler again with the same decision; assert count(take-overs) == 1 and the entry count is unchanged"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "unwanted",
+          "condition": "a decision is answered `take_over` for an item that has no change yet",
+          "action": "append to the item's thread an entry of kind `take_over_refused` with the text `take-over refused: item <N> has no change yet`, marking the thread unread, and, unless a decision of that kind is open for the item, open through the inbox's `Open` a new decision of the answered one's kind with its question, its evidence, its recommended option and its `blocks`",
+          "contract": "the handler returns nil; the item is not held and not taken over; the item's `waiting_on` names the new decision, whose options are the kind's, `take_over` among them; a second call of the handler for the same answer opens no second decision",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/takeover/decision_test.go: the change source answers change.ErrNotFound; a session_failed decision on item 7 with evidence [{label: 'stream', text: '/x'}], recommended 'retry' and blocks 'item 7', answered take_over; run the handler; assert the holder saw no call and count(take-overs) == 0; assert an entry {kind: 'take_over_refused', text: 'take-over refused: item 7 has no change yet'} and thread.unread; assert one open decision of kind session_failed with the same question, evidence, blocks and 'retry' recommended; run the handler again; assert still one open decision"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "unwanted",
+          "condition": "the change's current version cannot be read while a `take_over` answer is carried out",
+          "action": "return an error from the handler and change nothing, so that the inbox calls the handler again",
+          "contract": "the handler's error is `hub unavailable`, or the first line of the error of `impl.Service.Version`; nothing is stored, the item is not held and no entry is written by this package; the inbox writes its entry `decision_effect_failed` once and tries again at its retry interval (30 seconds); the first call after the hub answers takes the item over",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/takeover/decision_test.go, with the inbox's retry interval and clock injected: the version stub fails; answer a conflict decision of item 7 with take_over; eventually the thread holds one decision_effect_failed entry; assert count(take-overs) == 0 and the holder saw no call; advance the clock by the retry interval twice with the stub still failing; assert still one decision_effect_failed entry; let the stub answer version 3; advance the clock; eventually the take-over row exists and inbox.Pending() is empty"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "Giving an item back with `item resume`",
+      "rationale": "Taking over is a detour, not an exit: what the person pushed has to pass what an agent's work passes, and an item they did not touch has to go on where it stood.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "event_driven",
+          "condition": "package 04's `POST /api/v1/items/{number}/resume` clears the pause flag of a taken-over item that is `implementing`, `reviewing` or `landing`, and the number of the current version of its change (`impl.Service.Version`) is greater than the one stored at the take-over",
+          "action": "in the function registered with `Scheduler.OnResume`: close every open decision of the item with the reason `superseded by version <n>`; end the take-over, storing the time and the version; append to the item's thread an entry of kind `given_back` with the text `given back with version <n> (taken over at version <m>); it is gated and reviewed`, not marking the thread unread; append the event `item.updated`; and start nothing itself, because the steps of packages 06 and 07 gate and review a current version that is not gated: package 06's `implementing` step evaluates and gates it, its `reviewing` step and package 07's `landing` step move the item to `implementing` for it",
+          "contract": "the resume route answers as package 04 specifies, status 200 with the item, and `nightshift item resume <N>` prints `resumed item <N>`; afterwards the item's `markers` hold neither `paused` nor `taken over` and the item waits on no decision, so that the scheduler calls its step; no `Rework` is called; the take-over's row is kept with its end",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a take-over service over a copy of the store template, a real item service and inbox, an injected clock, and stubs: a change source answering package 05's Record {Workspace 'demo', Fork 'demo--i7', GitURL 'https://hub.example/git/acme/demo--i7.git', Branch 'item-7', Change 4} or change.ErrNotFound, a version source answering package 06's impl.Version with Number 3 or an error, and a holder recording HoldItem calls"
+            ],
+            "pseudocode": "new file internal/takeover/giveback_test.go, with a real scheduler whose resume route is registered, the take-over service's GiveBack registered with OnResume and a step function per state that counts its calls: a table over the three states, item 7 taken over at version 3 with an open decision of a kind 'approval' the test declares; the version stub answers 5: r = post('/api/v1/items/7/resume'); assert r.status == 200; assert the approval decision's ClosedReason == 'superseded by version 5'; assert the thread's last entry == {kind: 'given_back', text: 'given back with version 5 (taken over at version 3); it is gated and reviewed'}; assert get('/api/v1/items/7').json.markers == [] and waiting_on == null; pass; assert the state's step function was called once; assert the take-over row has given_back_at == clock and given_back_version == 5"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "event_driven",
+          "condition": "the resume clears the pause flag of a taken-over item whose change has no version newer than at the take-over, or of one that is `planning`, `awaiting_approval` or `ready`",
+          "action": "end the take-over, storing the time and the version; append an entry of kind `given_back` with the text `given back; continuing with <state>`, or `given back with version <n>; continuing with <state>` where the version is newer; append the event `item.updated`; and call nothing else, so that the scheduler calls the step function of the item's state again",
+          "contract": "no decision is closed; the item's `markers` hold neither `paused` nor `taken over`; the step function of the item's state is called at the next pass when the item waits on no decision",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/takeover/giveback_test.go, a table over {implementing, version still 3 -> 'given back; continuing with implementing'; landing, version 3 -> '…continuing with landing'; awaiting_approval with its open plan decision, version 5 -> 'given back with version 5; continuing with awaiting_approval'; ready, version 5; planning, version 3}: post('/api/v1/items/7/resume'); assert status 200; assert the open decision, where there is one, is still open; assert the thread's last entry text; assert the markers are empty; pass; assert the state's step function was called for the rows without an open decision"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "unwanted",
+          "condition": "the change's current version cannot be read when a taken-over item is resumed",
+          "action": "end the take-over all the same, with no version, close no decision, and append the `given_back` entry with the text `given back; the hub could not be asked for the version; continuing with <state>`",
+          "contract": "the resume route answers 200; the item is no longer taken over and its `markers` hold neither `paused` nor `taken over`; the step of the item's state is called at the next pass when the item waits on no decision, and finds a version that is not gated by itself",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/takeover/giveback_test.go, a table over {reviewing with the version stub failing; landing with Available false; awaiting_approval with the version stub failing}: post('/api/v1/items/7/resume'); assert status 200; assert the last entry's text == 'given back; the hub could not be asked for the version; continuing with ' + state; assert 'taken over' not in the markers; assert an open decision of the item is still open"
+          }
+        },
+        {
+          "id": "REQ-5.4",
+          "pattern": "ubiquitous",
+          "action": "for any resume of an item that is not taken over, change nothing in the function registered with `Scheduler.OnResume`: read no version, close no decision and write no entry",
+          "contract": "a paused item is resumed exactly as package 04 specifies; `nightshift item resume <N>` for an item that is neither paused nor taken over exits 1 with package 04's message `item <N> is not paused`",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/takeover/giveback_test.go: item 7 paused through package 04's pause route and never taken over; post('/api/v1/items/7/resume'); assert status 200; assert the version stub saw no call and the thread has no given_back entry; post the resume again; assert status 409 and message 'item 7 is not paused'; an item taken over, given back and paused again is resumed with no second given_back entry"
+          }
+        },
+        {
+          "id": "REQ-5.5",
+          "pattern": "event_driven",
+          "condition": "the person pushes to the branch of a taken-over item with a credential of their own and then runs `nightshift item resume <N>`",
+          "action": "start nothing for the push, and after the resume have the version the person pushed gated, reviewed and landed as any other version, with no implementer session before the gate",
+          "contract": "the hub's checks `nightshift-gate`, `nightshift-review` and `nightshift-release` are `passed` on the person's version and that version is the one landed",
+          "check": {
+            "same_as": "PATH-4"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "A note given while the implementer runs reaches a rework",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "runs the implementer session of an item that is `implementing`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item note <N> \"Keep the old log line\"`"
+        },
+        {
+          "actor": "nightshift",
+          "action": "sends `POST /api/v1/items/<N>/notes` and prints `note 1 added to item <N>`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "stores the note and writes it to the item's thread, leaving the session running"
+        },
+        {
+          "actor": "implementer",
+          "action": "finishes and pushes a version"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "accepts the session and finds the note waiting as a finding of the person and starts a rework with it before the gate"
+        },
+        {
+          "actor": "implementer",
+          "action": "reworks and pushes a new version"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "marks the note delivered to the rework's session, gates and reviews the new version, and moves the item to `landing`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with the note service wired to package 06's `Rework`",
+          "the note route and the `nightshift item note` command",
+          "the scheduler, the implementer's step, the gate and the review of packages 04 and 06",
+          "the store, the inbox and the fake hub's forks and changes",
+          "a fake `claude` process and the faux reviewer"
+        ],
+        "setup": [
+          "the daemon started in-process by the helper of internal/daemon/e2e_test.go against internal/hubtest, with a registered workspace `demo`, a fake `claude` executable on PATH that the test scripts, agentkit-go's faux provider for the reviewer, and a gate that passes, as the flows of packages 05 to 07 set them up",
+          "an item made `ready` by the planning flow with `--no-plan-approval`",
+          "a fake `claude` whose first run waits for a marker file before it pushes, and which records the findings file each rework was given",
+          "the fake hub answers the land as pending on an approval, so that the item stays in `landing`"
+        ],
+        "end_state": [
+          "`nightshift item note` exited 0 while the first session was running, and that session completed, not interrupted",
+          "exactly two implementer sessions ran; the second was a rework whose findings file holds `Keep the old log line` as a finding of the person",
+          "the fake hub's change has two versions and the checks `nightshift-gate` and `nightshift-review` are `passed` on the second",
+          "the item is in `landing` only after the rework",
+          "the thread holds the `note` entry and a `note_delivered` entry naming the second session"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg); item = a ready item; eventually one implementer session runs; assert cli.Run(['item','note',N,'Keep the old log line']) == 0; create the marker file; eventually item.state == 'landing'; assert len(fakeHub.Sessions(archetype implementer)) == 2; assert fakeClaude.reworkFindings[0] contains 'Keep the old log line'; assert the first session's outcome == 'completed'; assert len(fakeHub.Change(n).versions) == 2; assert the thread has entries of kind note and note_delivered"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "A note withdraws a landing that waits for an approval",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "reports `nightshift-release` as passed and asks the hub to land the item's version"
+        },
+        {
+          "actor": "hub",
+          "action": "answers that the land is pending on an approval"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens an `approval` decision; the item stays in `landing`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item note <N> \"Do not touch deploy/\"`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "has the landing withdrawn: reports `nightshift-release` as `failed` with the summary `note from the owner` to the hub"
+        },
+        {
+          "actor": "hub",
+          "action": "records the failed check on the version"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "stores the note, closes the `approval` decision as `superseded by a note` and starts a rework with the note"
+        },
+        {
+          "actor": "implementer",
+          "action": "reworks and pushes a new version"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "gates the new version and runs the review"
+        },
+        {
+          "actor": "reviewer",
+          "action": "agrees"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with the note service wired to the lander's `Withdraw` and the implementer's `Rework`",
+          "the landing of package 07 and its check `nightshift-release`",
+          "the implementer's step, the gate and the review of package 06",
+          "the inbox and the fake hub's changes, checks and policy"
+        ],
+        "setup": [
+          "the daemon started in-process by the helper of internal/daemon/e2e_test.go against internal/hubtest, with a registered workspace `demo`, a fake `claude` executable on PATH that the test scripts, agentkit-go's faux provider for the reviewer, and a gate that passes, as the flows of packages 05 to 07 set them up",
+          "the state PATH-1 ends in: an item in `landing` whose land the fake hub answered as pending on an approval, with the `approval` decision open"
+        ],
+        "end_state": [
+          "`nightshift item note` exited 0",
+          "the fake hub holds the check `nightshift-release` with the status `failed` and the summary `note from the owner` on the version that waited",
+          "the `approval` decision is `closed` with the reason `superseded by a note`",
+          "a rework session ran whose findings file holds `Do not touch deploy/`, and the fake hub's change has one more version with `nightshift-gate` and `nightshift-review` passed on it",
+          "the version that waited was never landed"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go, going on from the first flow: v = fakeHub.Change(n).version; assert cli.Run(['item','note',N,'Do not touch deploy/']) == 0; assert fakeHub.Check(n, v, 'nightshift-release') == {status: 'failed', summary: 'note from the owner'}; assert the approval decision's closed_reason == 'superseded by a note'; eventually fakeHub.Change(n).version == v + 1 and its nightshift-review check passed; assert the last rework's findings contain 'Do not touch deploy/'; assert fakeHub.Change(n).landed == null"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "Notes during planning and after it reach the planner",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift item new demo --text \"Add a greeting endpoint\"`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "starts the planner"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item note <N> \"Use the existing router\"` while the planner's round runs"
+        },
+        {
+          "actor": "planner",
+          "action": "finishes its round and pushes the package"
+        },
+        {
+          "actor": "reviewer",
+          "action": "agrees with the plan"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "finds the note waiting as a finding of the person and runs one more planner round with it"
+        },
+        {
+          "actor": "planner",
+          "action": "revises the package following the note"
+        },
+        {
+          "actor": "reviewer",
+          "action": "agrees"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens a `plan` decision; the item is `awaiting_approval`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item note <N> \"Name the route /hello\"`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "closes the `plan` decision as `superseded by a note` and starts the planner with the note"
+        },
+        {
+          "actor": "planner",
+          "action": "revises the package following the note"
+        },
+        {
+          "actor": "reviewer",
+          "action": "agrees"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens a new `plan` decision"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with the note service wired to package 05's `AddFinding` and `Revise`",
+          "the note route and command",
+          "the planning of package 05 with its review rounds and its `plan` decision",
+          "the inbox, the scheduler and the fake hub"
+        ],
+        "setup": [
+          "the daemon started in-process by the helper of internal/daemon/e2e_test.go against internal/hubtest, with a registered workspace `demo`, a fake `claude` executable on PATH that the test scripts, agentkit-go's faux provider for the reviewer, and a gate that passes, as the flows of packages 05 to 07 set them up",
+          "a fake `claude` whose first planner run waits for a marker file, and which records the findings file each later round was given"
+        ],
+        "end_state": [
+          "three planner sessions ran: the second was given `Use the existing router`, the third `Name the route /hello`, each as a finding of the person",
+          "no `plan` decision was opened before the second round ended",
+          "the first `plan` decision is `closed` with the reason `superseded by a note` and a second one is open",
+          "the item is `awaiting_approval` and both notes are delivered"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: N = cli item new; eventually a planner session runs; assert cli.Run(['item','note',N,'Use the existing router']) == 0; assert no decision is open; create the marker file; eventually one plan decision d1 is open; assert fakeClaude.plannerFindings == [['Use the existing router']]; assert cli.Run(['item','note',N,'Name the route /hello']) == 0; assert decision d1 is closed with 'superseded by a note'; eventually a plan decision d2 != d1 is open; assert fakeClaude.plannerFindings[1] == ['Name the route /hello']; assert GET /api/v1/items/N state == 'awaiting_approval'"
+      }
+    },
+    {
+      "id": "PATH-4",
+      "title": "The person takes an item over from a decision, pushes and gives it back",
+      "steps": [
+        {
+          "actor": "implementer",
+          "action": "fails twice in a row for the same step"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens a `session_failed` decision whose options hold `take_over`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift decide <id> --option take_over`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reads the change's version from the hub, holds the item, and writes the fork's git URL and the branch to the thread"
+        },
+        {
+          "actor": "nightshift",
+          "action": "prints the item with the marker `taken over` for `nightshift item show <N>`"
+        },
+        {
+          "actor": "person",
+          "action": "pushes a commit to the branch of the fork with their own credential"
+        },
+        {
+          "actor": "hub",
+          "action": "records the push as a new version of the item's change"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "starts no session and gates nothing while the item is taken over"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item resume <N>`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "finds the version newer than at the take-over and ends the take-over; the step of the item's state finds the version not gated, gates it and runs the review"
+        },
+        {
+          "actor": "reviewer",
+          "action": "agrees"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reports `nightshift-release` and asks the hub to land the person's version"
+        },
+        {
+          "actor": "hub",
+          "action": "lands the change"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with the take-over service, its option on the five kinds and its resume function",
+          "the decision routes and `nightshift decide`, `item show` and `item resume`",
+          "the scheduler with its pause, the gate, the review and the landing of packages 04, 06 and 07",
+          "the fake hub's forks served over git smart HTTP, its changes and versions",
+          "a real `git push` by the test"
+        ],
+        "setup": [
+          "the daemon started in-process by the helper of internal/daemon/e2e_test.go against internal/hubtest, with a registered workspace `demo`, a fake `claude` executable on PATH that the test scripts, agentkit-go's faux provider for the reviewer, and a gate that passes, as the flows of packages 05 to 07 set them up",
+          "an item in `implementing` whose fake `claude` exits with an error at every run",
+          "a second token of the fake hub's user, which the test pushes with as the person"
+        ],
+        "end_state": [
+          "the `session_failed` decision listed `take_over` and was answered with it",
+          "`nightshift item show` printed `taken over` and the thread holds a `taken_over` entry with the fork's git URL and the branch",
+          "between the push and the resume the fake hub registered no session and received no check report",
+          "after the resume no implementer session started before the gate; `nightshift-gate`, `nightshift-review` and `nightshift-release` are `passed` on the version the test pushed",
+          "the fake hub landed that version and the item left `landing` for `verifying` or a later state",
+          "the item's markers are empty"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: eventually a session_failed decision d is open for item N; assert 'take_over' in d.options; assert cli.Run(['decide', d.id, '--option', 'take_over']) == 0; eventually cli item show output contains 'taken over'; url, branch = parsed from the thread's taken_over entry; git clone url with the person's token; commit; git push origin branch; assert fakeHub.Change(n).version == v + 1; wait five passes; assert len(fakeHub.Sessions()) and len(fakeHub.CheckReports()) are unchanged; assert cli.Run(['item','resume',N]) == 0; eventually fakeHub.Change(n).landed.version == v + 1; assert the three checks passed on v + 1; assert no implementer session was registered after the resume; assert GET /api/v1/items/N markers == []"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API and git smart HTTP (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "git remote of a workspace or fork",
+          "import_path": "<hub_url> = <external URL of the hub>/git/<org slug>/<workspace slug>.git",
+          "signature": "smart HTTP only; `GET …/info/refs?service=git-upload-pack|git-receive-pack`, `POST …/git-upload-pack`, `POST …/git-receive-pack`; HTTP Basic with the credential as the password and any user name; a PAT needs `git:read` to fetch and `git:write` to push, and write access to the workspace"
+        },
+        {
+          "name": "a push to a change's source branch",
+          "import_path": "git push <hub_url> <branch>",
+          "signature": "a push to a branch that is the source of a draft or open change records the next version of that change, as part of the push and whoever pushes; versions are numbered from 1; moving the branch to the current head records nothing; the hub prints `remote: change <slug>#<number> version <n>`"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/changes/{number}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}",
+          "signature": "200 with the change object {workspace_slug, number, state, source: {workspace_slug, branch}, version: int (the current version), head_sha, landing, landed, …}; `slug` is the workspace the change belongs to, a fork's parent"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}",
+          "signature": "200 with the workspace object, whose `hub_url` is the git remote of the workspace on the hub; read by package 05's change service, whose Record.GitURL this package prints"
+        },
+        {
+          "name": "PUT /api/v1/workspaces/{slug}/changes/{number}/checks/{name}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/checks/{name}",
+          "signature": "scope checks:write; body {status: pending|passed|failed (required), version (default the current one), summary (at most 2,000 characters), url, details}; one result per version and name, a report replaces the earlier one; 200 with the check; called by package 07's Withdraw, not by this package"
+        }
+      ]
+    },
+    {
+      "package": "github.com/agent-fox-dev/nightshift/internal/plan and internal/change (package 05, read in .specs/05_planning as a draft)",
+      "version": "draft",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "plan.Service.AddFinding",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/plan",
+          "signature": "func (s *Service) AddFinding(ctx context.Context, item int, text string) error; for an item of kind defect or change_request in new, planning or awaiting_approval: stores the text as a pending finding of the person (id p<n>), interrupts no session, hands it to the planner's next revision, and runs one revision for the pending findings alone when a review agrees; plan.ErrInvalid for an empty text, plan.ErrNotPlanning for another state or a spec item"
+        },
+        {
+          "name": "plan.Service.Revise",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/plan",
+          "signature": "func (s *Service) Revise(ctx context.Context, item int, comment string) error; for an item in awaiting_approval: calls the functions registered with RegisterPrepare, stores the comment as a pending finding of the person and moves the item to planning; plan.ErrNotAwaiting, plan.ErrInvalid for an empty comment"
+        },
+        {
+          "name": "change.Service.Get",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/change",
+          "signature": "func (s *Service) Get(ctx context.Context, item int) (Record, error); Record has Item, Workspace, Fork, GitURL, Branch, Generation, Change (0 while no change is open), ChangeRef and ChangeURL; change.ErrNotFound for an item with no fork"
+        }
+      ]
+    },
+    {
+      "package": "github.com/agent-fox-dev/nightshift/internal/plan, added by this package",
+      "version": "new",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "plan.Service.PendingFindings",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/plan",
+          "signature": "func (s *Service) PendingFindings(ctx context.Context, item int) (int, error); NEW, added by task 2 of this package: the number of the item's pending findings of the person, 0 for an item with no plan"
+        }
+      ]
+    },
+    {
+      "package": "github.com/agent-fox-dev/nightshift/internal/impl (package 06, read in .specs/06_implementation_and_review as a draft)",
+      "version": "draft",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "impl.Service.Rework",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "func (s *Service) Rework(ctx context.Context, item int, findings []Finding) error; Finding has ID, Source (gate, review, person, health or conflict), Text, File, Line, Criterion, Output, Binding; for an item in ready, implementing, reviewing or landing: stores the findings after those waiting, skips an ID the item already has, sets Binding for the source person, moves a reviewing or landing item to implementing and wakes the scheduler; impl.ErrInvalid, impl.ErrState, item.ErrNotFound"
+        },
+        {
+          "name": "impl.Service.Waiting and History",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "Waiting(item) answers the findings not yet given to an accepted rework, in their order; History(item) the ones that were, each with its reply"
+        },
+        {
+          "name": "impl.Service.Version",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "func (s *Service) Version(ctx context.Context, item int) (Version, error); the item's change as the hub has it now: Workspace, Change, Number (the current version), HeadSHA, BaseSHA, State, Paths, Requirements, Overlaps"
+        },
+        {
+          "name": "the step of an implementing item",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/impl",
+          "signature": "starts a rework when findings wait and the package has no open task, before it evaluates or gates; evaluates and gates a current version that has no gate verdict, a person's push among them, with no session; the reviewing step moves an item whose current version is not gated to implementing"
+        }
+      ]
+    },
+    {
+      "package": "github.com/agent-fox-dev/nightshift/internal/land (package 07, read in .specs/07_landing as a draft)",
+      "version": "draft",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "land.Service.Withdraw",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/land",
+          "signature": "func (s *Service) Withdraw(ctx context.Context, item int, summary string) error; waits until no land of the item is being answered, then reports nightshift-release as failed with the summary; land.ErrLanded when the change has landed or lands meanwhile; another error for an item that is not landing"
+        },
+        {
+          "name": "land.Service.AddCondition",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/land",
+          "signature": "func (s *Service) AddCondition(name string, fn func(ctx context.Context, item int) bool); a further landing condition, evaluated after `paused`; an item for which fn answers false does not land, and nightshift-release is reported failed with the name"
+        },
+        {
+          "name": "the step of a landing item",
+          "import_path": "github.com/agent-fox-dev/nightshift/internal/land",
+          "signature": "moves an item whose current version has no passed nightshift-gate or nightshift-review of its own, or whose land the hub answers 409 version_mismatch, to implementing"
+        }
+      ]
+    }
+  ]
+}

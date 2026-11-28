@@ -1,0 +1,257 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "03",
+  "spec_name": "work_items_and_inbox",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/inbox/... ./internal/item/... ./internal/notify/... ./internal/cli/... ./internal/daemon/... -count=1"
+  },
+  "dependencies": [
+    {
+      "spec": "01",
+      "reason": "uses the API server's Handle, the client's Register and client function, the store's migrations, the event log's Append, the hub client with Available, the monitor's Since() and credential errors, the shutdown steps, the configuration struct, internal/hubtest and the end-to-end helper"
+    },
+    {
+      "spec": "02",
+      "reason": "uses workspace.Service (Get, List, AddRemoveGuard, OnRemoved, Decorate), AddWorkspaceListColumn of internal/cli, the hub client's Workspace, gitclone.Sync, the fake hub's workspaces and git endpoint, and the workspace helper of the end-to-end tests"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Keep threads with entries and unread marks, and serve them",
+      "criteria": [
+        "REQ-3.1",
+        "REQ-3.2",
+        "REQ-3.3",
+        "REQ-3.4",
+        "REQ-3.5",
+        "REQ-3.6"
+      ],
+      "steps": [
+        "Add the thread behaviours to internal/inbox/thread_test.go and the thread route behaviours to internal/inbox/routes_test.go and confirm they fail; keep the fixtures (an inbox over a copy of the store template of internal/store, an injected clock, seeding of threads) in internal/inbox/helpers_test.go, the one helpers file of the package",
+        "Add internal/inbox with a store migration registered with internal/store: threads (an id from a counter that is never given twice, the kind item, workspace or brief, the workspace, the item, the title, the unread mark with the seq of the first unread entry, last_activity) and entries (thread, seq, time, kind, text), with uniqueness of the item thread per item, the workspace thread per slug and the one brief thread",
+        "Construct the inbox with inbox.New over the store, the event log, a clock and a workspace source (the Get and List of package 02's workspace.Service, an interface here); keep no package-level state, so that tests run in parallel",
+        "Add CreateItemThread, which runs inside the transaction of its caller (the item service of task 3), and WorkspaceThread and BriefThread, which return the existing thread or create it, relying on the uniqueness so that concurrent first calls agree",
+        "Add Append: refuse an unknown thread, a kind outside ^[a-z][a-z0-9_]*$ and an empty text; otherwise write the entry with the thread's next seq and the clock's time, last_activity and the unread mark in one transaction and append the event thread.updated",
+        "Add MarkRead, which appends thread.updated only when the thread was unread, and the reads Thread, Entries and Threads (view, workspace, cursor, page size 50 as a parameter); the cursor is an opaque string holding the last_activity and the id of the last thread of the page",
+        "Register GET /api/v1/threads, GET /api/v1/threads/{id} and POST /api/v1/threads/{id}/read through the API server's Handle, answering errors through its helper; the GET of one thread reads it, answers, and then marks it read; `open_decisions` and `decisions` are empty lists and the view `action` is empty until task 2 fills them",
+        "Create the inbox in daemon.Run after the store is opened, with package 02's workspace.Service as the workspace source, register its routes, and hand it to the end-to-end helper of internal/daemon/e2e_test.go",
+        "Describe the three thread routes, the thread and entry objects, the views, the paging and what marks a thread read in docs/api.md, and add internal/inbox with Append, WorkspaceThread and BriefThread as what later packages call to docs/architecture.md"
+      ],
+      "touches": [
+        "internal/inbox/inbox.go",
+        "internal/inbox/thread.go",
+        "internal/inbox/routes.go",
+        "internal/inbox/thread_test.go",
+        "internal/inbox/routes_test.go",
+        "internal/inbox/helpers_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Open, answer, close and remind of decisions through a registry of kinds",
+      "criteria": [
+        "REQ-4",
+        "REQ-5.1"
+      ],
+      "steps": [
+        "Add the decision behaviours to internal/inbox/decision_test.go, the reminder behaviours to internal/inbox/reminder_test.go and the decision route behaviours to internal/inbox/routes_test.go and confirm they fail",
+        "Add the store migration for decisions: an id from a counter that is never given twice, the kind, the state open, answered or closed, the thread, the question, the evidence and the options as JSON, what it blocks, the opening time, the answer (option, comment, record, time), whether the answer was carried out, whether its failure was noted, the time of the next attempt, the closing reason and the time of the last reminder",
+        "Add the registry on the inbox: RegisterKind, AddOption, OnAnswer(kind, option, handler) and Kind(name), behind a lock and with the refusals of a duplicate or an unknown name; packages register while daemon.Run wires them, before the API serves",
+        "Add Open: check the kind, the thread, the question and the recommended key, then store the decision with a copy of the kind's options, append the entry decision_opened with the unread mark and the event decision.opened, in one transaction",
+        "Add Answer(ctx, id, Answer{Option, Comment, Record}) with the checks in this order: the decision exists, it is not answered (the error carries the first answer), it is not closed, the option is one of its own, a required comment is not blank; store the answer with an update that applies only to an open decision, so that of concurrent answers one wins and the others get the already-answered error; append the entry and the event in the same transaction",
+        "Add the dispatch pass: for every answered decision not carried out whose next attempt is due, call the handler of its kind and option outside any transaction; mark it carried out on nil or when no handler is registered; on an error write the entry decision_effect_failed once and set the next attempt to the clock's time plus the retry interval (a parameter, default 30 seconds)",
+        "Run the pass at the start of the daemon, after every stored answer (without the answering request waiting for it) and at the retry interval, from one goroutine that a named shutdown step stops; expose Pending for tests",
+        "Add Close with its refusals, its entry and its event, and OpenDecisions(item) for the item service of task 3",
+        "Add RemindDue: for every open decision whose opening or last reminder is at least the reminder period (a parameter, default 24 hours) in the past, write one decision_reminder entry with the unread mark and record the time; run it at the start and once a minute from the same goroutine",
+        "Register GET /api/v1/decisions, GET /api/v1/decisions/{id} and POST /api/v1/decisions/{id}/answer through Handle, mapping the answer's errors to unknown_option, comment_required, already_answered (with the member `answer`), conflict and not_found; fill `open_decisions` of a thread, `decisions` of one thread and the view `action`",
+        "Describe the decision routes, the decision object and the error types in docs/api.md, and the registry (RegisterKind, AddOption, OnAnswer, Open, Close) with the rule that a handler may be called twice in docs/architecture.md"
+      ],
+      "touches": [
+        "internal/inbox/decision.go",
+        "internal/inbox/registry.go",
+        "internal/inbox/dispatch.go",
+        "internal/inbox/reminder.go",
+        "internal/inbox/routes.go",
+        "internal/inbox/decision_test.go",
+        "internal/inbox/reminder_test.go",
+        "internal/inbox/routes_test.go",
+        "internal/inbox/helpers_test.go",
+        "internal/daemon/run.go",
+        "docs/api.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Create work items from text and move them through their states",
+      "criteria": [
+        "REQ-1.1",
+        "REQ-1.2",
+        "REQ-2",
+        "REQ-5.6"
+      ],
+      "steps": [
+        "Add the item behaviours to internal/item/item_test.go and the item route behaviours to internal/item/routes_test.go and confirm they fail; keep the fixtures (an item service over a copy of the store template with an inbox, a stub workspace source, a helper that walks an item into a given state) in internal/item/helpers_test.go",
+        "Add internal/item with a store migration: items with a number from a counter that is never given twice, the workspace, the kind, the title, the state, state_since, created_at, plan_approval, the source as JSON and the parent",
+        "Construct the service with item.New over the store, the inbox, the event log, the workspace source and a clock; no package-level state",
+        "Add Create for a text: validate the workspace, the kind and the length in Unicode code points; in one transaction take the number, write the item, create its thread through the inbox's CreateItemThread, append the entry `created` with the text `item <N> created: <title>` and the event item.created; then call the OnCreated hooks",
+        "Keep the transition table as one data structure and add Transition: update the state only where the item is still in the state the move starts from, so that a concurrent second move is refused; write the entry `state` (unread for done and abandoned) and the event item.updated in the same transaction; then call the OnChange hooks, logging an error of one",
+        "Add Get, List (by workspace and state, ascending by number) and OpenCounts(slug); fill `waiting_on` from the inbox's oldest open decision of the item and `markers` from the functions registered with RegisterMarker",
+        "Add OnAbandon(name, fn) and Abandon: refuse the four states, call the hooks in registration order and write a failure as the entry abandon_hook_failed, close the item's open decisions through the inbox's Close with `item abandoned`, then Transition to abandoned",
+        "Add CreateLinked: the checks of Create on the kind and the text, the parent's workspace, the source `item`, the entry linked_item in the parent's thread without the unread mark, and the OnCreated hooks",
+        "Register POST /api/v1/items, GET /api/v1/items, GET /api/v1/items/{number} and POST /api/v1/items/{number}/abandon through Handle, mapping ErrNotFound to 404, ErrInvalid to 400 and a refused abandon to 409 conflict",
+        "Create the service in daemon.Run after the inbox, register its routes and hand it to the end-to-end helper; add the restart behaviour (a store file opened twice) to internal/item/item_test.go",
+        "Describe the item routes, the item object, the states and the transition table in docs/api.md, and in docs/architecture.md internal/item with what later packages use: Transition, Abandon, CreateLinked, OnCreated, OnChange, OnAbandon, RegisterMarker and the stored plan_approval"
+      ],
+      "touches": [
+        "internal/item/item.go",
+        "internal/item/transition.go",
+        "internal/item/abandon.go",
+        "internal/item/routes.go",
+        "internal/item/item_test.go",
+        "internal/item/routes_test.go",
+        "internal/item/helpers_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/api.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Import issues and spec packages, and tie items to their workspace",
+      "criteria": [
+        "REQ-1.3",
+        "REQ-1.4",
+        "REQ-1.5",
+        "REQ-1.6",
+        "REQ-3.7",
+        "REQ-3.8",
+        "REQ-6.2"
+      ],
+      "steps": [
+        "Add the import behaviours to internal/item/import_test.go and the workspace behaviours to internal/item/workspace_test.go and confirm they fail; extend internal/hubtest with scriptable issues: per workspace and number an issue thread, its comments served 100 to a page with cursors on both forge read routes, a comments_error, is_pr and a forge error to answer with",
+        "Add to the hub client of internal/hub the two reads Issue(ctx, slug, number) and IssueComments(ctx, slug, number, cursor), sent with the worker credential and returning Parley's error envelope as the typed error package 01 defines",
+        "Add ImportIssue: refuse an issue an item of the workspace already has as its source before any hub request, refuse while Available(worker) is false, read the issue, refuse a pull request and a comments_error, read further comment pages until the cursor is null or 1,000 comments are held, choose the kind from the labels ignoring case, and create the item as Create does with the source `issue`",
+        "Add the module github.com/agent-fox-dev/spec to go.mod for its package afspec, and give the item service a checkout function that yields the tree of a workspace's default branch at its tip; in production it reads `head_sha` with the hub client's Workspace of package 02 (add the member to its workspace type and to internal/hubtest's workspace object where they lack it), and brings the clone <clones_dir>/<slug>.import to that commit with gitclone.Sync, the git URL from workspace.Service.Get, the worker token and the Runner the daemon has, one import per workspace at a time",
+        "Add ImportSpec: find the package whose SpecID is the number with afspec.DiscoverSpecs over `.specs` of the tree, load it with LoadSpec, validate it with ValidateInRoot and take the first entry of Errors as the finding, check the status `active` and that OpenTasks is not empty, refuse a package an item of the workspace already has as its source, and create the item with the kind `spec` and the source `spec`",
+        "Build the test packages through afspec itself (CreateSpec, the artefacts filled, Save, Transition to active, task states through TransitionTask and SaveProgress) in internal/item/helpers_test.go, once per test process, copied per test",
+        "Register POST /api/v1/items/import through Handle: `issue` or `spec`, never both; map the refusals to 400 invalid_request, 404 not_found, 409 conflict, 502 hub_error with `<hub error_type>: <hub message>` and 503 hub_unavailable",
+        "Register with AddRemoveGuard of package 02's workspace.Service the guard RemoveGuard(ctx, slug): it returns an error naming every item of the workspace that is neither done nor abandoned, ascending by number, and nil when there is none",
+        "Register with OnRemoved of workspace.Service the hook that runs when a workspace was removed: in one transaction delete the workspace's items and, through a RemoveWorkspace function of the inbox, its threads with their entries and decisions; append thread.removed for each thread",
+        "Register with Decorate of workspace.Service a function that adds the member `items` from OpenCounts to every workspace object, and with AddWorkspaceListColumn of internal/cli the column `items`, which prints the member as `<total> open (<count> <state>, …)` in the order of the state table or `0 open`",
+        "Describe POST /api/v1/items/import with its refusals and the member `items` of the workspace object in docs/api.md, the column in docs/cli.md, and what this package registers with package 02 in docs/architecture.md"
+      ],
+      "touches": [
+        "internal/item/import.go",
+        "internal/item/workspace.go",
+        "internal/item/routes.go",
+        "internal/item/import_test.go",
+        "internal/item/workspace_test.go",
+        "internal/item/helpers_test.go",
+        "internal/inbox/thread.go",
+        "internal/hub/client.go",
+        "internal/hubtest",
+        "internal/cli/item.go",
+        "internal/cli/item_test.go",
+        "internal/daemon/run.go",
+        "go.mod",
+        "go.sum",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Tell the person: the notification command, the hub's outage and a refused token",
+      "criteria": [
+        "REQ-5.2",
+        "REQ-5.3",
+        "REQ-5.4",
+        "REQ-5.5"
+      ],
+      "steps": [
+        "Add the notification behaviours to internal/notify/notify_test.go, the outage and credential behaviours to internal/inbox/outage_test.go and the two notification cases to internal/inbox/decision_test.go and confirm they fail",
+        "Add the key `[notify].command` to the configuration struct of internal/config, with no default",
+        "Add internal/notify: notify.New(command, logger, timeout) and Notify(Event{Event, Time, Workspace, Item, Thread, Decision}), which returns at once and, where a command is configured, runs it from a goroutine with `sh -c` in a process group of its own, as the daemon's user and not through internal/command, writes the event as one JSON document to its standard input (members without a value left out) and closes it",
+        "End the command's process group when the timeout (default 30 seconds) passes; keep the first line of its error output; write the one log line for an exit code other than 0, a timeout or a start error; never run a command twice for one event",
+        "Add Wait for tests and Stop, which ends every running command, and register Stop as the shutdown step `notify`",
+        "Give the inbox a notifier (an interface with Notify; none configured means no call) and call it from Open with decision_opened and from RemindDue with decision_reminder, each with the workspace, the item, the thread's URL path and the decision's id, kind, question and option keys, after the transaction committed",
+        "Add the hub watch in internal/inbox: NewHubWatch over the hub monitor of package 01 (its Since() and its credential errors, as the status route reads them), the workspace source's List, the inbox, the notifier and a clock; Check writes the hub_outage entry to every workspace thread and notifies once when the outage has lasted the threshold (default 15 minutes) and was not noted yet for that Since(), and writes a credential entry for each credential error it did not see at the check before",
+        "Run Check every 30 seconds (a parameter) from a goroutine started in daemon.Run and stopped by a shutdown step; let the end-to-end helper set the threshold and the interval",
+        "Describe `[notify].command`, its JSON document, the 30 seconds and the log lines in docs/configuration.md, and internal/notify with Notify as what packages 07, 08 and 10 call in docs/architecture.md"
+      ],
+      "touches": [
+        "internal/notify/notify.go",
+        "internal/notify/notify_test.go",
+        "internal/inbox/outage.go",
+        "internal/inbox/outage_test.go",
+        "internal/inbox/decision.go",
+        "internal/inbox/reminder.go",
+        "internal/inbox/decision_test.go",
+        "internal/config/config.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/configuration.md",
+        "docs/architecture.md"
+      ],
+      "depends_on": [
+        2
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Add the client's item and inbox commands",
+      "criteria": [
+        "REQ-1.7",
+        "REQ-1.8",
+        "REQ-6.1",
+        "REQ-6.3",
+        "REQ-6.4",
+        "REQ-6.5",
+        "REQ-6.6",
+        "REQ-6.7",
+        "REQ-6.8"
+      ],
+      "steps": [
+        "Add the command behaviours to internal/cli/item_test.go, internal/cli/inbox_test.go and internal/cli/watch_test.go, and every usage error of these commands as one table in internal/cli/usage_test.go, and confirm they fail",
+        "Register through the client's Register the commands `item` (with the subcommands new, import, list, show, abandon), `inbox`, `thread show`, `decision show`, `decide` and `watch`; accept flags before and after the positional arguments, which the standard flag package does not do by itself",
+        "Check before any request what the client can check: the length of `--text` in Unicode code points, `--kind`, the pairing of `--issue`, `--spec` and `--no-plan-approval`, `--state` against the eleven states, ids and numbers as positive integers, `--unread` with `--action`; answer each with the command's usage on stderr and exit code 2",
+        "Add `item new` and `item import`, printing `item <number>` and `thread <path>`, and `item list`, `item show` and `item abandon` with the lines the criteria give; send every request through the one client function of package 01, which gives the exit codes and `--json` for a refusal",
+        "Add `inbox`: read the open decisions and the unread threads, each to the last page, and print the sections Action and Unread, or the one a flag names; with --json print one object with the members `action` and `unread`",
+        "Add `thread show` and `decision show` with the lines the criteria give, and `decide`, which sends the option, the comment when given and `record` when --record is given",
+        "Add `watch`: read the server-sent events of GET /api/v1/events line by line, print one line per event, connect again with Last-Event-ID after the stream ended, exit 0 on the interrupt (a channel the signal handler feeds) and 1 when a connection fails or the daemon answers 410",
+        "Add the three flows of this package to internal/daemon/e2e_test.go: a text item with a decision answered across a restart, an imported issue abandoned and its workspace removed, and the hub's outage noted twice; give the helper a hook that registers a decision kind and a handler at each start",
+        "Describe every command with its flags, its output and its exit codes in docs/cli.md, add one paragraph on items and the inbox to README.md, and run `make doc`"
+      ],
+      "touches": [
+        "internal/cli/item.go",
+        "internal/cli/inbox.go",
+        "internal/cli/watch.go",
+        "internal/cli/item_test.go",
+        "internal/cli/inbox_test.go",
+        "internal/cli/watch_test.go",
+        "internal/cli/usage_test.go",
+        "internal/daemon/e2e_test.go",
+        "docs/cli.md",
+        "README.md"
+      ],
+      "depends_on": [
+        4,
+        5
+      ],
+      "done_when": [
+        "`make check` passes on the whole tree"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,809 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "06",
+  "spec_name": "implementation_and_review",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "Start a ready item and accept its implementer session",
+      "rationale": "An approved plan should turn into a pushed version without the person, and a session's own account of its work is not evidence.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "state_driven",
+          "condition": "a `ready` item's package names, in the `dependencies` of its `tasks.json`, a package that is not finished at the tip of the workspace's default branch: the directory with that number under `.specs/` there does not exist, does not load with `afspec.LoadSpec`, or `IsFinished` is false for it",
+          "action": "refuse the item in the start guard `dependency`, registered with `Scheduler.RegisterGuard`, with the reason `package <NN> on <default branch>` naming the first such dependency in the plan's order; read the default branch from the hub (`GET …/scm/tree` of `.specs` and `GET …/scm/file` of the package's files at the workspace's `head_sha`) at most once in 30 seconds per workspace, an injected interval; and allow an item that is not `ready`, whose package names no dependency, or whose dependencies are all finished",
+          "contract": "the guard returns `(false, \"package 03 on main\", nil)` while the dependency is unfinished and `(true, \"\", nil)` at the first read after it is finished; an item that touches the same files as another is allowed; a hub error is returned as the guard's error, which the scheduler treats as a refusal",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a fake hub (internal/hubtest) whose workspace `demo` serves `scm/tree` and `scm/file` from a repository fixture built with afspec",
+              "an item 7 in `ready` whose package names the dependencies of the row",
+              "an injected clock"
+            ],
+            "pseudocode": "new file internal/impl/guard_test.go, a table over the default branch's .specs on the fake hub {03 with a pending task -> (false, 'package 03 on main'); 03 with every task done -> (true, ''); 03 sealed -> (true, ''); no directory 03_* -> (false, 'package 03 on main'); 03 whose tasks.json is not JSON -> (false, 'package 03 on main'); dependencies [02 done, 03 pending, 04 pending] -> names 03; no dependencies -> (true, ''); item in 'implementing' -> (true, '') without a hub request; hub stopped -> err != nil}: ok, reason, err = svc.DependencyGuard(ctx, item); assert as the row says. Then: advance the clock 10s and ask again -> the fake hub saw no further request; advance 30s -> it saw one"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "event_driven",
+          "condition": "the scheduler calls the step of an item in `ready`",
+          "action": "create the item's task fork with package 05's `change.Service.EnsureFork` where the item has none; set the item's change to open with `PATCH …/changes/{number}` `{\"state\":\"open\"}` where it is a draft; read the change's current version number, 0 for an item without a change; and, while the item is still `ready`, ask the scheduler for an implementer session with `session.Spec{Item, Role: implementer, Step: \"implement\", Fork, Branch, Prompt, Accept}`, the prompt being `/af-impl <package directory> --unattended --no-merge --result {result}`",
+          "contract": "the hub's change is `open` before the session is asked for; an item whose change is open already sends no `PATCH`; an imported package's item gets a fork and no change; the package directory is `source.dir` for an item of kind `spec` and `Dir` of package 05's `plan.Service.Kept` otherwise; when `RunSession` returns `sched.ErrNotStarted`, or a result whose outcome is not `completed`, the step returns nil and leaves the item's state as it is",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) holding the workspace `demo`, its forks, changes with versions, checks and a policy",
+              "the impl service over the real item service, inbox, store and package 05's change service, a stub of its `plan.Service.Kept`, and a stub scheduler whose RunSession the test scripts and whose requests, RecordFailure and OpenSessionFailed calls it records"
+            ],
+            "pseudocode": "new file internal/impl/start_test.go, a table over {planned item with a draft change 4 -> the fake hub saw PATCH changes/4 {state: open} before the request and no fork request; planned item whose change is open -> no PATCH; item of kind spec without a fork -> one fork created through EnsureFork, no change request; RunSession scripted to return sched.ErrNotStarted -> step returns nil and state == 'ready'; outcome 'failed' -> nil and state unchanged}: err = svc.Step(ctx, item); assert the recorded request == {Item, Role: 'implementer', Step: 'implement', Fork: rec.Fork, Branch: rec.Branch, Prompt: '/af-impl .specs/12_greeting --unattended --no-merge --result {result}'} and that its Accept is set"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "event_driven",
+          "condition": "the event `session.started` is appended to the event log for an implementer session of an item that is `ready`",
+          "action": "move the item to `implementing` through the item service's `Transition`, with the reason `implementer session started`",
+          "contract": "the item's state is `implementing` and its thread has the entry `ready -> implementing: implementer session started`; a `session.started` of a planner or a reviewer, or of an item in another state, moves nothing and logs no error",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/start_test.go, with the service following a real event log: a table over {implementer session of a ready item -> eventually state == 'implementing'; reviewer session of a ready item -> state stays 'ready'; implementer session of an item in 'implementing' -> unchanged, one `state` entry in all}: log.Append('session.started', {session, item, role}); assert as the row says"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "event_driven",
+          "condition": "an implementer session asked with `--no-merge` has ended, the item's change on the hub has a version greater than at the session's start, and the package read from the hub at that version's head (`GET …/scm/file` of its `prd.md`, `requirements.json`, `tasks.json` and `progress.json`, loaded with `afspec.LoadSpec`) has no task `pending` or `in_progress`",
+          "action": "accept the session by returning nil from the accept function, having first, for an item that had no change and whose branch is on the fork, opened the change through package 05's `change.Service.OpenDraft` with the item's title, the text of the package's `## Intent` section and the session's id, and set it open",
+          "contract": "the session's outcome is `completed` whatever `outcome` its result file names; an imported package's item has an open change at version 1 afterwards; the step goes on to the evaluation of that version in the same call",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) holding the workspace `demo`, its forks, changes with versions, checks and a policy",
+              "the impl service over the real item service, inbox, store and package 05's change service, a stub of its `plan.Service.Kept`, and a stub scheduler whose RunSession the test scripts and whose requests, RecordFailure and OpenSessionFailed calls it records"
+            ],
+            "pseudocode": "in internal/impl/start_test.go, RunSession scripted to push a commit to the fork's branch on the fake hub (which records the next version), mark every task of the package done there, and then call the request's Accept with a result file: a table over {planned item, change 4 at version 1, push -> version 2, result outcome 'complete' -> Accept returns nil; the same with result outcome 'gate_failed' -> nil; item of kind spec without a change, branch pushed -> Accept returns nil, the fake hub holds a change in state 'open' with the item's title and the package's intent, version 1}: assert Accept's error; assert the evaluation ran for that version (the stub evaluation hook saw it)"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "unwanted",
+          "condition": "an implementer session has ended and the item's change has no version greater than at the session's start (or the item has no change and its branch is not on the fork), or the package at the new version's head has a task `pending` or `in_progress`, or the package cannot be read from the hub or does not load",
+          "action": "refuse the session by returning an error from the accept function, create no item from its result file, evaluate nothing and run no gate",
+          "contract": "the accept function's error is `no new version`, `tasks still open` or `package does not load: <first line of the error>`, which package 04 records as the failed session's reason; the item's state and its stored findings are unchanged; a session that left no result file is failed by package 04 with `no result` and the accept function is not called",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a fake hub (internal/hubtest) holding the workspace `demo`, its forks, changes with versions, checks and a policy",
+              "the impl service over the real item service, inbox, store and package 05's change service, a stub of its `plan.Service.Kept`, and a stub scheduler whose RunSession the test scripts and whose requests, RecordFailure and OpenSessionFailed calls it records"
+            ],
+            "pseudocode": "in internal/impl/start_test.go, a table over {no push during the session -> 'no new version'; item of kind spec, branch not on the fork -> 'no new version'; push, task 2 pending at the head -> 'tasks still open'; push, task 2 in_progress -> 'tasks still open'; push, tasks.json at the head is not JSON -> starts with 'package does not load: '; result file says outcome 'complete' in every row}: err = req.Accept(result); assert err.Error() as the row says; assert count(items), the stored findings and the fake hub's check reports are unchanged"
+          }
+        },
+        {
+          "id": "REQ-1.6",
+          "pattern": "event_driven",
+          "condition": "an accepted implementer session's result file lists `open_items`",
+          "action": "create for each entry, in the file's order, a work item with the item service's `CreateLinked(ctx, item, \"defect\", text)`, the text being the entry's `title`, then `missing`, `why` and `closes: <closes>` where they are present, each as a paragraph of its own, cut to 20,000 code points; and skip an entry whose title is the title of an item already linked to this parent",
+          "contract": "each new item is of kind `defect`, in `new`, with `parent` set, and the parent's thread has one `linked_item` entry for each; no session is asked for a new item; handling the same result file twice creates each item once; a result file without `open_items`, or with an empty list, creates none",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/start_test.go: result = {outcome: 'complete_with_open_items', open_items: [{kind: 'defect', title: 'Log line missing', missing: 'm', why: 'w', closes: 'c'}, {kind: 'awaits', title: 'Waits for 09'}]}; svc.HandleResult(ctx, item, result); kids = items.Get(item).Children; assert len(kids) == 2; assert each has kind 'defect', state 'new'; assert the first's text == 'Log line missing\\n\\nm\\n\\nw\\n\\ncloses: c' and the second's == 'Waits for 09'; assert the parent's thread has two linked_item entries; assert the stub scheduler saw no request for a child; svc.HandleResult again -> still 2 children; a result without open_items -> no child"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "Send work back to the implementer as findings",
+      "rationale": "A failed gate, an objection, a comment, a conflict and a failed health command all mean the same thing to the implementer: change the finished work, and say what was done about each point.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls `(*impl.Service).Rework(ctx, item, findings)` with at least one finding, each with a `Text` that is not empty and a `Source` of `gate`, `review`, `person`, `health` or `conflict`, for an item in `ready`, `implementing`, `reviewing` or `landing`",
+          "action": "store the findings in the given order after those already waiting for the item, giving each finding without an `ID` the next id `f<n>` of the item and setting `Binding` on every finding of the source `person`; move an item that is `reviewing` or `landing` to `implementing` with the reason `rework: <n> findings (<sources>)`; and wake the scheduler",
+          "contract": "returns nil; the findings are still waiting after a restart of the daemon; an item in `ready` or `implementing` keeps its state; a finding whose `ID` is already stored for the item is stored once, so a caller that is called twice may call twice",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/impl/rework_test.go, a table over the item's state {ready, implementing, reviewing, landing}: err = svc.Rework(ctx, n, [{Source: 'review', Text: 'a', File: 'x.go', Line: 3}, {Source: 'person', Text: 'b'}]); assert err == nil; w = svc.Waiting(n); assert ids == ['f1','f2'] and w[1].Binding and not w[0].Binding; assert state == 'implementing' except for ready, which stays; for reviewing assert the thread's last entry == 'reviewing -> implementing: rework: 2 findings (review, person)'; assert the scheduler was woken. Then: Rework(n, [{ID: 'blocked-5', Source: 'person', Text: 'c'}]) twice -> one finding 'blocked-5', after f1 and f2; reopen the store -> svc.Waiting(n) is the same three"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "unwanted",
+          "condition": "`Rework` is called with no finding, with a finding whose `Text` is empty or whose `Source` is none of the five, for an item nightshift does not know, or for an item in `new`, `planning`, `awaiting_approval`, `verifying`, `publishing`, `done` or `abandoned`",
+          "action": "refuse the call, store no finding and leave the item's state as it is",
+          "contract": "the error satisfies `errors.Is` with `impl.ErrInvalid` for the findings, with the item service's `ErrNotFound` for the item and with `impl.ErrState` for the state; the count of stored findings and of thread entries is unchanged",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/rework_test.go, a table over {findings nil -> ErrInvalid; [{Source: 'review', Text: ''}] -> ErrInvalid; [{Source: 'robot', Text: 'x'}] -> ErrInvalid; one good and one bad finding -> ErrInvalid and none stored; item 999 -> item.ErrNotFound; an item in each of the seven states -> ErrState}: err = svc.Rework(ctx, n, f); assert errors.Is(err, want); assert len(svc.Waiting(n)) and the thread's entry count unchanged"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "event_driven",
+          "condition": "the step of an `implementing` item runs, findings wait for the item, and the package at the head of the change's current version has no task `pending` or `in_progress`",
+          "action": "ask the scheduler for an implementer session with the step `implement`, the prompt `/af-impl <package directory> --unattended --rework {input:findings} --result {result}` and the input `findings`: one JSON array of the waiting findings in their order, each an object with `id`, `source`, `text` and, where they are set, `file`, `line`, `criterion`, `output` and `binding`",
+          "contract": "the input parses as an array whose ids are those waiting, in order; a finding of the source `person` carries `\"binding\": true`; a member that is not set is absent, not empty; while the package has an open task the request is the `--no-merge` one of a first implementation and the findings stay waiting",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) holding the workspace `demo`, its forks, changes with versions, checks and a policy",
+              "the impl service over the real item service, inbox, store and package 05's change service, a stub of its `plan.Service.Kept`, and a stub scheduler whose RunSession the test scripts and whose requests, RecordFailure and OpenSessionFailed calls it records"
+            ],
+            "pseudocode": "in internal/impl/rework_test.go: Rework(n, [{Source: 'gate', Text: 'tests fail', Output: 'FAIL x'}, {Source: 'person', Text: 'keep the log line'}]); svc.Step(ctx, n); req = the recorded request; assert req.Step == 'implement'; assert req.Prompt == '/af-impl .specs/12_greeting --unattended --rework {input:findings} --result {result}'; assert json(req.Inputs['findings']) == [{id: 'f1', source: 'gate', text: 'tests fail', output: 'FAIL x'}, {id: 'f2', source: 'person', text: 'keep the log line', binding: true}]. Second case: task 2 of the package pending at the head -> req.Prompt holds '--no-merge' and no Inputs, and svc.Waiting(n) still has both"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "event_driven",
+          "condition": "a rework session has ended with a result file that lists `replies`",
+          "action": "append to the item's thread, for each reply in the file's order, one entry of the kind `reply` with the text `<finding id> <action>: <text>`, cut to 2,000 characters and not marking the thread unread, and store the reply with the finding it names, whether or not the session is accepted afterwards",
+          "contract": "the thread has one `reply` entry per reply, in order, before the session's `session_ended` entry; the stored finding carries the reply's `action` and `text`; a reply that names no finding given to the session is written to the thread and stored with none",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/rework_test.go: two findings f1, f2 waiting; RunSession scripted to call Accept with {outcome: 'nothing_changed', replies: [{id: 'f1', action: 'declined', text: 'the test already covers it'}, {id: 'f2', action: 'not_reproduced', text: 'passes'}, {id: 'zz', action: 'fixed', text: 'x'}]} and no push; svc.Step(ctx, n); assert the thread's last three entries of kind 'reply' == ['f1 declined: the test already covers it', 'f2 not_reproduced: passes', 'zz fixed: x'] and the thread is not unread; assert svc.History(n) holds f1 with the reply declined; assert Accept returned an error (the session is not accepted)"
+          }
+        },
+        {
+          "id": "REQ-2.5",
+          "pattern": "event_driven",
+          "condition": "a rework session has ended and the item's change on the hub has a version greater than at the session's start",
+          "action": "accept the session by returning nil from the accept function, take the findings that were given to it out of those waiting and keep them with their replies as the item's history, create the linked items of its `open_items` as for a first implementation, and go on to the evaluation of the new version",
+          "contract": "the session's outcome is `completed`; no finding given to it waits any longer; a finding stored while the session ran still waits and starts the next rework; the new version has no gate verdict and no review verdict",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) holding the workspace `demo`, its forks, changes with versions, checks and a policy",
+              "the impl service over the real item service, inbox, store and package 05's change service, a stub of its `plan.Service.Kept`, and a stub scheduler whose RunSession the test scripts and whose requests, RecordFailure and OpenSessionFailed calls it records"
+            ],
+            "pseudocode": "in internal/impl/rework_test.go: f1 waiting; RunSession scripted to push (version 3), store a further finding f2 through svc.Rework meanwhile, and call Accept with {outcome: 'reworked', replies: [{id: 'f1', action: 'fixed', text: 'done', commit: 'abc'}], open_items: [{title: 'Follow-up'}]}; svc.Step(ctx, n); assert Accept returned nil; assert ids(svc.Waiting(n)) == ['f2']; assert svc.History(n) holds f1 with action 'fixed'; assert the item has one child titled 'Follow-up'; assert the evaluation ran for version 3"
+          }
+        },
+        {
+          "id": "REQ-2.6",
+          "pattern": "unwanted",
+          "condition": "a rework session has ended and the item's change has no version greater than at the session's start",
+          "action": "refuse the session by returning an error from the accept function and keep every finding that was given to it waiting",
+          "contract": "the accept function's error is `no new version`, which package 04 records as the failed session's reason, for a result file whose outcome is `nothing_changed`, `rework_failed` or `push_failed` alike; the next rework session is given the same findings; the item's state is unchanged",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/rework_test.go, a table over the result's outcome {nothing_changed, rework_failed, push_failed, reworked without a push}: f1 waiting; RunSession calls Accept with that result and pushes nothing; assert Accept's error == 'no new version'; assert ids(svc.Waiting(n)) == ['f1']; svc.Step(ctx, n) again -> the second request's findings input holds f1"
+          }
+        },
+        {
+          "id": "REQ-2.7",
+          "pattern": "event_driven",
+          "condition": "the scheduler calls the step of an item in `implementing`",
+          "action": "do the first of these that applies, and then the next, until a session ended otherwise than `completed`, a decision of the item is open, an error occurred or the item has left `implementing`: restore the item's fork when the hub no longer has it; send a check report the hub has not taken and do what follows its verdict; start the implementer with `--no-merge` when the item has no change or the package at the change's head has an open task; start a rework when findings wait; evaluate the change's current version when it is not evaluated; run the gate when the version has no gate verdict; move the item to `reviewing` when the gate passed on the current version",
+          "contract": "what the step does depends only on the hub's change, the package at its head and what the store holds for the item, so a step called after a restart, a resume or a version a person pushed does what a first call would; a version whose gate failed and for which a finding waits starts a rework, not a second gate",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/impl/step_test.go, a table over the item's facts -> the first thing the step does (each of session, evaluation and gate replaced by a recording stub): {no change -> no-merge session; change at version 1, task pending at its head -> no-merge session; tasks done, finding waiting -> rework session; tasks done, findings waiting and a task pending -> no-merge session; tasks done, version 2 not evaluated -> evaluation of 2; version 2 evaluated, no gate verdict -> gate on 2; gate passed on 2 but version 3 is current (pushed by a person) -> evaluation of 3; gate verdict stored for 2, report not taken, a finding waiting -> the report first, then the rework, no gate; gate passed on current version -> Transition to 'reviewing'; open decision on the item -> nothing}: svc.Step(ctx, n); assert the first recorded action"
+          }
+        },
+        {
+          "id": "REQ-2.8",
+          "pattern": "optional",
+          "condition": "a later package has set a class for an item with `(*impl.Service).SetClass(ctx, item, class)`",
+          "action": "ask for every implementer and reviewer session of that item with that class",
+          "contract": "the `Class` of each `sched.Request` for the item is the class set, `sched.ClassRepair` for a repair; an item with no class set is asked for with the zero class, so that the scheduler places it by its state; the class survives a restart",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/step_test.go: svc.SetClass(ctx, n, sched.ClassRepair); svc.Rework(n, one finding); svc.Step(ctx, n); assert the recorded request's Class == sched.ClassRepair; reopen the store and step again -> the same; an item m without SetClass -> Class == the zero value"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "Evaluate and gate every version",
+      "rationale": "A version that can never land should cost nothing more, and one that can has to pass the package's own checks on a clone the session did not prepare.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "event_driven",
+          "condition": "nightshift reads the hub's evaluation of a version it has not evaluated (`GET …/changes/{number}` with `include=overlaps`) and a requirement of its `landing` has `block` true",
+          "action": "open a decision of the kind `blocked` on the item's thread, with the question `Version <v> of item <N> touches paths that rule <rule> blocks. Revise it or abandon the item?`, as evidence the change's URL and, for each blocking requirement, the rule's name with the files that selected it, `revise` recommended and `item <N>` as what it blocks; record the version as evaluated; and run no gate on it",
+          "contract": "the kind `blocked` is declared in the inbox's registry with exactly the options `revise`, which requires a comment, and `abandon`; one decision is open per version however often the step runs; the item keeps its state and its `waiting_on` names the decision; the hub received no check report for that version",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) holding the workspace `demo`, its forks, changes with versions, checks and a policy",
+              "the impl service over the real item service, inbox, store and package 05's change service, a stub of its `plan.Service.Kept`, and a stub scheduler whose RunSession the test scripts and whose requests, RecordFailure and OpenSessionFailed calls it records"
+            ],
+            "pseudocode": "new file internal/impl/evaluate_test.go: the fake hub's policy blocks 'secrets/**'; version 2 of the item's change touches secrets/key.pem and api/greet.go; svc.Step(ctx, n) twice; d = the item's open decisions; assert len(d) == 1 and d[0].Kind == 'blocked'; assert option keys == ['revise','abandon'] with comment_required only on revise and revise recommended; assert the question == 'Version 2 of item 12 touches paths that rule nightshift-1 blocks. Revise it or abandon the item?'; assert the evidence names 'nightshift-1' and 'secrets/key.pem' and not 'api/greet.go'; assert items.Get(n).State == 'implementing' and its waiting_on.kind == 'blocked'; assert fakeHub.Checks(change) is empty and the gate stub was not called"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "event_driven",
+          "condition": "a `blocked` decision is answered",
+          "action": "carry the answer out in the handler registered with the inbox's `OnAnswer`: for `revise`, call `Rework` with one finding of the source `person`, the id `blocked-<decision id>` and the comment as its text; for `abandon`, call the item service's `Abandon` with the reason `blocked: abandoned by the person`",
+          "contract": "after `revise` the item is `implementing`, also when the decision was opened for an item in `landing`, and one binding finding with the comment waits, however often the handler is called; after `abandon` the item is `abandoned`",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/evaluate_test.go, a table over {state implementing, revise 'drop the key file' -> one waiting finding {ID: 'blocked-<id>', Source: 'person', Binding: true, Text: 'drop the key file'}, state 'implementing'; state landing (decision opened with svc.OpenBlocked), revise -> the same and state 'implementing'; abandon -> state 'abandoned' and the thread names the reason}: inbox.Answer(d.ID, option, comment); eventually assert as the row says; call the handler a second time directly -> still one finding"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "state_driven",
+          "condition": "an item is paused (`Scheduler.Paused`) and a decision of the kind `blocked` or `review_disagreement` of it is answered",
+          "action": "store the answer and carry it out when the item is resumed, through a function registered with `Scheduler.OnResume`, in the order of the answers; both kinds register their handlers through `(*impl.Service).OnAnswer(kind, option, fn)`, which does this",
+          "contract": "the handler returns nil at once; until the resume the item's state, its waiting findings and the hub's checks are unchanged; after the resume the effect is the one the answer has for an item that is not paused",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/evaluate_test.go, with the stub scheduler's Paused(n) == true, a table over {blocked/revise, blocked/abandon, two answers to two decisions of a kind the test registers through svc.OnAnswer with a recording handler}: answer the decision; assert the handler returned nil; assert state and len(svc.Waiting(n)) unchanged and the recording handler not called; set Paused false and call the registered OnResume function with n; assert the effect of the row (a waiting binding finding; state 'abandoned'; the recording handler saw both answers in their order)"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "event_driven",
+          "condition": "nightshift evaluates a version of which no requirement blocks",
+          "action": "take the files of the change's `paths` that are outside the plan (a file is inside when an entry of a task's `touches` equals its path or names a directory above it, or when it lies in the package's own directory), store that list for the item, and, when it is not empty and differs from the list last written for the item, append to the thread one entry of the kind `outside_plan` with the text `outside the plan: <files>`: the first 50 in path order, joined with `, `, followed by ` and <n> more` when there are more",
+          "contract": "`(*impl.Service).OutsidePlan(ctx, item)` returns the whole list; a version whose files are all inside the plan writes no entry; a later version with the same list writes none; the gate runs on the version whatever the list holds",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/evaluate_test.go, the package's tasks touching ['api/greet.go', 'internal/greet', 'docs/'], a table over the version's paths {['api/greet.go', 'internal/greet/a.go', 'docs/api.md', '.specs/12_greeting/progress.json'] -> no entry, OutsidePlan == []; those plus ['README.md', 'api/other.go'] -> entry 'outside the plan: README.md, api/other.go'; 'internal/greeting/x.go' -> outside (a name that only starts like a touched directory); 60 files outside -> the first 50 and ' and 10 more', OutsidePlan has 60; the next version with the same two files -> no second entry; then one file more -> a new entry}: svc.Evaluate(ctx, n); assert the thread's outside_plan entries and svc.OutsidePlan(n); assert the gate stub was called for every row"
+          }
+        },
+        {
+          "id": "REQ-3.5",
+          "pattern": "event_driven",
+          "condition": "the current version of an `implementing` item is evaluated without a block, has no gate verdict, and `speca`'s gate answers `pass` for it",
+          "action": "bring the clone `<sessions.dir>/items/<N>/gate` to the version's head with `gitclone.Sync` from the fork's git URL and the worker token; run in it, through `command.Runner` and so as the session user, `speca <package directory> --gate full --timeout <gate.timeout>` with `XDG_STATE_HOME` naming an empty directory made for this run and removed after it; store the verdict; report the check `nightshift-gate` as `passed` on that version with `speca`'s `summary`; append to the thread an entry of the kind `check` with the text `nightshift-gate passed on version <v>: <summary>`; set the item's count of failed gates in a row to zero; and move the item to `reviewing`",
+          "contract": "the hub holds `nightshift-gate` with `status` `passed`, that `version` and a `summary` of at most 2,000 characters; the command ran with the clone at the version's head as its working directory; the item is `reviewing`; a later step for the same version runs no gate",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) holding the workspace `demo`, its forks, changes with versions, checks and a policy",
+              "the impl service over the real item service, inbox, store and package 05's change service, a stub of its `plan.Service.Kept`, and a stub scheduler whose RunSession the test scripts and whose requests, RecordFailure and OpenSessionFailed calls it records",
+              "a fake `speca` on PATH: a script the test writes that records its arguments, its working directory and `XDG_STATE_HOME`, and prints the JSON the row gives",
+              "a real command.Runner and gitclone against the fake hub's git endpoint"
+            ],
+            "pseudocode": "in internal/impl/evaluate_test.go: the fake speca prints {summary: 'speca: 12_greeting full gate pass', result: {gate: {level: 'full', verdict: 'pass', commands: [...]}}}; svc.Step(ctx, n); assert the recorded argv == ['.specs/12_greeting', '--gate', 'full', '--timeout', '30m0s']; assert the recorded working directory's HEAD == the version's head_sha; assert the recorded XDG_STATE_HOME was an existing empty directory and is gone now; assert fakeHub.Check(change, 'nightshift-gate') == {status: 'passed', version: 2, summary: 'speca: 12_greeting full gate pass'}; assert the thread's last check entry == 'nightshift-gate passed on version 2: speca: 12_greeting full gate pass'; assert state == 'reviewing'; put the item back to implementing and step again -> the fake speca ran once in all"
+          }
+        },
+        {
+          "id": "REQ-3.6",
+          "pattern": "unwanted",
+          "condition": "the gate of a version does not answer `pass`: its verdict is `fail` or `not_run`, `speca` exits with a code other than 0 or is not found, its output is not one JSON object with `result.gate.verdict`, or the command is still running after twice `gate.timeout` plus one minute",
+          "action": "report the check `nightshift-gate` as `failed` on that version, with a summary of `speca`'s `summary` (or `gate did not run: <reason>`) followed, for a failed command, by its name, its exit code and its `tail`, cut to 2,000 characters; write the `check` entry; and, once the hub took the report, store through `Rework` one finding of the source `gate` whose text is the summary's first line and whose `output` is the tail; and record the failure with `Scheduler.RecordFailure(ctx, item, \"implement\", \"gate failed: <first line>\", \"\")` when it is the item's first failed gate in a row, or open `session_failed` with `Scheduler.OpenSessionFailed` naming both failures when it is the second with no passed gate between",
+          "contract": "the hub holds `nightshift-gate` `failed` for the version; the item stays `implementing`; after a first failed gate the next step asks for a rework with the gate's finding; after the second in a row a `session_failed` decision is open and no rework is asked for until it is answered; `gate.Run` returns a verdict or an error for every case and never ends the daemon's process",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake `speca` on PATH scripted per row",
+              "for the second part the setup of the passing gate"
+            ],
+            "pseudocode": "new file internal/gate/gate_test.go, a table over the fake speca {verdict fail with all_tests exit 1 and tail 'FAIL x' -> Passed false, Summary == 'speca: … full gate fail\\nall_tests exited 1\\nFAIL x'; verdict not_run with reason 'program not found' -> Summary starts with the envelope's summary; exits 3 printing nothing -> 'gate did not run: speca exited 3'; no speca on PATH -> 'gate did not run: speca exited 127'; prints 'not json' -> 'gate did not run: no verdict in speca's output'; sleeps past the run's limit (timeout 50ms) -> 'gate did not run: timed out'; a tail of 5,000 characters -> len(Summary) == 2000}: v, err = gate.Run(ctx, opts); assert err == nil and not v.Passed and v.Summary as the row says. In internal/impl/evaluate_test.go: fake speca fails; svc.Step(ctx, n); assert fakeHub.Check == {status: 'failed', version: 2}; assert svc.Waiting(n) == [{Source: 'gate', Text: 'speca: … full gate fail', Output: 'FAIL x'}]; assert the stub scheduler recorded RecordFailure(n, 'implement', 'gate failed: speca: … full gate fail', '') and no OpenSessionFailed; assert state == 'implementing'; let the rework push version 3 and the gate fail again -> OpenSessionFailed(n, 'implement', two failures) and no second RecordFailure; a third version whose gate passes -> the count is zero again"
+          }
+        },
+        {
+          "id": "REQ-3.7",
+          "pattern": "unwanted",
+          "condition": "the hub does not take a check report: it is unreachable, does not accept the worker token, or answers with a 5xx status",
+          "action": "keep the stored verdict, return the error from the step and leave the item's state as it is, and send the same report at the item's next step before anything else, running neither the gate nor a review for that version again",
+          "contract": "once the hub answers again it holds exactly one result per version and check name, equal to the stored verdict; the gate's command ran once and the reviewer was asked once; the item moves on (to `reviewing`, to `landing` or to a rework) only after the hub took the report",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/evaluate_test.go, a table over the check {nightshift-gate passed, nightshift-gate failed, nightshift-review passed through svc.ReportCheck}: the fake hub answers PUT …/checks/* with 503; svc.Step(ctx, n) returns an error; assert state unchanged and fakeHub.Checks empty; the fake hub answers normally; svc.Step(ctx, n); assert fakeHub.Check holds the stored status and summary; assert the fake speca ran once; assert the item moved on as the verdict says"
+          }
+        },
+        {
+          "id": "REQ-3.8",
+          "pattern": "event_driven",
+          "condition": "the gate of a version has ended and the hub's overlap entries of the item's change name a change that is not yet noted for the item",
+          "action": "append to the item's thread one entry of the kind `overlap` with the text `overlaps change <workspace>#<number>`, not marking the thread unread, and remember that number for the item",
+          "contract": "the thread has one `overlap` entry per other change, however many versions and gates follow; a change without an overlap entry writes none; no session, gate, review or state change waits for an overlap",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/evaluate_test.go: the fake hub answers the change with overlaps [{change: {number: 7}, paths: ['api/greet.go'], count: 1}]; svc.Step(ctx, n) through a passing gate; assert the thread's overlap entries == ['overlaps change demo#7'] and the thread is not unread by it; assert state == 'reviewing'; a rework pushes version 3 with overlaps [7, 9]; step; assert the entries == ['overlaps change demo#7', 'overlaps change demo#9']; a version with no overlaps -> no further entry"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "Review every gated version",
+      "rationale": "A reader that shares nothing with the writer catches what the writer's own checks cannot, and where the two do not come to terms a person has to decide, not a loop.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "event_driven",
+          "condition": "the scheduler calls the step of an item in `reviewing` whose change's current version has a passed gate and no review verdict",
+          "action": "ask the scheduler for a reviewer session with `session.Spec{Item, Role: reviewer, Step: \"review\", Fork, Commit: <the version's head>, Prompt, Accept}`, the prompt holding the package's directory, the list of the version's files, the version's diff against its base as the hub answers it (`GET …/changes/{number}/diff?version=<v>&format=patch`) up to 400,000 characters followed, when it was cut, by the line `diff cut: <n> characters left out`, the gate's summary, every finding of the item's earlier reviews with the implementer's reply to it, and the form of the verdict object",
+          "contract": "the request names the head of the reviewed version as `Commit` and no branch, so that package 04 gives the session a `git:read` token and a clone of its own; the prompt of an item's first review holds no earlier finding; the prompt of a later review holds each earlier finding's text and its reply's action and text",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) with the item's change at a version whose `nightshift-gate` passed, serving its diff",
+              "the review step over the real impl service, item service, inbox and store, and a stub scheduler whose RunSession the test scripts with a verdict"
+            ],
+            "pseudocode": "new file internal/review/review_test.go: step(ctx, n); req = the recorded request; assert req.Role == 'reviewer' and req.Step == 'review' and req.Commit == head of version 2 and req.Branch == ''; assert req.Prompt contains '.specs/12_greeting', 'api/greet.go', the patch text the fake hub served, 'speca: 12_greeting full gate pass' and '\"verdict\"'; assert it contains no 'declined'. Second case, history holding a review finding 'name the handler' with the reply {declined, 'it is named'} -> the prompt contains both texts. Third case, a diff of 500,000 characters -> the prompt holds its first 400,000 and the line 'diff cut: 100000 characters left out'"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "unwanted",
+          "condition": "the step of a `reviewing` item finds that the change's current version has no passed gate stored: the hub has a newer version than the one gated, or the item's change was replaced",
+          "action": "move the item to `implementing` with the reason `version <v> is not gated` and ask for no reviewer session",
+          "contract": "the item's state is `implementing`; the scheduler received no request; the next step of the item evaluates and gates that version; no check is reported for it by the review step",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/review/review_test.go: gate passed on version 2; a push outside any session records version 3; step(ctx, n); assert items.Get(n).State == 'implementing'; assert the thread's last state entry == 'reviewing -> implementing: version 3 is not gated'; assert the stub scheduler saw no request; assert fakeHub.Check(change, 'nightshift-review') is absent"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "unwanted",
+          "condition": "a reviewer session's verdict is `object` and one of its findings names neither a `file` with a `line` nor a `criterion`",
+          "action": "refuse the session by returning an error from the accept function, report no check and store no finding",
+          "contract": "the accept function's error is `finding names no file and line and no criterion`, which package 04 records as the failed session's reason; the hub holds no `nightshift-review` for the version; the item stays `reviewing`; a verdict `agree` is accepted with findings of any form",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/review/review_test.go, a table over the verdict {object [{text: 't'}] -> error; object [{text: 't', file: 'a.go'}] -> error; object [{text: 't', line: 3}] -> error; object [{text: 't', file: 'a.go', line: 3}, {text: 'u'}] -> error; object [{text: 't', file: 'a.go', line: 3}] -> nil; object [{text: 't', criterion: 'REQ-1.2'}] -> nil; agree [{text: 'nit'}] -> nil}: err = req.Accept(result); assert err == nil or err.Error() == 'finding names no file and line and no criterion'; for the error rows assert no check on the fake hub and len(impl.Waiting(n)) == 0"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "event_driven",
+          "condition": "a reviewer session ends `completed` with the verdict `agree`",
+          "action": "store the verdict for the version, report the check `nightshift-review` as `passed` on that version with the summary `reviewer agrees` through `(*impl.Service).ReportCheck`, set the item's count of reviews without `agree` to zero, and move the item to `landing`",
+          "contract": "the hub holds `nightshift-review` `passed` for the reviewed version; the thread has the entry `nightshift-review passed on version <v>: reviewer agrees`; the item is `landing`; the hub received no approval",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) with the item's change at a version whose `nightshift-gate` passed, serving its diff",
+              "the review step over the real impl service, item service, inbox and store, and a stub scheduler whose RunSession the test scripts with a verdict"
+            ],
+            "pseudocode": "in internal/review/review_test.go: RunSession scripted with {Outcome: completed, Verdict: {agree, []}}; step(ctx, n); assert fakeHub.Check(change, 'nightshift-review') == {status: 'passed', version: 2, summary: 'reviewer agrees'}; assert the thread's last check entry == 'nightshift-review passed on version 2: reviewer agrees'; assert items.Get(n).State == 'landing'; assert fakeHub.Approvals(change) is empty"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "event_driven",
+          "condition": "a reviewer session ends `completed` with the verdict `object` and it is the first or the second review without `agree` since the item's last `agree`",
+          "action": "store the verdict and its findings for the version, report the check `nightshift-review` as `failed` on that version with the summary `reviewer objects: <n> findings` followed by the findings' texts, cut to 2,000 characters, and call `Rework` with the findings as findings of the source `review`, each with its `file`, `line` and `criterion`",
+          "contract": "the hub holds `nightshift-review` `failed` for the version; the item is `implementing` and the findings wait in the reviewer's order; no decision is open; the version the rework produces is evaluated, gated and reviewed again",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) with the item's change at a version whose `nightshift-gate` passed, serving its diff",
+              "the review step over the real impl service, item service, inbox and store, and a stub scheduler whose RunSession the test scripts with a verdict"
+            ],
+            "pseudocode": "in internal/review/review_test.go: RunSession scripted with {object, [{text: 'handler ignores the name', file: 'api/greet.go', line: 12}, {text: 'criterion not met', criterion: 'REQ-1.2'}]}; step(ctx, n); assert fakeHub.Check == {status: 'failed', version: 2} and its summary starts with 'reviewer objects: 2 findings'; assert impl.Waiting(n) == [{Source: 'review', Text: 'handler ignores the name', File: 'api/greet.go', Line: 12}, {Source: 'review', Text: 'criterion not met', Criterion: 'REQ-1.2'}]; assert state == 'implementing'; assert no open decision; repeat for a second objection on version 3 -> the same, no decision"
+          }
+        },
+        {
+          "id": "REQ-4.6",
+          "pattern": "event_driven",
+          "condition": "a reviewer session ends `completed` with the verdict `object` and it is the third review, or a later one, without `agree` since the item's last `agree`",
+          "action": "store the verdict and report `nightshift-review` as `failed` as for an earlier objection, start no rework, and open a decision of the kind `review_disagreement` on the item's thread with the question `The reviewer objected to item <N> <count> times. Whose side do you take?`, as evidence the change's URL, each finding of this review and each finding of the earlier reviews with the implementer's reply, `side_with_reviewer` recommended and `item <N>` as what it blocks",
+          "contract": "the kind `review_disagreement` is declared with exactly the options `side_with_reviewer`, `side_with_implementer` and `abandon`, none requiring a comment; the item stays `reviewing` and its `waiting_on` names the decision; no finding of this review waits for a rework",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) with the item's change at a version whose `nightshift-gate` passed, serving its diff",
+              "the review step over the real impl service, item service, inbox and store, and a stub scheduler whose RunSession the test scripts with a verdict"
+            ],
+            "pseudocode": "in internal/review/review_test.go: two objections with reworks whose replies are {declined, 'it is named'} and {fixed, 'renamed'}, then a third objection [{text: 'still wrong', file: 'a.go', line: 1}]; assert one open decision of kind 'review_disagreement' with option keys ['side_with_reviewer','side_with_implementer','abandon'], none comment_required, side_with_reviewer recommended; assert the question == 'The reviewer objected to item 12 3 times. Whose side do you take?'; assert the evidence texts hold 'still wrong', both earlier findings and 'declined: it is named' and 'fixed: renamed'; assert state == 'reviewing' and len(impl.Waiting(n)) == 0; assert the stub scheduler saw no implementer request after the third review"
+          }
+        },
+        {
+          "id": "REQ-4.7",
+          "pattern": "event_driven",
+          "condition": "a `review_disagreement` decision is answered",
+          "action": "carry the answer out in the handler registered with the inbox's `OnAnswer`: for `side_with_reviewer`, call `Rework` with the findings of the item's last review, each with `Binding` set and the id `review-<decision id>-<index>`; for `side_with_implementer`, report `nightshift-review` as `passed` on the change's current version with the summary `passed by the owner's decision: side_with_implementer` and move the item to `landing`; for `abandon`, call the item service's `Abandon` with the reason `review disagreement: abandoned by the person`",
+          "contract": "after `side_with_reviewer` the item is `implementing` and the next rework's findings file carries `\"binding\": true` on each; a further objection after it opens the decision again at once; after `side_with_implementer` the hub holds `nightshift-review` `passed` with that summary and the item is `landing`; after `abandon` the item is `abandoned`; a handler called twice has the effect once",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/review/review_test.go, from the state of the third objection, a table over {side_with_reviewer -> state 'implementing', impl.Waiting(n) has the last review's finding with Binding true and ID 'review-<id>-1'; side_with_implementer -> fakeHub.Check == {status: 'passed', version: 4, summary: \"passed by the owner's decision: side_with_implementer\"} and state 'landing'; abandon -> state 'abandoned'}: inbox.Answer(d.ID, option); eventually assert the row; call the handler again -> no second finding, one check result, no error. One row with the item paused, side_with_implementer: no check and state 'reviewing' until the OnResume function ran, then as above. Then for side_with_reviewer: the rework pushes version 5, its gate passes, the reviewer objects again -> a new review_disagreement decision opens and no rework starts"
+          }
+        },
+        {
+          "id": "REQ-4.8",
+          "pattern": "ubiquitous",
+          "action": "for any verdict of a reviewer and any answer to a decision of this package, record no approval on the hub: send no request to `POST …/changes/{number}/approvals` and use the approver credential for nothing",
+          "check": {
+            "same_as": "PATH-2"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "Keep an item's fork alive and restore one that expired",
+      "rationale": "The hub removes a fork after its lifetime, and a person may take longer than that to answer; neither running work nor waiting work may be lost to it.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "event_driven",
+          "condition": "the fork pass runs, at the daemon's start and then every 6 hours, an injected interval",
+          "action": "set, for every item that has a fork, is neither `done` nor `abandoned` and waits on no decision, the fork's lifetime with `PATCH /api/v1/workspaces/{fork}` `{\"ttl\":\"7d\"}`, going on with the next item when the hub refuses one",
+          "contract": "the hub received one request per such item and pass; an item that waits on a decision, is `done` or `abandoned`, or has no fork gets none; a paused item gets one; a refusal is written to the daemon's log with the item's number and the hub's message",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a fake hub (internal/hubtest) that can remove a fork as an expiry does: the fork answers 404, its change is abandoned and its versions stay readable in the parent",
+              "the impl service over the real item service, inbox, event log, store and package 05's change service, with a stub of package 05's plan service that returns a kept package and records the function registered with RegisterPrepare"
+            ],
+            "pseudocode": "new file internal/impl/forks_test.go: items {A implementing with a fork, B reviewing with an open review_disagreement decision, C done, D abandoned, E new without a fork, F ready and paused with a fork, G landing whose fork the fake hub answers 404}; svc.ExtendForks(ctx); assert the fake hub saw PATCH with {ttl: '7d'} for the forks of A, F and G and no other; assert the log names item G; advance the injected ticker once -> A and F again"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "event_driven",
+          "condition": "the event `decision.answered` is appended for a decision of an item with an option other than `abandon`, or a step of this package starts for an item, or a part of nightshift calls `(*impl.Service).RestoreFork(ctx, item)`, and the hub answers `GET /api/v1/workspaces/{fork}` for the item's fork with `404`, and the item is not `awaiting_approval`",
+          "action": "read the last version the hub recorded of the earlier change (`GET …/changes/{number}?include=versions`); create a new fork with package 05's `change.Service.Forget` and `EnsureFork`; create the item's branch in it at that version's head (`POST …/scm/refs` with `name` and `sha`); open a new change with the earlier one's title and intent through `OpenDraft`; set it open when the item is `implementing`, `reviewing` or `landing`; append to the thread an entry of the kind `fork_restored` with the text `fork expired: change <workspace>#<old> continues as <workspace>#<new>`; and move an item that is `reviewing` or `landing` to `implementing` with the reason `fork restored`",
+          "contract": "version 1 of the new change has the head of the earlier change's last version; the thread names both changes; the new version has no gate verdict and no review verdict, so both run again; an item that had a fork and no change gets a new fork and no entry; a fork the hub still has is left as it is and nothing is written",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) that can remove a fork as an expiry does: the fork answers 404, its change is abandoned and its versions stay readable in the parent",
+              "the impl service over the real item service, inbox, event log, store and package 05's change service, with a stub of package 05's plan service that returns a kept package and records the function registered with RegisterPrepare"
+            ],
+            "pseudocode": "in internal/impl/forks_test.go, a table over {item reviewing, change 4 at version 3, its fork expired, log.Append('decision.answered', {kind: 'review_disagreement', option: 'side_with_reviewer', item}) -> trigger by the event; item landing, fork expired -> trigger by svc.RestoreFork; item implementing, fork expired -> trigger by svc.Step; item ready of kind spec with a fork and no change, expired -> a new fork only; fork still there -> no request but the GET}: assert fakeHub has a new fork demo--i<N>-2 whose branch item-<N> head == head of 4's version 3; assert the new change's state == 'open', its title and intent equal 4's; assert the thread's fork_restored entry == 'fork expired: change demo#4 continues as demo#5'; assert the item is 'implementing' with reason 'fork restored' for the first two rows; assert svc holds no gate verdict for the new change's version 1"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "event_driven",
+          "condition": "the fork's restore runs for an item in `awaiting_approval`, called by package 05 through the function this package registers with `plan.Service.RegisterPrepare(\"fork\", fn)` before it carries out an answer `approve` or `revise` to a `plan` decision, or by the event `decision.answered`, and the hub answers `GET /api/v1/workspaces/{fork}` for the item's fork with `404`",
+          "action": "create a new fork with package 05's `change.Service.Forget` and `EnsureFork`; commit the package text package 05 kept for the item (`plan.Service.Kept`: `Files` below `Dir`) to the item's branch in it with `POST …/scm/commits` (`base_ref` the fork's default branch, the message `plan for item <N>`, one `put` per kept file); open a new draft change with the earlier one's title and intent through `OpenDraft`; and append the `fork_restored` entry, leaving the item's state as it is",
+          "contract": "the registered function returns nil, so package 05 goes on with the answer on the new fork; the files under the package's directory at the new branch's head are the kept ones, byte for byte; the new change is a draft; the item is still `awaiting_approval`; the thread names both changes; a fork the hub still has returns nil with no request but the `GET`; a hub error is returned, so that the answer waits",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) that can remove a fork as an expiry does: the fork answers 404, its change is abandoned and its versions stay readable in the parent",
+              "the impl service over the real item service, inbox, event log, store and package 05's change service, with a stub of package 05's plan service that returns a kept package and records the function registered with RegisterPrepare"
+            ],
+            "pseudocode": "in internal/impl/forks_test.go: item 9 awaiting_approval with change 6 (draft), kept files {prd.md, requirements.json, tasks.json} under .specs/13_log_line; the fork expires; err = the function registered as 'fork' with the stub plan service, called with item 9; assert err == nil; assert fakeHub has a new fork demo--i9-2 whose branch item-9 holds exactly those three files with those bytes under .specs/13_log_line, committed with the message 'plan for item 9'; assert the new change's state == 'draft'; assert items.Get(9).State == 'awaiting_approval'; assert the thread's last fork_restored entry == 'fork expired: change demo#6 continues as demo#7'. Second case: the fork still exists -> nil and no request but the GET. Third case: the fake hub answers the fork create with 503 -> the function returns an error"
+          }
+        },
+        {
+          "id": "REQ-5.4",
+          "pattern": "unwanted",
+          "condition": "the hub is unreachable or refuses a call while a fork is being restored",
+          "action": "return the error to the caller, keep what the restore has already recorded, and at the next trigger go on from there, creating no second fork, branch or change for a step that succeeded",
+          "contract": "`RestoreFork` and the step return the hub's error and the item's state is unchanged; after the hub answers again the parent has exactly one new fork and one new change for the item and the thread exactly one `fork_restored` entry",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/impl/forks_test.go, a table over the call the fake hub fails once with 503 {the read of the earlier change, the fork create, POST scm/refs, the change open, the PATCH to open}: err = svc.RestoreFork(ctx, n); assert err != nil and the state is unchanged; svc.RestoreFork(ctx, n) again -> nil; assert count(forks of demo created) == 1, count(new changes) == 1, count(fork_restored entries) == 1"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "A ready item is implemented, gated and reviewed up to landing",
+      "steps": [
+        {
+          "actor": "nightshiftd",
+          "action": "finds item 12 `ready` with a draft change and its dependency finished on `main`, opens the change and asks for an implementer session"
+        },
+        {
+          "actor": "hub",
+          "action": "marks the change open"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "starts the session and moves the item to `implementing`"
+        },
+        {
+          "actor": "implementer",
+          "action": "implements the package, pushes the branch and writes a result file with one open item"
+        },
+        {
+          "actor": "hub",
+          "action": "records version 2 of the change and evaluates it"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "accepts the session from the hub's version and the package's tasks, creates a `defect` item for the open item, writes `outside the plan: docs/api.md`, runs the gate and reports `nightshift-gate` passed; the item is `reviewing`"
+        },
+        {
+          "actor": "reviewer",
+          "action": "reads the package and the diff in a clone of its own and answers `agree`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reports `nightshift-review` passed on version 2 and moves the item to `landing`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its scheduler, session service, item service, inbox, store and event log",
+          "internal/impl, internal/gate and internal/review with the real command runner and gitclone",
+          "package 05's change service against the fake hub",
+          "git against the fake hub's git endpoint"
+        ],
+        "setup": [
+          "the daemon started in-process with the e2e helper of internal/daemon/e2e_test.go, sessions unisolated, against internal/hubtest",
+          "a fake `claude` on PATH: a script the test writes that commits, marks the package's tasks done, pushes the branch and writes the result file the step's prompt names",
+          "the reviewer's provider is a provider/faux client scripted with the verdicts of the flow",
+          "a fake `speca` on PATH that prints a gate envelope with the verdict the test sets",
+          "item 12 seeded `ready` with a fork, a branch holding an active package whose tasks touch `api/` and depend on package 03, and a draft change; package 03 finished on the default branch"
+        ],
+        "end_state": [
+          "item 12 is `landing`; the fake hub's change is `open` at version 2 with `nightshift-gate` and `nightshift-review` both `passed` on version 2",
+          "the item's thread holds, in this order, the entries `ready -> implementing`, `outside the plan: docs/api.md`, the two check entries and `reviewing -> landing`",
+          "one new item of kind `defect` in `new` is linked to item 12",
+          "the fake hub received no approval and no land request"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go, with its startDaemon helper: seed item 12; eventually cli(['item','show','12']) contains 'state: landing'; assert fakeHub.Change('demo', n) == {state: 'open', version: 2}; assert fakeHub.Check(n, 'nightshift-gate').status == 'passed' and fakeHub.Check(n, 'nightshift-review').status == 'passed', both on version 2; assert the kinds and texts of cli(['thread','show',id]) in order; assert cli(['item','list','demo','--state','new']) names one item; assert fakeHub.Approvals(n) is empty and fakeHub.Lands(n) is empty"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "A reviewer objects three times and the person sides with the implementer",
+      "steps": [
+        {
+          "actor": "reviewer",
+          "action": "objects to version 2 of item 13 with a finding naming a file and a line"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reports `nightshift-review` failed and starts the implementer as a rework with the finding"
+        },
+        {
+          "actor": "implementer",
+          "action": "fixes the finding, pushes version 3 and writes its reply into the result file"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "writes the reply to the thread, gates version 3 and asks for a review, and does the same once more after a second objection"
+        },
+        {
+          "actor": "reviewer",
+          "action": "objects to version 4, the third review without `agree`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens a `review_disagreement` decision with the findings and the replies"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift decide <id> --option side_with_implementer`"
+        },
+        {
+          "actor": "nightshift",
+          "action": "sends the answer to the daemon's API"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reports `nightshift-review` passed on version 4, the summary naming the decision, and moves the item to `landing`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its scheduler, session service, item service, inbox, store and event log",
+          "internal/impl, internal/gate and internal/review with the real command runner and gitclone",
+          "package 05's change service against the fake hub",
+          "git against the fake hub's git endpoint",
+          "the nightshift client's run function"
+        ],
+        "setup": [
+          "the daemon started in-process with the e2e helper of internal/daemon/e2e_test.go, sessions unisolated, against internal/hubtest",
+          "a fake `claude` on PATH: a script the test writes that commits, marks the package's tasks done, pushes the branch and writes the result file the step's prompt names",
+          "the reviewer's provider is a provider/faux client scripted with the verdicts of the flow",
+          "a fake `speca` on PATH that prints a gate envelope with the verdict the test sets",
+          "item 13 seeded `reviewing` with a change at version 2 whose gate passed",
+          "the faux provider scripted with three `object` verdicts"
+        ],
+        "end_state": [
+          "the decision is answered and item 13 is `landing`",
+          "the fake hub holds `nightshift-review` `failed` on versions 2 and 3 and `passed` on version 4 with the summary `passed by the owner's decision: side_with_implementer`",
+          "the item's thread holds two `reply` entries and the decision with its answer",
+          "the fake hub received no approval, and no request bore the approver token"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: seed item 13; eventually cli(['inbox','--action']) names a review_disagreement decision; assert cli(['decision','show',id]) holds the three findings and both replies; assert cli(['decide',id,'--option','side_with_implementer']).code == 0; eventually cli(['item','show','13']) contains 'state: landing'; assert fakeHub.Check(n, 'nightshift-review') per version; assert fakeHub.Approvals(n) is empty and fakeHub.RequestsWith(approverToken) is empty"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "A blocked version waits for the person, its fork expires, and the answer restores and reworks it",
+      "steps": [
+        {
+          "actor": "implementer",
+          "action": "pushes a version of item 14 that touches `secrets/key.pem`"
+        },
+        {
+          "actor": "hub",
+          "action": "evaluates the version: the rule `nightshift-1` blocks the file"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens a `blocked` decision naming the rule and the file, and runs no gate"
+        },
+        {
+          "actor": "hub",
+          "action": "removes the item's fork at the end of its lifetime and abandons its change"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift decide <id> --option revise --comment \"drop the key file\"`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "creates a new fork and a new change at the last version's head, names both changes in the thread, and starts the implementer as a rework with the comment as a binding finding"
+        },
+        {
+          "actor": "implementer",
+          "action": "removes the file and pushes"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "evaluates the new version without a block, runs the gate, reports `nightshift-gate` passed and moves the item to `reviewing`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its scheduler, session service, item service, inbox, store and event log",
+          "internal/impl, internal/gate and internal/review with the real command runner and gitclone",
+          "package 05's change service against the fake hub",
+          "git against the fake hub's git endpoint",
+          "the nightshift client's run function"
+        ],
+        "setup": [
+          "the daemon started in-process with the e2e helper of internal/daemon/e2e_test.go, sessions unisolated, against internal/hubtest",
+          "a fake `claude` on PATH: a script the test writes that commits, marks the package's tasks done, pushes the branch and writes the result file the step's prompt names",
+          "the reviewer's provider is a provider/faux client scripted with the verdicts of the flow",
+          "a fake `speca` on PATH that prints a gate envelope with the verdict the test sets",
+          "the fake hub's policy holds a rule `nightshift-1` that blocks `secrets/**`",
+          "item 14 seeded `ready`; the fake claude's first run adds `secrets/key.pem`, its rework run removes it",
+          "the test removes the fork on the fake hub as an expiry does, after the decision opened"
+        ],
+        "end_state": [
+          "item 14 is `reviewing` on a new change whose fork is not the first one",
+          "the first change is `abandoned` on the fake hub and has no check result; the new one has `nightshift-gate` `passed` on its last version",
+          "the item's thread holds the `blocked` decision with its answer and the entry `fork expired: change demo#<old> continues as demo#<new>`",
+          "the rework's findings file held one finding of the source `person` with `binding` true and the comment"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: seed item 14; eventually cli(['inbox','--action']) names a blocked decision; assert fakeHub.Checks(old) is empty; fakeHub.ExpireFork(oldFork); assert cli(['decide',id,'--option','revise','--comment','drop the key file']).code == 0; eventually cli(['item','show','14']) contains 'state: reviewing'; assert fakeHub.Change('demo', old).state == 'abandoned'; new = the item's change; assert new != old and fakeHub.Check(new, 'nightshift-gate').status == 'passed'; assert the thread contains 'fork expired: change demo#' + old + ' continues as demo#' + new; assert the findings file the fake claude recorded == [{id: 'blocked-' + id, source: 'person', text: 'drop the key file', binding: true}]"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "GET …/changes/{number}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}",
+          "signature": "scope changes:read (satisfied by changes:write); query include=versions,overlaps,approvals,checks; 200 change object {number, ref, title, intent, state: draft|open|landed|abandoned, source: {workspace_slug, branch}, version: int, head_sha, base_sha, paths: [string] (at most 2,000), paths_truncated, landing: {status: ready|pending|blocked, reason, requirements: [{rule, paths (first 50), approvals: {required, counted, approvers}, checks: [{name, status}], block: bool, satisfied: bool}]}, versions?: [{number, head_sha, base_sha, kind, created_at}], overlaps?: [overlap entry]}"
+        },
+        {
+          "name": "PATCH …/changes/{number}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}",
+          "signature": "scope changes:write; body {\"state\": \"open\"} marks a draft ready (the intent rule must hold), {\"state\": \"draft\"} turns it back; 200 with the change object"
+        },
+        {
+          "name": "PUT …/changes/{number}/checks/{name}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/checks/{name}",
+          "signature": "scope checks:write; a token bound to a task fork gets 403 token_bound; body {status: pending|passed|failed (required), version: int, summary: string of at most 2,000 characters, url?, details?}; one result per version and name, a report replaces the earlier one whole; 200 with the check"
+        },
+        {
+          "name": "GET …/changes/{number}/diff",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/diff",
+          "signature": "scope changes:read; query version=<n>|latest, format=json|patch, patches=true|false; without `against` the diff from the version's base_sha to its head_sha; format=patch answers text/x-diff, cut at 8 MiB with the header X-Parley-Truncated: true; 404 not_found for a version the change does not have, 404 ref_not_found when its commits are gone"
+        },
+        {
+          "name": "GET …/changes/{number}/overlaps",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/overlaps",
+          "signature": "one overlap entry per other draft or open change with the same target branch and a file in common: {change: {number, ref, title, state, version, …}, paths (first 100), paths_truncated, count}; empty for a landed or abandoned change; 404 change_not_found; the same entries as the member `overlaps` of GET …/changes/{number}?include=overlaps"
+        },
+        {
+          "name": "version ref",
+          "import_path": "refs/parley/changes/<number>/<version>",
+          "signature": "the head of each version, kept in the target workspace's repository also for a fork source and after the fork is gone; a task fork reads its parent's objects"
+        },
+        {
+          "name": "PATCH /api/v1/workspaces/{slug}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}",
+          "signature": "for a task fork, body {\"ttl\": \"7d\"} (a whole number and m, h or d, from 5m to [forks].max_ttl) sets expires_at to now plus ttl; 400 invalid_request on a repository workspace; 200 with the workspace object"
+        },
+        {
+          "name": "GET …/scm/file",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/file",
+          "signature": "scope git:read (satisfied by git:write); query path (required), ref (a revision; default the default branch); 200 the file's bytes as application/octet-stream; 404 path_not_found"
+        },
+        {
+          "name": "POST …/scm/refs",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/refs",
+          "signature": "scope git:write; body {name: <branch>, sha: <full commit id>}; 201 with the ref object; 404 ref_not_found, 409 ref_exists"
+        },
+        {
+          "name": "POST …/scm/commits",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/commits",
+          "signature": "scope git:write; body {branch, base_ref (required when the branch does not exist), message, operations: [{op: \"put\", path, content | content_base64}]}; makes one commit and creates or moves the branch"
+        },
+        {
+          "name": "POST …/changes",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes",
+          "signature": "refuses with 400 nothing_to_land a source branch that has no commit the target lacks, and with 409 change_exists a branch that is the source of a draft or open change (called through package 05)"
+        }
+      ]
+    },
+    {
+      "package": "Parley REST API, parts docs/api.md was not read for",
+      "version": "commit 7eabfb9",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "GET /api/v1/workspaces/{slug} for a removed fork",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}",
+          "signature": "assumed: 404 not_found once an expired fork was removed; 200 with the workspace object until then"
+        },
+        {
+          "name": "GET …/scm/tree",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/tree",
+          "signature": "query ref, path, recursive; a paged list of entries {path, name, type: blob|tree|symlink|commit, mode, sha, size}; assumed: the list's member is `items` with `next_cursor`, as the hub's other lists"
+        }
+      ]
+    },
+    {
+      "package": "github.com/agent-fox-dev/spec/afspec",
+      "version": "commit 8faad70",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "LoadSpec",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func LoadSpec(dir string) (*Spec, error); reads prd.md, requirements.json, tasks.json, progress.json when it is there and architecture.md optionally; Spec has Dir, PRDBody, Tasks *TasksV3Json, Progress *ProgressV3Json"
+        },
+        {
+          "name": "Spec.IsFinished",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func (s *Spec) IsFinished() bool; true when the status ends the work (sealed, superseded, archived) or no task is pending or in progress"
+        },
+        {
+          "name": "TasksV3Json",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "struct with Dependencies []Dependency (Dependency{Spec, Reason string}) and Tasks []Task; a Task has Touches []string"
+        }
+      ]
+    },
+    {
+      "package": "speca (agent-fox-dev/spec, cmd/speca, docs/speca.md)",
+      "version": "commit 8faad70",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "speca <package> --gate full",
+          "import_path": "speca on PATH",
+          "signature": "speca <package directory> --gate full [--timeout <Go duration, default 20m, per command>]; runs the package's linter, then its all_tests, in the working directory, with no shell; exit code 0 for every verdict; stdout is one JSON object {tool, ok, status, exit_code, summary, result: {gate: {level, verdict: pass|fail|not_run, reason?, reused?, commands: [{name, exit_code?, seconds, log, tail?, timed_out?}], seconds}}}; a pass is recorded under $XDG_STATE_HOME (else ~/.local/state) and reused for the same tree"
+        }
+      ]
+    },
+    {
+      "package": "af-impl skill (agent-fox-dev/spec, skills/af-impl), in the modes of docs/prd/09-run-af-spec-and-af-impl-under-a-controller.md",
+      "version": "commit 8faad70",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "af-impl --no-merge",
+          "import_path": "claude -p \"/af-impl <package> --unattended --no-merge --result <file>\"",
+          "signature": "implements the package on the checked-out branch and ends when it is pushed; the result file is one JSON document {skill, mode: no_merge, outcome: complete|complete_with_open_items|parked|gate_failed|push_failed|refused_*, reason?, package, branch, head, pushed, tasks, deviations, open_items: [{kind, severity?, awaits?, title (at most 60 characters), missing, why, ids, evidence, adr?, closes}], summary, run}; the flag does not exist in the skill yet"
+        },
+        {
+          "name": "af-impl --rework",
+          "import_path": "claude -p \"/af-impl <package> --unattended --rework <findings file> --result <file>\"",
+          "signature": "the findings file is a JSON array of {id, source: gate|review|person|health|conflict, text, file?, line?, criterion?, output?, binding?}; refuses a package with an open task (refused_open_tasks); outcome reworked|nothing_changed|rework_failed|push_failed|refused_*; the result lists replies: [{id, action: fixed|declined|not_reproduced|failed, text, commit?, test?}] and open_items; the flag does not exist in the skill yet"
+        }
+      ]
+    }
+  ]
+}

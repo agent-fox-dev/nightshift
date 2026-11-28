@@ -1,0 +1,891 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "05",
+  "spec_name": "planning",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "The item's task fork and change on the hub",
+      "rationale": "Every item works in a fork of its own and reaches the workspace only as one change, which nightshift opens because a session's token cannot.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls the change service's `EnsureFork(ctx, item)` for an item that has no fork stored, while the hub is available to the worker token",
+          "action": "send `POST /api/v1/workspaces/{workspace}/forks` with the worker token and the body `{\"name\": \"i<N>\", \"auto_change\": false, \"purpose\": \"nightshift item <N>: <title>\"}` (the purpose cut to 1,024 characters), store for the item the fork's slug, its git URL (the answer's `remote`), the branch name `item-<N>` and the generation 1, and append to the item's thread an entry of kind `fork_created` with the text `task fork <slug> created`, not marking the thread unread",
+          "contract": "returns `Record{Item, Workspace, Fork: \"<workspace>--i<N>\", GitURL, Branch: \"item-<N>\", Generation: 1, Change: 0}`; the request carries no `ttl`, `token` or `session_id`; a second call returns the stored record and sends no request; when the hub answers `409 conflict`, the fork `<workspace>--i<N>` is read with `GET /api/v1/workspaces/<workspace>--i<N>` and stored as the item's, with its `hub_url` as the git URL; `Get(ctx, item)` returns the same record, and `change.ErrNotFound` for an item with no fork",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a fake hub (internal/hubtest) extended with `POST …/forks`, forks that share their parent's repository, and the workspace `demo`",
+              "items 7 and 9 of `demo` created through internal/item over a copy of the store template",
+              "the fixtures live in internal/change/helpers_test.go"
+            ],
+            "pseudocode": "new file internal/change/change_test.go: rec = svc.EnsureFork(ctx, 7); assert rec == {Item: 7, Workspace: 'demo', Fork: 'demo--i7', GitURL: fakeHub's git URL of the fork, Branch: 'item-7', Generation: 1, Change: 0}; assert the one POST …/forks body == {name: 'i7', auto_change: false, purpose: 'nightshift item 7: ' + title} and bore the worker token; assert the thread's last entry == {kind: 'fork_created', text: 'task fork demo--i7 created'} and the thread is not unread; again = svc.EnsureFork(ctx, 7); assert again == rec and the fake hub saw no further request; assert svc.Get(ctx, 7) == rec; assert errors.Is(svc.Get(ctx, 8) error, change.ErrNotFound). Second case, the fake hub already holds demo--i9 and answers the POST 409 conflict: rec = svc.EnsureFork(ctx, 9); assert rec.Fork == 'demo--i9' and one GET of that workspace was sent"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls `Forget(ctx, item)` for an item with a stored fork, and `EnsureFork` is called for the item afterwards",
+          "action": "remove the item's stored fork and change while keeping its generation, send nothing to the hub for the forgetting, and create at that `EnsureFork` a fork named `i<N>-<g>`, g being one above the kept generation, storing it as the item's with no change",
+          "contract": "after `Forget`, `Get` returns `change.ErrNotFound`; the next `EnsureFork` returns a record with `Fork: \"<workspace>--i<N>-2\"`, `Generation: 2`, `Branch: \"item-<N>\"` and `Change: 0`; `Forget` for an item with no fork returns nil",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/change/change_test.go: svc.EnsureFork(ctx, 7); svc.OpenDraft(ctx, 7, 't', 'i', ''); n = fakeHub request count; assert svc.Forget(ctx, 7) == nil; assert fakeHub request count == n; assert errors.Is(svc.Get(ctx, 7) error, change.ErrNotFound); rec = svc.EnsureFork(ctx, 7); assert rec.Fork == 'demo--i7-2' and rec.Generation == 2 and rec.Change == 0 and rec.Branch == 'item-7'; forget and ensure again -> 'demo--i7-3'; assert svc.Forget(ctx, 99) == nil"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls `Head(ctx, item)` for an item with a stored fork",
+          "action": "request `GET /api/v1/workspaces/{fork}/scm/refs/item-<N>` with the worker token and return the commit the branch points at",
+          "contract": "returns the ref object's `sha`; `change.ErrNoBranch` when the hub answers `404 ref_not_found`; `change.ErrNotFound` for an item with no fork, with no request sent",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub extended with `GET …/scm/refs/{name}` answering from the fork's repository"
+            ],
+            "pseudocode": "in internal/change/change_test.go, a table over {branch item-7 pushed to the fork at commit c -> c, nil; no such branch -> '', ErrNoBranch; item 8 without a fork -> '', ErrNotFound and no request}: sha, err = svc.Head(ctx, item); assert sha and errors.Is(err, want)"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls `OpenDraft(ctx, item, title, intent, sessionID)` for an item whose fork holds the branch `item-<N>` and that has no change stored",
+          "action": "send `POST /api/v1/workspaces/{workspace}/changes` with the worker token and the body `{\"source\": {\"workspace_slug\": <fork>, \"branch\": \"item-<N>\"}, \"title\": <title cut to 200 characters>, \"intent\": <intent cut to 16,000 characters>, \"draft\": true, \"session_id\": <sessionID>}` (`session_id` left out when it is empty), store the change's number and `ref` for the item, and append to the item's thread an entry of kind `change_opened` with the text `draft change <ref> opened: <url>`, not marking the thread unread",
+          "contract": "returns the record with `Change` the number, `ChangeRef` the hub's `ref` (`demo#3`) and `ChangeURL` `<hub.endpoint>/api/v1/workspaces/<workspace>/changes/<number>`; the hub holds a change in the state `draft` whose source is the fork's branch; a second call returns the stored record, sends no request and writes no entry; when the hub answers `409 change_exists`, the change `details.number` names is stored as the item's and the entry is written once",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub extended with `POST …/changes` (draft changes, `409 change_exists`, `400 source_not_found`) and an accessor for a stored change"
+            ],
+            "pseudocode": "in internal/change/change_test.go: push a commit to item-7 of demo--i7; rec = svc.OpenDraft(ctx, 7, strings.Repeat('t', 250), 'Because y', 'sess-1'); c = fakeHub.Change('demo', rec.Change); assert c.state == 'draft' and c.source == {demo--i7, item-7} and len(c.title) == 200 and c.intent == 'Because y' and c.session_id == 'sess-1'; assert rec.ChangeRef == c.ref and rec.ChangeURL == hubURL + '/api/v1/workspaces/demo/changes/' + rec.Change; assert the thread's last entry == {kind: 'change_opened', text: 'draft change ' + c.ref + ' opened: ' + rec.ChangeURL}; svc.OpenDraft again -> same record, no further POST, entry count unchanged. Second case, the fake hub holds a draft change 4 for the branch and answers 409 change_exists with details {number: 4}: assert rec.Change == 4. Third case, sessionID '': assert the body has no session_id"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "event_driven",
+          "condition": "an item is abandoned through the item service's `Abandon`, which calls the hook this package registers with `OnAbandon(\"change\", …)`, or a part of nightshift calls `change.Service.Abandon(ctx, item, reason)`",
+          "action": "send `POST /api/v1/workspaces/{workspace}/changes/{number}/abandon` with the worker token and `{\"reason\": <reason>}` for the item's stored change, and append to the item's thread an entry of kind `change_abandoned` with the text `change <ref> abandoned`",
+          "contract": "the hub's change is `abandoned`; returns nil, with no request sent and no entry written, for an item with no fork or no change; returns nil when the hub answers `409 change_closed`; the stored record is kept",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub extended with `POST …/changes/{number}/abandon`",
+              "the change service's hook registered with the item service as daemon.Run registers it"
+            ],
+            "pseudocode": "in internal/change/change_test.go: with a draft change stored for item 7: assert itemSvc.Abandon(ctx, 7, 'no longer wanted') == nil; assert fakeHub.Change('demo', n).state == 'abandoned' and the abandon body's reason == 'no longer wanted'; assert the thread holds {kind: 'change_abandoned', text: 'change demo#' + n + ' abandoned'}; assert svc.Get(ctx, 7).Change == n. A table over {item with a fork and no change, item with no fork, a change the fake hub answers 409 change_closed for}: assert svc.Abandon(ctx, item, 'r') == nil; for the first two assert no request was sent"
+          }
+        },
+        {
+          "id": "REQ-1.6",
+          "pattern": "unwanted",
+          "condition": "`EnsureFork`, `Head`, `OpenDraft` or `Abandon` is called while `Available` of the hub client is false for the worker credential, or the hub answers one of their requests with an error other than `409 conflict` for a fork, `404 ref_not_found`, `409 change_exists` and `409 change_closed`",
+          "action": "return the error, store nothing and write no thread entry",
+          "contract": "`change.ErrHubUnavailable`, with no request sent, while the hub is not available; otherwise the hub client's typed error with the hub's status and `error_type`; the item's stored record is as it was before the call; an error of the abandon hook does not keep the item from being `abandoned` (package 03 writes it to the thread as `abandon_hook_failed`)",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/change/change_test.go, a table over {monitor unreachable -> each of the four functions returns ErrHubUnavailable and the fake hub saw no request; POST …/forks answers 429 fork_limit_reached -> EnsureFork's error has error_type 'fork_limit_reached' and Get returns ErrNotFound; POST …/changes answers 400 source_not_found -> OpenDraft's error has that type and Get(…).Change == 0; abandon answers 502 -> Abandon returns the error}: assert the entry count of the thread is unchanged. Then with the abandon answering 502: assert itemSvc.Abandon(ctx, 7, 'r') == nil and the item is 'abandoned' and its thread holds an entry of kind 'abandon_hook_failed' starting 'change: '"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "When planning starts, and under which package number",
+      "rationale": "A person who typed a defect expects it planned without another command, a part split off by an agent waits until the person wants it, and two planners in one workspace must never write the same package number.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "event_driven",
+          "condition": "the scheduler calls the step this package registers for the state `new` for an item of kind `spec`",
+          "action": "move the item to `ready` through the item service's `Transition` with the reason `imported package`, creating no fork and asking for no session",
+          "contract": "the item is `ready`; the hub saw no request for it",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a plan service over a copy of the store template with a real item service and inbox, a fake scheduler that records the sessions asked for, and the fake hub; the fixtures live in internal/plan/helpers_test.go"
+            ],
+            "pseudocode": "new file internal/plan/start_test.go, one table over items put in 'new' {kind spec -> 'ready' with the state entry 'new -> ready: imported package'; change_request with source text -> 'planning' with 'new -> planning: planning started'; defect with source issue -> 'planning'; defect made with CreateLinked (source item) -> still 'new'; the same after svc.Request(ctx, n, false) -> 'planning'}: err = svc.StepNew(ctx, item); assert err == nil; assert itemSvc.Get(n).State == want; for every row assert the fake scheduler was asked for no session and the fake hub saw no request"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "event_driven",
+          "condition": "the scheduler calls the step of the state `new` for an item of kind `defect` or `change_request` whose source type is not `item`, or for which `item plan` was run",
+          "action": "move the item to `planning` through `Transition` with the reason `planning started`",
+          "contract": "the item is `planning`, so that the step of `planning` is called for it at the scheduler's next pass",
+          "check": {
+            "same_as": "REQ-2.1"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "state_driven",
+          "condition": "an item of kind `defect` or `change_request` whose source type is `item` is `new` and `item plan` has not been run for it",
+          "action": "leave the item in `new`: no transition, no fork, no package number, no session and no hub request",
+          "check": {
+            "same_as": "REQ-2.1"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "event_driven",
+          "condition": "an authenticated client sends `POST /api/v1/items/{number}/plan`, with no body or with `{\"no_plan_approval\"?: bool}`, for an item of kind `defect` or `change_request` in the state `new`",
+          "action": "store with the item that its plan was asked for and, when `no_plan_approval` is true, that its plan needs no approval",
+          "contract": "status 200 with the item object of package 03; a second request for the item while it is `new` is 200 too; a `no_plan_approval` once stored as true stays true when a later request leaves it out; `plan.Service.NeedsApproval(ctx, item)` is false when the item's `plan_approval` is false or `no_plan_approval` was stored as true, and true otherwise",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the route registered through the API server's Handle, the client token set"
+            ],
+            "pseudocode": "new file internal/plan/routes_test.go, through the router, a table over a linked defect item in 'new' {no body -> 200, NeedsApproval true; {} -> 200, true; {no_plan_approval: false} -> 200, true; {no_plan_approval: true} -> 200, false; that request followed by one with no body -> 200, still false}: r = post('/api/v1/items/' + n + '/plan', body); assert r.status == 200 and r.json.number == n and r.json.state == 'new'; assert svc.NeedsApproval(ctx, n) == want. One row for an item created with no_plan_approval through POST /api/v1/items: assert NeedsApproval == false without any plan request"
+          }
+        },
+        {
+          "id": "REQ-2.5",
+          "pattern": "unwanted",
+          "condition": "`POST /api/v1/items/{number}/plan` names a number that is no item, an item that is not in the state `new`, or an item of kind `spec`, or carries a body that is not a JSON object, holds a member other than `no_plan_approval`, or a `no_plan_approval` that is not a boolean",
+          "action": "refuse the request and store nothing",
+          "contract": "status 404 `not_found` with `item <N> not found`; status 409 `conflict` with `item <N> is <state>, not new` or, for a `spec` item in `new`, `item <N> is a spec package and needs no plan`; status 400 `invalid_request` for the body; the item's state and what is stored about its plan are unchanged",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/routes_test.go, a table over {number 999 -> 404 not_found 'item 999 not found'; an item in 'ready' -> 409 conflict 'item 3 is ready, not new'; an item in 'planning' -> 409; a spec item kept in 'new' -> 409 'item 4 is a spec package and needs no plan'; body '[1]' -> 400; body {no_plan_approval: 'yes'} -> 400; body {x: 1} -> 400}: r = post(path, body); assert r.status, r.json.error_type and r.json.message; assert svc.NeedsApproval and the item's state are as before"
+          }
+        },
+        {
+          "id": "REQ-2.6",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift item plan <N>`, optionally with `--no-plan-approval` before or after the number",
+          "action": "send `POST /api/v1/items/<N>/plan` with `{\"no_plan_approval\": true}` when the option is given and with `{}` otherwise, and print `planning item <N>`, or the item's JSON with `--json`",
+          "contract": "exit code 0 and `planning item <N>` on stdout; exit code 1 with the refusal's message on stderr when the daemon refuses; exit code 2 with the usage on stderr and no request sent when the number is missing, is not a positive integer, or a further argument follows",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a test HTTP server standing in for the daemon, as the other tests of the file use"
+            ],
+            "pseudocode": "in internal/cli/item_test.go (package 03's file), a table over {['item','plan','12'] -> POST /api/v1/items/12/plan with {} , stdout 'planning item 12\\n', code 0; ['item','plan','--no-plan-approval','12'] and ['item','plan','12','--no-plan-approval'] -> body {no_plan_approval: true}; with --json -> stdout parses to the served item; the server answering 409 conflict 'item 12 is ready, not new' -> code 1, stderr 'item 12 is ready, not new\\n'; ['item','plan'] , ['item','plan','x'] , ['item','plan','0'] , ['item','plan','12','13'] -> code 2, usage on stderr, the server saw no request}: code, stdout, stderr = cli.Run(args)"
+          }
+        },
+        {
+          "id": "REQ-2.7",
+          "pattern": "ubiquitous",
+          "action": "for any item that enters planning, give it once, and keep for it, the package number that is one above the greater of the highest numeric prefix among the directories `afspec.ListSpecDirs` lists under `.specs/` and under `.specs/archive/` at the tip of the workspace's default branch (the `head_sha` of the hub's workspace object; 0 when neither directory exists) and the highest number given to another item of the same workspace that is neither `done` nor `abandoned`",
+          "contract": "`plan.Service.Number(ctx, item)` returns the number as a string of two digits with a leading zero, three digits from 100 on; a second call returns the stored number without reading the branch; two items of one workspace that enter planning at the same moment get different numbers; numbers given to `done` or `abandoned` items and to items of another workspace do not count",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "a stub that yields the directory of the default branch's tree, in place of the hub read and gitclone.Sync",
+              "items walked into their states with the helper of internal/item's tests or through Transition"
+            ],
+            "pseudocode": "new file internal/plan/number_test.go, a table over a default branch tree and the numbers already given {no .specs -> '01'; .specs with 01_a and 04_b -> '05'; .specs with 03_a and archive/ with 09_old -> '10'; a directory 06_broken without prd.md -> '07'; .specs up to 04 and an item in 'planning' holding 05 -> '06'; the same with that item 'abandoned' -> '05'; with that item 'done' and its package 05 not on the branch -> '05'; .specs up to 99 -> '100'; an item of workspace 'other' holding 20 -> ignored}: n = svc.Number(ctx, item); assert n == want; assert svc.Number(ctx, item) == n with no further fetch. Then 8 items of one workspace calling Number concurrently: assert 8 distinct consecutive numbers"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "The planner run and its result",
+      "rationale": "The implementer works from the package alone, so a plan counts only when the package the hub holds is the one asked for and validates.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "event_driven",
+          "condition": "the scheduler calls the step this package registers for the state `planning` for an item that has no accepted package, and the item's branch on the fork holds no package with the item's number",
+          "action": "ensure the item's fork with `change.EnsureFork`, give the item its package number, and ask the scheduler with `RunSession` for a session with the role `planner`, the step name `plan`, the fork, the branch `item-<N>`, the input `text` holding the item's text, the prompt `/af-spec {input:text} --unattended --number <NN> --no-activate --result {result}`, with ` --defect` appended for an item of kind `defect`, and the acceptance function of this requirement",
+          "contract": "the `session.Spec` holds exactly those values and no `Commit`, and the request no class; the input `text` is the text the item was created with, and for an item imported from an issue `# <title>`, a blank line, the body, and for each comment in order a blank line, `## Comment by <author>`, a blank line and the comment's body",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "the default branch of `demo` holds `.specs/01_a` to `.specs/04_d`",
+              "the fake scheduler returns `interrupted` for the session, so that the step stops after asking"
+            ],
+            "pseudocode": "new file internal/plan/planner_test.go, a table over items in 'planning' {change_request with the text 'Add a greeting endpoint' -> prompt '/af-spec {input:text} --unattended --number 05 --no-activate --result {result}', Inputs.text == the text; defect -> the prompt ends ' --defect'; an item imported from an issue with two comments -> Inputs.text == '# T\\n\\nB\\n\\n## Comment by ann\\n\\nc1\\n\\n## Comment by bob\\n\\nc2'}: svc.StepPlanning(ctx, item); spec = fakeSched.Requests()[0].Spec; assert spec.Role == planner and spec.Step == 'plan' and spec.Fork == 'demo--i' + n and spec.Branch == 'item-' + n and spec.Commit == '' and spec.Accept != nil; assert the request's class is unset; assert the fake hub holds the fork"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "event_driven",
+          "condition": "a planner session ended with a result file whose `outcome` is `written`, the fork holds the branch `item-<N>`, the directory under `.specs/` at the branch's head whose numeric prefix equals the item's number loads with `afspec.LoadSpec`, and `afspec.ValidateInRoot` reports no error for it",
+          "action": "accept the result and, when `RunSession` returns the session as `completed`, record the package's directory and the branch's head as the item's accepted package, append to the item's thread an entry of kind `plan_written` with the text `package <NN_name> written`, and go on to the review of the plan",
+          "contract": "the acceptance function returns nil; warnings of the validation do not refuse; the prefix is compared as a number, so `7` matches `07_x`; the package is read from a clone of the fork that nightshift brings to the head with `gitclone.Sync` at `<clones directory>/<fork slug>.plan`, never from the session's clone; `plan.Service.Get(ctx, item)` reports the number, the directory, the head and the phase `review`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub's fork `demo--i7` with its git endpoint and the ref route",
+              "fixture packages built through afspec once per test process and copied per test: one valid draft, one with a validation warning",
+              "the fake scheduler runs a scripted function as the session: it may push to the fork, then calls the Spec's Accept with the scripted result and returns `completed` or, when Accept fails, `failed` with the first line of its error"
+            ],
+            "pseudocode": "new file internal/plan/accept_test.go: the scripted session pushes the fixture package 05_greeting to item-7 of demo--i7 and returns ResultFile {outcome: 'written', package: {spec_dir: '.specs/05_greeting'}} after calling Accept; svc.StepPlanning(ctx, 7); assert the Accept call returned nil; p = svc.Get(ctx, 7); assert p.Number == '05' and p.Dir == '.specs/05_greeting' and p.Head == the pushed commit and p.Phase == 'review'; assert the thread holds {kind: 'plan_written', text: 'package 05_greeting written'}; assert the directory <clones>/demo--i7.plan is a clone at that commit; a fixture whose validation has only a warning is accepted too"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "unwanted",
+          "condition": "a planner session ended with a result file whose `outcome` is missing or is not `written`, or the fork has no branch `item-<N>`, or the branch's head holds no package directory with the item's number, or that package does not load, or its validation reports an error",
+          "action": "refuse the result, so that the session counts as failed, and keep nothing of it",
+          "contract": "the acceptance function returns an error whose first line is `planner: result has no outcome`, `planner: <outcome>: <reason>` (`planner: <outcome>` when the result has no reason), `branch item-<N> is not on the fork`, `no package <NN> on the branch`, `package <NN> does not load: <error>` or `package <NN> does not validate: <check>: <message>` with the first error; no kept text, no draft change and no linked item is made, and the plan stays at the phase it was at",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/accept_test.go, a table over {result {} -> 'planner: result has no outcome'; {outcome: 'invalid', reason: 'C5 fails'} -> 'planner: invalid: C5 fails'; {outcome: 'refused_dirty'} -> 'planner: refused_dirty'; written and nothing pushed -> 'branch item-7 is not on the fork'; written and package 06_x pushed while the number is 05 -> 'no package 05 on the branch'; written and 05_x pushed with requirements.json cut off -> starts 'package 05 does not load: '; written and 05_x pushed whose task names an unknown criterion -> starts 'package 05 does not validate: C4: '}: svc.StepPlanning(ctx, 7); assert the first line of the Accept call's error == want; assert the session's outcome == failed; assert errors.Is(svc.Kept(ctx, 7) error, plan.ErrNotFound); assert the fake hub holds no change; assert svc.Get(ctx, 7).Phase == 'draft'"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "event_driven",
+          "condition": "a planner's accepted result lists `remaining_scopes`, each with `name`, `summary` and `text`",
+          "action": "create, for each scope whose `name` the item has no split part for yet and in the order listed, a linked item with the item service's `CreateLinked(ctx, <the item>, <the item's kind>, <the scope's text, or its summary when the text is empty>)`, and record the new item's number with the scope's name",
+          "contract": "each new item is `new`, of the planned item's kind, with it as `parent`; the planned item's `children` name them; a later accepted result of the same item that lists a name again creates no further item; `plan.Service.Get(ctx, item).Parts` lists `{Name, Item}` in the order created",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/accept_test.go: the scripted result of a defect item 7 lists remaining_scopes [{name: 'audit_log', summary: 's1', text: 'Log every greeting'}, {name: 'rate_limit', summary: 'Limit greetings', text: ''}]; svc.StepPlanning(ctx, 7); kids = itemSvc.Get(7).Children; assert len(kids) == 2; assert itemSvc.Get(kids[0]) has state 'new', kind 'defect', parent 7 and the source text 'Log every greeting'; assert itemSvc.Get(kids[1]) source text == 'Limit greetings'; assert svc.Get(ctx, 7).Parts == [{audit_log, kids[0]}, {rate_limit, kids[1]}]; run a revision whose result lists audit_log again and a new scope 'export'; assert len(itemSvc.Get(7).Children) == 3"
+          }
+        },
+        {
+          "id": "REQ-3.5",
+          "pattern": "event_driven",
+          "condition": "a package was accepted for an item that has no change stored",
+          "action": "open the item's change as a draft with `change.OpenDraft`, giving the item's title, the text of the `## Intent` section of the package's `prd.md` without its heading and surrounding blank lines, and the id of the planner's session",
+          "contract": "the hub holds one draft change from `item-<N>` of the fork into the workspace with that title, intent and `session_id`; a package accepted later for the same item opens no further change",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/accept_test.go: after the accepted first result of item 7 (session id 's-1', fixture intent 'Greet by name.'): c = fakeHub.Change('demo', changeSvc.Get(ctx, 7).Change); assert c.state == 'draft' and c.title == the item's title and c.intent == 'Greet by name.' and c.session_id == 's-1' and c.source == {demo--i7, item-7}; after an accepted revision: assert the fake hub holds one change for the fork"
+          }
+        },
+        {
+          "id": "REQ-3.6",
+          "pattern": "event_driven",
+          "condition": "a package was accepted for an item",
+          "action": "store in nightshift's store every regular file of the package's directory as it is at the accepted head, by its path below that directory, with the package's number, its directory and the head, and keep every such text of the item until the item becomes `done` or `abandoned`, when all of them and the item's `.plan` clone are removed",
+          "contract": "`plan.Service.Kept(ctx, item)` returns the text stored last as `Package{Number, Dir, Head, Files}`, `Files` mapping each path to its bytes; the texts of earlier rounds stay in the store beside it; `plan.ErrNotFound` for an item with none; after the item's move to `done` or `abandoned` (the hook registered with the item service's `OnChange`) `Kept` returns `plan.ErrNotFound` and the clone directory does not exist",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/accept_test.go: after the accepted first result: k = svc.Kept(ctx, 7); assert k.Number == '05' and k.Dir == '.specs/05_greeting' and k.Head == the pushed commit; assert the keys of k.Files == ['prd.md', 'requirements.json', 'spec.md', 'tasks.json'] and k.Files['prd.md'] == the pushed bytes; after an accepted revision that changed prd.md: assert svc.Kept(ctx, 7).Files['prd.md'] == the new bytes and count(kept texts of item 7) == 2. A table over the moves {planning -> abandoned through itemSvc.Abandon; an item walked to publishing -> done}: assert errors.Is(svc.Kept(ctx, n) error, plan.ErrNotFound) and the .plan clone directory is gone"
+          }
+        },
+        {
+          "id": "REQ-3.7",
+          "pattern": "unwanted",
+          "condition": "`RunSession` returns an error (`sched.ErrNotStarted`, a cancelled context) or a result whose outcome is `failed` or `interrupted`, for a planner session or for a review of a plan",
+          "action": "return from the step and leave the plan's phase, round, verdict and findings as they were",
+          "contract": "the step returns nil for a result that is not `completed` and for `sched.ErrNotStarted`, and the context's error for a cancelled context; the next call of the step asks for the same session again, with the same prompt and inputs; no thread entry of this package, no change and no kept text is written for that session",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/plan/planner_test.go, a table over the phases {draft, review, revise} and the outcomes {result failed 'boom', result interrupted, error sched.ErrNotStarted, cancelled context}: before = svc.Get(ctx, n); err = svc.StepPlanning(ctx, n); assert err == nil, or errors.Is(err, context.Canceled) for the last; assert svc.Get(ctx, n) == before; err = svc.StepPlanning(ctx, n); assert fakeSched.Requests()[1].Spec.Prompt == Requests()[0].Spec.Prompt and the same Inputs"
+          }
+        },
+        {
+          "id": "REQ-3.8",
+          "pattern": "event_driven",
+          "condition": "the step of the state `planning` is called for an item with no accepted package whose branch `item-<N>` on the fork already holds a package with the item's number that loads and validates with no error",
+          "action": "take that package as accepted without asking for a planner session: keep its text, write the `plan_written` entry, open the draft change with an empty session id and go on to the review",
+          "contract": "`RunSession` is not called with the role `planner` in that call; the plan's phase is `review` and its head is the branch's head; no split part is created",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/accept_test.go: push the valid fixture 05_greeting to item-7 of demo--i7 with no session and the plan at phase 'draft' with the number 05; svc.StepPlanning(ctx, 7); assert no request of the fake scheduler has the role planner; assert svc.Get(ctx, 7).Phase == 'review' and Head == the pushed commit; assert svc.Kept(ctx, 7) holds the files; assert the fake hub holds the draft change with no session_id"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "The review rounds of a plan",
+      "rationale": "A plan nobody but its writer has read is the cheapest place for a mistake to hide, and a reviewer and a planner that disagree must not go on without end.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "event_driven",
+          "condition": "the step of the state `planning` is called for an item whose plan is at the phase `review`",
+          "action": "ask the scheduler with `RunSession` for a session with the role `reviewer`, the step name `plan_review`, the fork, the accepted head as the commit to read, and a prompt that holds the item's text, the path of the package's directory in the repository, the verdict object package 04 requires of a reviewer and, from the second review of the plan on, every earlier finding with its id, its text and the planner's reply",
+          "contract": "the `session.Spec` has no `Branch`, no `Inputs` and no `Accept`; the prompt of a plan's first review names no finding; the prompt of a later review holds each earlier finding's id and text and its reply's text, or `no reply`",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "the fake scheduler runs the scripted revision as REQ-3.2's does: it pushes a changed package and calls Accept"
+            ],
+            "pseudocode": "new file internal/plan/review_test.go: with the plan of item 7 at phase 'review', head h, the fake scheduler scripted to return {completed, Verdict: object, findings [{text: 'REQ-1.2 has no contract', criterion: 'REQ-1.2'}]}, then for the revision {completed, replies [{id: 'r1.1', action: 'changed', text: 'added the contract'}]}: svc.StepPlanning(ctx, 7) three times; r1 = Requests()[0].Spec; assert r1.Role == reviewer and r1.Step == 'plan_review' and r1.Fork == 'demo--i7' and r1.Commit == h and r1.Branch == '' and r1.Inputs is empty and r1.Accept == nil; assert r1.Prompt contains the item's text and '.specs/05_greeting' and '\"verdict\"' and does not contain 'r1.1'; r3 = Requests()[2].Spec; assert r3.Role == reviewer and r3.Commit == the revision's head and r3.Prompt contains 'r1.1', 'REQ-1.2 has no contract' and 'added the contract'"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "event_driven",
+          "condition": "a review of a plan completed with the verdict `agree` and the item has no pending finding of the person",
+          "action": "count the round, record the verdict, append to the item's thread an entry of kind `plan_review` with the text `reviewer: agree`, and end planning as agreed",
+          "contract": "the plan's phase is `ended` with the verdict `agree`; no further planner or reviewer session is asked for; what follows is the plan decision or, for a plan that needs no approval, the activation",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/plan/review_test.go, one table over the scripted verdicts of successive reviews {[agree] -> 1 review, 0 revisions, Phase 'ended', Verdict 'agree', Round 1; [object, agree] -> 2 reviews, 1 revision, Verdict 'agree', Round 2; [object, object, agree] -> 3 reviews, 2 revisions, 'agree'; [object, object, object] -> 3 reviews, 3 revisions, Phase 'ended', Verdict 'object', Round 3 and no fourth reviewer request however often the step is called}: call svc.StepPlanning until the phase is 'ended'; assert the counts of reviewer and planner requests, p.Verdict and p.Round; assert the thread's plan_review entries read 'reviewer: agree' or 'reviewer: object, <n> findings' in order; for the last row assert p.Findings are the third review's, each with the reply of the third revision"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "event_driven",
+          "condition": "a review of a plan completed with the verdict `object`",
+          "action": "count the round, record the findings with the ids `r<round>.<n>` in the verdict's order, append to the item's thread an entry of kind `plan_review` with the text `reviewer: object, <n> findings`, and ask the scheduler for a planner session with the step name `plan`, the branch `item-<N>`, the input `findings` holding one JSON array of the findings as `{\"id\", \"source\": \"review\", \"text\", \"criterion\"?}` followed by the pending findings of the person as `{\"id\": \"p<n>\", \"source\": \"person\", \"text\"}`, the prompt `/af-spec <the package's directory> --unattended --findings {input:findings} --no-activate --result {result}`, and the acceptance function of the planner run",
+          "contract": "the findings file parses as that array, the reviewer's findings first, `criterion` present only where the reviewer named one; the prompt carries neither `--number` nor `--defect`; the result is accepted or refused as a first result is",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/plan/review_test.go: after a first review that objects with [{text: 'a', criterion: 'REQ-1.2'}, {text: 'b', file: 'prd.md', line: 3}] and with svc.AddFinding(ctx, 7, 'Keep the old log line') called before: svc.StepPlanning(ctx, 7); rv = the planner request; assert rv.Step == 'plan' and rv.Branch == 'item-7' and rv.Prompt == '/af-spec .specs/05_greeting --unattended --findings {input:findings} --no-activate --result {result}'; assert json(rv.Inputs.findings) == [{id: 'r1.1', source: 'review', text: 'a', criterion: 'REQ-1.2'}, {id: 'r1.2', source: 'review', text: 'b'}, {id: 'p1', source: 'person', text: 'Keep the old log line'}]; assert the thread's last plan_review entry == 'reviewer: object, 2 findings'; assert rv.Accept refuses a result {outcome: 'invalid'} with 'planner: invalid'"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "event_driven",
+          "condition": "the result of a planner's revision was accepted",
+          "action": "keep the revised package's text, store each entry of the result's `replies` (`id`, `action`, `text`) with the finding of that id, mark the findings of the person the revision carried as delivered, and set the plan to the phase `review` at the new head, unless the revision answered the third objection in a row",
+          "contract": "`plan.Service.Get(ctx, item).Findings` holds each finding of the last review with `Reply` the reply's text, or `no reply` for a finding the result has no reply for; a delivered finding of the person is in no later findings file; the next reviewer session reads the new head",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/plan/review_test.go: after the objection of the check above, the scripted revision returns replies [{id: 'r1.1', action: 'changed', text: 'fixed'}, {id: 'p1', action: 'changed', text: 'kept'}] and pushes commit h2: svc.StepPlanning(ctx, 7); p = svc.Get(ctx, 7); assert p.Phase == 'review' and p.Head == h2; assert p.Findings == [{ID: 'r1.1', Text: 'a', Criterion: 'REQ-1.2', Reply: 'fixed'}, {ID: 'r1.2', Text: 'b', Reply: 'no reply'}]; assert count(kept texts of item 7) == 2; let the next review object again; assert the next findings file holds no 'p1'"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "event_driven",
+          "condition": "the result of the revision that answers the third objection in a row was accepted",
+          "action": "end planning as objected, with the third review's findings and the planner's replies to them, and ask for no fourth review",
+          "contract": "the plan's phase is `ended` with the verdict `object` and the round 3; exactly 3 reviewer sessions and, with the first draft, 4 planner sessions completed since the rounds were last counted from zero; the number of rounds is a parameter of the service with the default 3",
+          "check": {
+            "same_as": "REQ-4.2"
+          }
+        },
+        {
+          "id": "REQ-4.6",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls `plan.Service.AddFinding(ctx, item, text)` with a text that is not empty for an item of kind `defect` or `change_request` in the state `new`, `planning` or `awaiting_approval`",
+          "action": "store the text as a pending finding of the person with the next id `p<n>` of the item, interrupt no session, hand every pending finding to the planner's next revision after the reviewer's findings and in the order they were added, and, when a review agrees while one is pending, run one revision that carries the pending findings alone and have its package reviewed before planning ends",
+          "contract": "returns nil; `plan.ErrInvalid` for an empty text; `plan.ErrNotPlanning` for an item in another state or of kind `spec`; the item service's not-found error for an unknown item; with a pending finding and the verdict `agree`, the next planner request's findings file holds only `{\"id\": \"p<n>\", \"source\": \"person\", \"text\"}` entries, and a further reviewer session follows it",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/plan/review_test.go: with the plan at phase 'review': assert svc.AddFinding(ctx, 7, 'n1') == nil and svc.AddFinding(ctx, 7, 'n2') == nil; the review agrees; svc.StepPlanning twice; rv = the planner request; assert json(rv.Inputs.findings) == [{id: 'p1', source: 'person', text: 'n1'}, {id: 'p2', source: 'person', text: 'n2'}]; assert the next request is a reviewer's; let it agree; assert Phase == 'ended'. A table over {text '' -> ErrInvalid; an item in 'ready' -> ErrNotPlanning; a spec item -> ErrNotPlanning; item 999 -> the item service's not-found error; a linked item in 'new' -> nil}: assert errors.Is(svc.AddFinding(ctx, n, text), want)"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "The plan decision",
+      "rationale": "The plan's approval is the person's one go-ahead, so the decision has to show what will be built, where it will land and which of their sensitive paths it is likely to touch.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "event_driven",
+          "condition": "planning ended for an item whose plan needs an approval, or ended as objected for any item",
+          "action": "move the item to `awaiting_approval` through `Transition` and, at the call of the step this package registers for that state, open one decision of the kind `plan` on the item's thread with the question `Approve the plan for item <N>?`, `item <N>` as what it blocks, and this evidence in this order: `plan` with the package's rendered text (`RenderCombined` of the package at the accepted head); `draft change` with the change's URL; `files the tasks expect to touch` with the distinct `touches` of the package's tasks in the order they first appear, one to a line, or `none`; the `policy` entries; `reviewer's verdict` with `agree` or `object`; for a plan that ended as objected one `open finding` entry for each finding of the last review, with the text `<the finding's text>`, a line break and `planner's reply: <the reply>`; and one `split off` entry for each split part with the text `item <M>: <its title>`",
+          "contract": "the kind `plan` is declared with the options `approve`, `revise` (comment required) and `abandon`, in that order; `approve` is recommended when the reviewer agreed and `revise` when it objected to the end; a plan that ended as agreed has no `open finding` entry; exactly one `plan` decision is open for the item however often the step is called; the item's `waiting_on` names it",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a real inbox with the kind `plan` declared by the plan service's registration, as daemon.Run does it",
+              "the fake hub's `policy/evaluate` answering no requirement that needs an approval or blocks"
+            ],
+            "pseudocode": "new file internal/plan/decision_test.go, a table over plans at phase 'ended' {agreed, needs approval, touches ['api/greet.go','api/greet_test.go'] over two tasks naming 'api/greet.go' twice, one split part item 9 'Log every greeting'; objected with findings [{r3.1, 'a', reply 'done'}, {r3.2, 'b', reply 'no reply'}], needs no approval}: svc.StepPlanning(ctx, 7); assert itemSvc.Get(7).State == 'awaiting_approval'; svc.StepAwaiting(ctx, 7) twice; ds = inbox.OpenDecisions(item 7); assert len(ds) == 1; d = ds[0]; assert d.Kind == 'plan' and d.Question == 'Approve the plan for item 7?' and d.Blocks == 'item 7'; assert the option keys == ['approve','revise','abandon'] and only 'revise' requires a comment; assert the evidence labels in order and: 'plan' text == spec.RenderCombined(); 'draft change' url == the record's ChangeURL; the files text == 'api/greet.go\\napi/greet_test.go'; row 1: verdict 'agree', recommended 'approve', a 'split off' entry 'item 9: Log every greeting', no 'open finding'; row 2: verdict 'object', recommended 'revise', 'open finding' texts == ['a\\nplanner\\'s reply: done', 'b\\nplanner\\'s reply: no reply']; assert itemSvc.Get(7).WaitingOn.ID == d.ID"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "event_driven",
+          "condition": "a `plan` decision is about to be opened for a package whose tasks name at least one path in `touches`",
+          "action": "send `POST /api/v1/workspaces/{workspace}/policy/evaluate` with the worker token and `paths`, the distinct `touches` in the order they first appear, without those that start with `/` and at most the first 2,000, and add for each requirement of the answer, in the answer's order, one evidence entry labelled `policy`: `blocked by rule <rule>` when its `block` is true, `likely to need your approval under rule <rule>` when its `block` is false and its `approvals.required` is 1 or more, and none otherwise",
+          "contract": "the decision's `policy` entries read exactly so, the default requirement under the name `default`; a package with no `touches` sends no request and has no `policy` entry; when the request fails, no decision is opened in that call, the step returns the error, and the decision is opened by a later call",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the fake hub extended with `POST …/policy/evaluate` answering a scripted list of requirements or a scripted error, and recording the paths it was sent"
+            ],
+            "pseudocode": "in internal/plan/decision_test.go, a table over the fake hub's scripted evaluation {[{rule: 'deploy', approvals.required: 1, block: false}, {rule: 'secrets', block: true}, {rule: 'docs', approvals.required: 0, block: false}] -> policy entries ['likely to need your approval under rule deploy', 'blocked by rule secrets']; [{rule: 'default', approvals.required: 2}] -> ['likely to need your approval under rule default']; [] -> none; a package with no touches -> none and no evaluate request; touches ['/abs', 'a.go', 'a.go'] -> the request's paths == ['a.go']}: svc.StepAwaiting(ctx, 7); assert the texts of the decision's evidence entries labelled 'policy' == want; assert the evaluate request bore the worker token. Then the evaluation answering 502: assert svc.StepAwaiting returns an error and no decision is open; with the evaluation answering again: assert one decision is open"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "event_driven",
+          "condition": "a `plan` decision is opened for a plan that ended as objected",
+          "action": "show each finding of the last review with the planner's reply to it, as the `open finding` entries of the decision's evidence",
+          "contract": "one `open finding` entry per finding of the last review, in the review's order, each naming the reply's text or `no reply`",
+          "check": {
+            "same_as": "REQ-5.1"
+          }
+        },
+        {
+          "id": "REQ-5.4",
+          "pattern": "event_driven",
+          "condition": "the person answers a `plan` decision with `approve` and the step of the state `awaiting_approval` is called for the item",
+          "action": "call the functions registered with `RegisterPrepare`, bring the item's `.plan` clone to the head of its branch on the fork and, when the package's status there is `draft`, run `<the nightshiftd executable> activate-package <the package's directory>` in the clone through `command.Runner`, commit the package directory's changes with the message `chore: activate package <NN_name>` and `nightshift <nightshift@localhost>` as author and committer, and push that commit to `item-<N>` of the fork with the worker token given to git through the process environment; then append to the item's thread an entry of kind `plan_approved` with the text `package <NN_name> activated` and move the item to `ready` with the reason `plan approved`",
+          "contract": "the head of the fork's branch is one commit on top of the accepted head in which the package has the status `active` and an `intent_hash`; the item is `ready` with no open decision; the worker token is in no command line, no remote URL and no file of the clone; a package that is `active` already is neither activated nor committed nor pushed again, so that carrying the answer out twice leaves one commit and one `plan_approved` entry",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a real command.Runner and git against the fake hub's git endpoint",
+              "the nightshiftd executable is the test binary, re-executed through a TestMain that calls plan.ActivateMain when its first argument is `activate-package`"
+            ],
+            "pseudocode": "new file internal/plan/activate_test.go: with the plan of item 7 ended as agreed, its decision open and the draft fixture on item-7: inbox.Answer(ctx, d.ID, {Option: 'approve'}); eventually the handler has stored the answer; svc.StepAwaiting(ctx, 7); head = fakeHub.Ref('demo--i7', 'item-7'); assert parent(head) == the accepted head; assert the commit message of head == 'chore: activate package 05_greeting' and its author == 'nightshift <nightshift@localhost>'; s = afspec.LoadSpec(checkout of head + '/.specs/05_greeting'); assert s.Status == 'active' and s.IntentHash != nil; assert itemSvc.Get(7).State == 'ready'; assert the thread holds {kind: 'plan_approved', text: 'package 05_greeting activated'}; assert no file under the .plan clone and no recorded command line contains the worker token; set the item back to 'awaiting_approval' with the answer stored again; svc.StepAwaiting(ctx, 7); assert fakeHub.Ref(…) == head and one plan_approved entry"
+          }
+        },
+        {
+          "id": "REQ-5.5",
+          "pattern": "event_driven",
+          "condition": "the person answers a `plan` decision with `revise` and a comment and the step of the state `awaiting_approval` is called for the item, or a part of nightshift calls `plan.Service.Revise(ctx, item, comment)` for an item in the state `awaiting_approval`",
+          "action": "call the functions registered with `RegisterPrepare`, store the comment as a pending finding of the person, set the plan's count of rounds to zero and its phase to `revise`, and move the item to `planning` with the reason `plan sent back`",
+          "contract": "the next planner session of the item is a revision whose findings file holds `{\"id\": \"p<n>\", \"source\": \"person\", \"text\": <the comment>}` and no finding of an earlier review; its package is reviewed again, for up to 3 rounds, and planning then ends as it does the first time; `Revise` returns `plan.ErrNotAwaiting` for an item in another state and `plan.ErrInvalid` for an empty comment",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/decision_test.go: with a plan ended as objected (round 3) and its decision open: inbox.Answer(ctx, d.ID, {Option: 'revise', Comment: 'Use the existing router'}); eventually the answer is stored; svc.StepAwaiting(ctx, 7); assert itemSvc.Get(7).State == 'planning' and its last state entry ends 'plan sent back'; p = svc.Get(ctx, 7); assert p.Round == 0 and p.Phase == 'revise'; svc.StepPlanning(ctx, 7); assert json(the planner request's Inputs.findings) == [{id: 'p1', source: 'person', text: 'Use the existing router'}]; let the review agree and step until the item is 'awaiting_approval' again; assert a second plan decision is open and the first is answered. A table over {Revise on an item in 'planning' -> ErrNotAwaiting; Revise(ctx, 7, '') -> ErrInvalid; Revise on an item in 'awaiting_approval' with 'c' -> nil and the state 'planning'}"
+          }
+        },
+        {
+          "id": "REQ-5.6",
+          "pattern": "event_driven",
+          "condition": "the person answers a `plan` decision with `abandon` and the step of the state `awaiting_approval` is called for the item",
+          "action": "abandon the item through the item service's `Abandon(ctx, item, \"plan abandoned\")`, calling no function registered with `RegisterPrepare`",
+          "contract": "the item is `abandoned`; the hub's change is `abandoned` through this package's abandon hook; the item's kept texts are removed",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/decision_test.go: with the decision of item 7 open and a prepare function registered that records its calls: inbox.Answer(ctx, d.ID, {Option: 'abandon'}); eventually the answer is stored; svc.StepAwaiting(ctx, 7); assert itemSvc.Get(7).State == 'abandoned'; assert fakeHub.Change('demo', n).state == 'abandoned'; assert errors.Is(svc.Kept(ctx, 7) error, plan.ErrNotFound); assert the prepare function was not called"
+          }
+        },
+        {
+          "id": "REQ-5.7",
+          "pattern": "unwanted",
+          "condition": "`nightshiftd activate-package` exits with a code other than 0 while a plan is activated",
+          "action": "push nothing, append to the item's thread an entry of kind `activation_failed` with the first line of the command's output, move the item to `awaiting_approval` where it is not there already, and open a new `plan` decision whose evidence holds, after the entries of the first, an entry `activation failed` with the last 50 lines of the command's output, `revise` recommended",
+          "contract": "the item is `awaiting_approval` with exactly one open `plan` decision; the head of the fork's branch is unchanged; a push the hub refuses, and a hub request that fails, open no decision: the step returns the error and carries the answer out again at its next call",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/activate_test.go: the fixture on item-7 is a draft whose prd.md has no '## Intent' section, taken as accepted through the plan's stored state; answer 'approve' and call svc.StepAwaiting(ctx, 7); assert itemSvc.Get(7).State == 'awaiting_approval'; ds = inbox.OpenDecisions(item 7); assert len(ds) == 1 and ds[0].ID != the answered one; assert its last evidence entry has the label 'activation failed' and a text starting 'activate-package: '; assert its recommended option == 'revise'; assert the thread holds an entry of kind 'activation_failed'; assert fakeHub.Ref('demo--i7','item-7') == the accepted head. Second case, a valid draft and the fake hub's git endpoint refusing the push: assert svc.StepAwaiting returns an error, no new decision is open and the item is 'awaiting_approval'; with the endpoint accepting again: assert the next call makes the item 'ready'"
+          }
+        },
+        {
+          "id": "REQ-5.8",
+          "pattern": "state_driven",
+          "condition": "an item whose `plan` decision was answered is paused, so that the scheduler does not call its step, or a function registered with `RegisterPrepare(name, fn)` returns an error for it",
+          "action": "keep the answer, which the handlers registered with the inbox's `OnAnswer` for `approve`, `revise` and `abandon` stored with the plan, and carry it out at the first call of the step after the resume, or at the first call in which every prepare function returns nil",
+          "contract": "a handler returns nil at once and changes neither the item's state nor the fork; a handler called twice for one answer stores it once; while a prepare function returns an error the step returns `prepare <name>: <error>`, the item stays `awaiting_approval` and no new decision is opened; the prepare functions are called in the order registered, each with the item's number",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "the activation replaced by a stub that reports success, so that the check exercises the stored answer alone"
+            ],
+            "pseudocode": "in internal/plan/decision_test.go: call the registered 'approve' handler twice with the answered decision; assert both return nil; assert itemSvc.Get(7).State == 'awaiting_approval' and the fork's branch head is unchanged and no decision is open; with no step call for ten scheduler intervals of the test clock: assert the same; register prepare functions 'a' (nil) and 'b' (errors.New('fork expired')): err = svc.StepAwaiting(ctx, 7); assert err.Error() == 'prepare b: fork expired' and the calls were a then b, each with 7; assert the state and the open decisions are as before; make 'b' return nil; svc.StepAwaiting(ctx, 7); assert the state == 'ready'"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-6",
+      "title": "Plans without an approval, re-opened decisions and continuity",
+      "rationale": "A small fix should not wait for a person who already said go, a plan whose landing was reverted comes back to the same decision, and none of this may be lost or doubled by a restart or a hub outage.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-6.1",
+          "pattern": "event_driven",
+          "condition": "planning ended as agreed for an item whose plan needs no approval: the item was created with `--no-plan-approval`, or `item plan` was run for it with that option",
+          "action": "activate the package on the change's branch as an approval does, open no decision, append to the item's thread an entry of kind `plan_approved` with the text `plan approved at creation: <the change's URL>`, and move the item from `planning` to `ready` with the reason `plan approved at creation`",
+          "contract": "the item is `ready` and was never `awaiting_approval`; no `plan` decision exists for it; the package on the fork's branch is `active`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the scripted sessions and the fake hub of the acceptance checks, with a real command.Runner and the re-executed test binary for the activation"
+            ],
+            "pseudocode": "new file internal/plan/plan_test.go, a table over {item created with no_plan_approval, verdict agree -> 'ready', no decision, entry 'plan approved at creation: ' + ChangeURL; linked item planned with POST …/plan {no_plan_approval: true}, agree -> the same; item with plan_approval true, agree -> 'awaiting_approval' and one plan decision; item created with no_plan_approval, objected to the end -> 'awaiting_approval' and one plan decision with 'revise' recommended}: step the item from 'new' until its state no longer changes; assert the state, count(plan decisions of the item) and, for the first two rows, that the package at the fork's branch head is 'active' and the item's state entries never name 'awaiting_approval'"
+          }
+        },
+        {
+          "id": "REQ-6.2",
+          "pattern": "event_driven",
+          "condition": "planning ended as objected for an item whose plan needs no approval",
+          "action": "open the `plan` decision all the same, as for an item whose plan needs an approval",
+          "contract": "the item is `awaiting_approval` with one open `plan` decision; nothing is activated",
+          "check": {
+            "same_as": "REQ-6.1"
+          }
+        },
+        {
+          "id": "REQ-6.3",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls `plan.Service.Reopen(ctx, item, reason, extra)` for an item that has a kept package and is in a state from which the transition table of package 03 allows `awaiting_approval`",
+          "action": "move the item to `awaiting_approval` through `Transition` with the reason given and have a `plan` decision opened for it, whether or not its plan needs an approval, that shows the evidence of the first decision, built from the kept package, the item's change as it is stored and the stored verdict, followed by the entries of `extra`, with `revise` recommended",
+          "contract": "returns nil; one `plan` decision is open for the item whose last evidence entries are those of `extra`, in order; `plan.ErrNotFound`, with the item unchanged, for an item with no kept package; the item service's error, with nothing stored, for a state that does not allow the move",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/plan/plan_test.go: walk item 7, planned with no_plan_approval and activated, to 'verifying' with the helper of the fixtures; assert svc.Reopen(ctx, 7, 'reverted after a failed health command', [{Label: 'health command output', Text: 'FAIL greet_test'}]) == nil; assert itemSvc.Get(7).State == 'awaiting_approval'; svc.StepAwaiting(ctx, 7); d = the open plan decision; assert the labels of d's evidence start ['plan','draft change','files the tasks expect to touch'] and its last entry == {Label: 'health command output', Text: 'FAIL greet_test'}; assert d's recommended option == 'revise'. A table over {a spec item in 'verifying' (no kept package) -> ErrNotFound, state unchanged; item 8 with a kept package in 'ready' -> the item service's transition error, no decision}"
+          }
+        },
+        {
+          "id": "REQ-6.4",
+          "pattern": "ubiquitous",
+          "action": "for any point at which nightshiftd stops while an item is `new`, `planning` or `awaiting_approval`, continue the item at the next start from what the store holds of its plan: its package number, its fork and change, its phase, its round, its findings with their replies, its split parts, its open decision and an answer not yet carried out",
+          "contract": "after a restart no second fork, change, package number, split part or `plan` decision is made for the item; a session whose result was recorded is not asked for again; an answer stored before the stop is carried out at the first call of the step",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a store file on disk opened by two plan services one after the other"
+            ],
+            "pseudocode": "in internal/plan/plan_test.go, a table over the points {after the fork was created; after the number was given; after the first result was accepted; after a review objected; after a revision was accepted; after planning ended; after the decision was opened; after 'approve' was stored and before it was carried out}: step item 7 to the point with service A over a store file; close A; open service B over the same file with the same fake hub and a fresh fake scheduler; step until the item is 'ready'; assert fakeHub has one fork and one change for item 7; assert B's Number == A's; assert the total of planner and reviewer requests over A and B == the count of an uninterrupted run; assert count(plan decisions of item 7) == 1 and len(itemSvc.Get(7).Children) == the one split part"
+          }
+        },
+        {
+          "id": "REQ-6.5",
+          "pattern": "state_driven",
+          "condition": "`Available` of the hub client is false for the worker credential",
+          "action": "ask for no session and send no hub request from the steps of the states `planning` and `awaiting_approval`, and leave each plan as it is",
+          "contract": "both steps return nil; the fake hub saw no request and the scheduler was asked for no session; at the first call after the hub is available again the step goes on from the same phase",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/plan/plan_test.go, a table over plans at {no fork yet, phase draft, phase review, ended and needing a decision, 'approve' stored}: mark the monitor unreachable; before = svc.Get(ctx, n); assert svc.StepPlanning or svc.StepAwaiting returns nil; assert fakeHub request count == 0 and fakeSched.Requests() is empty and svc.Get(ctx, n) == before; mark it reachable; step once; assert a request or a session was asked for"
+          }
+        },
+        {
+          "id": "REQ-6.6",
+          "pattern": "event_driven",
+          "condition": "`nightshiftd` is started with the arguments `activate-package <directory>`",
+          "action": "load the package in that directory with `afspec.LoadSpec`, move it to the status `active` with `Transition(\"active\", <directory>)`, which writes the package's files, and end without reading a configuration, opening a store or listening",
+          "contract": "exit code 0 and nothing on stderr; the package on disk has the status `active` and an `intent_hash` that is not null",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/plan/activate_test.go: dir = a copy of the valid draft fixture; code, stderr = plan.ActivateMain([dir], stderrBuffer); assert code == 0 and stderr == ''; s = afspec.LoadSpec(dir); assert s.Status == 'active' and s.IntentHash != nil. In internal/daemon/start_test.go: code = daemon.Run(['activate-package', dir], …) with no configuration file present; assert code == 0"
+          }
+        },
+        {
+          "id": "REQ-6.7",
+          "pattern": "unwanted",
+          "condition": "`nightshiftd activate-package` is given a directory that holds no package that loads, a package that is not a `draft`, or a package whose `prd.md` has no `## Intent` section, or is given no directory or more than one argument",
+          "action": "change no file and end with an error",
+          "contract": "exit code 1 and one line on stderr, `activate-package: <afspec's error>`, for a package that cannot be activated; exit code 2 and the line `usage: nightshiftd activate-package <directory>` on stderr for the arguments; the files of the directory are byte for byte as before",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/plan/activate_test.go, a table over {an empty directory -> 1; the fixture already active -> 1; the draft fixture without '## Intent' -> 1; [] -> 2; [dir, 'x'] -> 2}: before = the bytes of every file under dir; code, stderr = plan.ActivateMain(args, buf); assert code == want; assert stderr is one line starting 'activate-package: ' (code 1) or == 'usage: nightshiftd activate-package <directory>\\n' (code 2); assert the files are unchanged"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "A change request is planned, reviewed and approved",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift item new demo --text \"Add a greeting endpoint\"`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "moves the item from `new` to `planning`, creates the task fork `demo--i1` on the hub, gives the item the package number `02` and starts a planner session with `--number 02`"
+        },
+        {
+          "actor": "hub",
+          "action": "creates the fork and serves it to git"
+        },
+        {
+          "actor": "planner",
+          "action": "writes `.specs/02_greeting` on `item-1`, pushes the branch and writes the result file with `outcome: written`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "reads the branch's head from the hub, validates the package in a clone of its own, keeps its text, opens the draft change with the item's title and the package's intent, and starts a reviewer session on that commit"
+        },
+        {
+          "actor": "reviewer",
+          "action": "reads the package and answers with the verdict `agree`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "asks the hub which rules the tasks' `touches` would select, moves the item to `awaiting_approval` and opens the `plan` decision"
+        },
+        {
+          "actor": "person",
+          "action": "reads the decision in `nightshift inbox --action` and runs `nightshift decide <id> --option approve`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "activates the package in its clone, pushes the commit to `item-1` and moves the item to `ready`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its scheduler, session service, inbox, item service, change service, plan service and store on disk",
+          "the nightshift client's run function",
+          "git, against the fake hub's git endpoint",
+          "afspec, for the validation, the render and the activation",
+          "the `activate-package` mode of the binary, started as a process through command.Runner"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) with the workspace `demo` registered through the end-to-end helper of package 02, its default branch holding `.specs/01_a`",
+          "the three roles configured, `sessions.unisolated = true`, the helper and `activate-package` being the test binary re-executed",
+          "a fake `claude` executable on PATH, a script the test writes: it reads its prompt, and for a prompt with `--number` writes the fixture package under that number into `.specs/`, for one with `--findings` reads the findings file and changes the package's `prd.md`, commits, pushes the checked-out branch and writes the result file the prompt names (`outcome: written`, and what the test scripts as `remaining_scopes` and `replies`)",
+          "the fake hub's policy has a rule `deploy` that requires one approval for `deploy/**`; the fixture package's tasks touch `deploy/config.yaml` and `api/greet.go`",
+          "the reviewer's provider/faux client answers `{\"verdict\":\"agree\",\"findings\":[]}`"
+        ],
+        "end_state": [
+          "the fake hub holds the fork `demo--i1` and one change from its branch `item-1`, opened as a draft with the item's title and the fixture's intent",
+          "`nightshift decision show <id>` prints the kind `plan`, the options `approve`, `revise` and `abandon`, the rendered package, the change's URL, both touched files, `likely to need your approval under rule deploy` and the verdict `agree`",
+          "after the answer `nightshift item show 1` prints `state: ready`, and the package at the head of `item-1` on the fake hub has the status `active`",
+          "the item's thread lists entries of the kinds `fork_created`, `plan_written`, `change_opened`, `plan_review` and `plan_approved`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go, with the startDaemon helper of package 01: d = startDaemon(cfg); assert cli(['item','new','demo','--text','Add a greeting endpoint']).code == 0; eventually cli(['inbox','--action']) names a plan decision; id = its id; out = cli(['decision','show', id]); assert out contains 'likely to need your approval under rule deploy', 'deploy/config.yaml', 'api/greet.go' and 'agree'; c = fakeHub.Changes('demo')[0]; assert c.source == {demo--i1, item-1} and c.intent == the fixture's intent; assert cli(['decide', id, '--option', 'approve']).code == 0; eventually cli(['item','show','1']) contains 'state: ready'; s = afspec.LoadSpec(checkout of fakeHub.Ref('demo--i1','item-1') + '/.specs/02_greeting'); assert s.Status == 'active'; assert the kinds of the thread's entries hold the five named"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "A defect without a plan approval is sent back once and splits off a part",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift item new demo --kind defect --text \"Greeting drops the name\" --no-plan-approval`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "creates the fork, gives the package number and starts the planner with `--number <NN> --defect`"
+        },
+        {
+          "actor": "planner",
+          "action": "writes a one-requirement package, pushes it and reports one remaining scope in its result file"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "accepts the package, makes the remaining scope a linked `defect` item in `new`, opens the draft change and starts the reviewer"
+        },
+        {
+          "actor": "reviewer",
+          "action": "answers `object` with one finding"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "starts the planner again with `--findings` and the finding as `r1.1`"
+        },
+        {
+          "actor": "planner",
+          "action": "revises the package, pushes it and replies to the finding"
+        },
+        {
+          "actor": "reviewer",
+          "action": "answers `agree` on the revised package"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens no decision: activates the package, writes `plan approved at creation` to the thread and moves the item to `ready`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item plan <M>` for the linked item"
+        },
+        {
+          "actor": "nightshift",
+          "action": "sends `POST /api/v1/items/<M>/plan` and prints `planning item <M>`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "moves the linked item to `planning` and starts its planner with the next package number"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its scheduler, session service, inbox, item service, change service, plan service and store on disk",
+          "the nightshift client's run function",
+          "git, against the fake hub's git endpoint",
+          "afspec and the `activate-package` mode of the binary"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) with the workspace `demo` registered through the end-to-end helper of package 02, its default branch holding `.specs/01_a`",
+          "the three roles configured, `sessions.unisolated = true`, the helper and `activate-package` being the test binary re-executed",
+          "a fake `claude` executable on PATH, a script the test writes: it reads its prompt, and for a prompt with `--number` writes the fixture package under that number into `.specs/`, for one with `--findings` reads the findings file and changes the package's `prd.md`, commits, pushes the checked-out branch and writes the result file the prompt names (`outcome: written`, and what the test scripts as `remaining_scopes` and `replies`)",
+          "the fake `claude` reports `remaining_scopes: [{name: \"audit_log\", summary: \"…\", text: \"Log every greeting\"}]` in its first result and `replies: [{id: \"r1.1\", action: \"changed\", text: \"…\"}]` in its second",
+          "the reviewer's provider/faux client answers `object` with one finding, then `agree`"
+        ],
+        "end_state": [
+          "the first `claude` invocation's prompt ends `--defect` and holds `--number 02`; the second holds `--findings` and its findings file holds the finding with the id `r1.1`",
+          "item 1 is `ready`, no decision was ever opened for it, and its thread holds the entry `plan approved at creation: <the change's URL>`",
+          "the package at the head of `item-1` has the status `active`",
+          "item 2 exists as a `defect` with the parent 1 and stayed `new` until `nightshift item plan 2`, which exits 0 and prints `planning item 2`",
+          "afterwards the fake hub holds the fork `demo--i2` and a `claude` invocation for item 2 holds `--number 03`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg); cli(['item','new','demo','--kind','defect','--text','Greeting drops the name','--no-plan-approval']); eventually cli(['item','show','1']) contains 'state: ready'; assert the recorded claude prompts: [0] contains '--number 02' and ends '--defect', [1] contains '--findings'; assert the recorded findings file == [{id: 'r1.1', source: 'review', text: …}]; assert cli(['inbox','--action']) lists no decision and GET /api/v1/decisions?state=all holds none of item 1; assert cli(['thread','show', t1]) contains 'plan approved at creation: '; assert cli(['item','show','2']) contains 'state: new' and fakeHub has no fork demo--i2; code, out = cli(['item','plan','2']); assert code == 0 and out == 'planning item 2\\n'; eventually fakeHub has the fork demo--i2 and a recorded claude prompt contains '--number 03'"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "A plan the reviewer objects to is sent back by the person and then abandoned",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift item new demo --text \"Rework the greeting\"`"
+        },
+        {
+          "actor": "planner",
+          "action": "writes the package and, after each objection, a revision with its replies"
+        },
+        {
+          "actor": "reviewer",
+          "action": "answers `object` three times"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "ends planning after the third revision, with no fourth review, and opens the `plan` decision with the verdict `object` and each open finding with the planner's reply"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift decide <id> --option revise --comment \"Use the existing router\"`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "moves the item back to `planning` and starts the planner with the comment as the finding `p1` of the person"
+        },
+        {
+          "actor": "reviewer",
+          "action": "answers `agree` on the revised package"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens a new `plan` decision"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift decide <id> --option abandon`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "abandons the item, which asks the hub to abandon its change, and removes the kept package texts"
+        },
+        {
+          "actor": "hub",
+          "action": "marks the change `abandoned`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its scheduler, session service, inbox, item service, change service, plan service and store on disk",
+          "the nightshift client's run function",
+          "git, against the fake hub's git endpoint",
+          "afspec"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) with the workspace `demo` registered through the end-to-end helper of package 02, its default branch holding `.specs/01_a`",
+          "the three roles configured, `sessions.unisolated = true`, the helper and `activate-package` being the test binary re-executed",
+          "a fake `claude` executable on PATH, a script the test writes: it reads its prompt, and for a prompt with `--number` writes the fixture package under that number into `.specs/`, for one with `--findings` reads the findings file and changes the package's `prd.md`, commits, pushes the checked-out branch and writes the result file the prompt names (`outcome: written`, and what the test scripts as `remaining_scopes` and `replies`)",
+          "the reviewer's provider/faux client answers `object` with one finding three times, then `agree`",
+          "the fake `claude` replies to every finding of a findings file"
+        ],
+        "end_state": [
+          "the fake hub recorded exactly 3 reviewer sessions and 4 planner sessions before the first decision opened",
+          "`nightshift decision show` of the first decision prints the verdict `object` and one `open finding` with `planner's reply:`",
+          "`nightshift decide <id> --option revise` without `--comment` exits 1 with the daemon's `comment_required` message",
+          "the findings file of the planner session after the answer holds exactly `{id: p1, source: person, text: Use the existing router}`",
+          "a second `plan` decision opens with the verdict `agree`",
+          "after `abandon`, `nightshift item show 1` prints `state: abandoned` and the fake hub's change is `abandoned`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg); cli(['item','new','demo','--text','Rework the greeting']); eventually a plan decision is open; id1 = its id; assert the fake hub's sessions by archetype == {planner: 4, reviewer: 3}; out = cli(['decision','show', id1]); assert out contains 'object' and \"planner's reply:\"; assert cli(['decide', id1, '--option', 'revise']).code == 1; assert cli(['decide', id1, '--option', 'revise', '--comment', 'Use the existing router']).code == 0; eventually a second plan decision id2 is open; assert the recorded findings file of the fifth claude invocation == [{id: 'p1', source: 'person', text: 'Use the existing router'}]; assert cli(['decision','show', id2]) contains 'agree'; assert cli(['decide', id2, '--option', 'abandon']).code == 0; eventually cli(['item','show','1']) contains 'state: abandoned'; assert fakeHub.Changes('demo')[0].state == 'abandoned'"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "POST /api/v1/workspaces/{slug}/forks",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/forks",
+          "signature": "scope workspaces:write; body, every field optional: {name (1 to 32 characters of a-z, digits and hyphens, starting and ending with a letter or digit, no two hyphens in a row; the fork's slug is <parent>--<name>), ref, ttl (5m to the hub's max, default 7 days), auto_change (default true: a push of a new branch opens a change), purpose (at most 1024 characters), session_id, token {name, permissions, paths, expires}, sandbox}; 201 {workspace (the fork's workspace object: slug, kind fork, parent_slug, hub_url, expires_at, auto_change), remote (the fork's git URL or null), token?}; 400 invalid_request, 400 unknown_session, 400 not_supported_on_fork, 403 insufficient_scope, 409 conflict (the parent has a fork of that name), 409 workspace_busy, 429 fork_limit_reached"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/scm/refs/{name}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/scm/refs/{name}",
+          "signature": "scope git:read; {name} is a branch name or a full ref name; 200 with a ref object {name, kind (branch, tag or hub), sha, protected, tracking, change ({workspace_slug, number} or null)}; 404 ref_not_found"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/changes",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes",
+          "signature": "scope changes:write; {slug} is the target workspace; body {source: {workspace_slug?, branch} (required; workspace_slug is a task fork of {slug}), target_branch?, title? (at most 200 characters; default the head commit's subject), intent? (at most 16,000 characters; may be empty on a draft), draft?: bool, depends_on?, auto_land?, labels?, session_id?}; 201 with the change object {workspace_slug, number, ref (such as demo#1), title, intent, state (draft, open, landed or abandoned), target_branch, source, version, head_sha, base_sha, session_id, landing, paths}; 400 invalid_request, intent_required, source_not_related, source_not_found, nothing_to_land, unrelated_history, merge_commits_unsupported, unknown_session; 403 forbidden; 409 change_exists with details {workspace_slug, number, ref}"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/changes/{number}/abandon",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/changes/{number}/abandon",
+          "signature": "scope changes:write; body optional {reason?, dependants?: reparent|abandon}; 200 with the change object; 409 has_dependants; 409 change_closed when the change is abandoned or landed already"
+        },
+        {
+          "name": "POST /api/v1/workspaces/{slug}/policy/evaluate",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/policy/evaluate",
+          "signature": "scope changes:read (satisfied by changes:write); body with exactly one of paths (1 to 2,000 repository paths, none starting with /) and change, plus target_branch? and policy?; 200 {policy_revision, status (ready, pending or blocked), requirements: [{rule (the rule's name, or default), paths, approvals: {required, counted, approvers}, checks: [{name, status}], block, satisfied}]}; writes nothing; 400 invalid_request"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}",
+          "signature": "200 with the workspace object, of which this package reads head_sha (the hub's head of the default branch) and hub_url (the git remote on the hub, null when the hub has no external URL); for a fork also parent_slug and expires_at"
+        }
+      ]
+    },
+    {
+      "package": "github.com/agent-fox-dev/spec/afspec",
+      "version": "commit 8faad70",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "ListSpecDirs",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func ListSpecDirs(root string) ([]string, error) // the names of the NN_name directories under root in the order of their numbers, whether or not they hold a package that loads"
+        },
+        {
+          "name": "ParseSpecDirName",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func ParseSpecDirName(name string) (string, string, error) // the numeric prefix and the snake_case name"
+        },
+        {
+          "name": "LoadSpec",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func LoadSpec(dir string) (*Spec, error) // Spec has SpecID, SpecName, Title, Status, IntentHash *string, PRDBody string, Tasks *TasksV3Json"
+        },
+        {
+          "name": "ValidateInRoot",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func ValidateInRoot(specsDir string, spec *Spec) (ValidationResult, error) // ValidationResult{Valid bool, Errors []ValidationEntry, Warnings []ValidationEntry}; ValidationEntry has Check and Message; it fails only when specsDir cannot be read"
+        },
+        {
+          "name": "Spec.RenderCombined",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func (s *Spec) RenderCombined(opts ...RenderOption) string // the whole package as one Markdown document"
+        },
+        {
+          "name": "Spec.Transition",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func (s *Spec) Transition(target, dir string) (*Spec, error) // draft to active computes the intent hash and persists the package to dir; returns a LifecycleError, an IntentError (no ## Intent section) or a SaveError"
+        },
+        {
+          "name": "Task.Touches",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "Touches []string `json:\"touches,omitempty\"` // a field of Task, the element type of the task list of TasksV3Json"
+        }
+      ]
+    },
+    {
+      "package": "af-spec, the controller modes (agent-fox-dev/spec, docs/prd/09-run-af-spec-and-af-impl-under-a-controller.md)",
+      "version": "commit 8faad70",
+      "verified": false,
+      "symbols": [
+        {
+          "name": "af-spec <text file> --unattended --number <NN> --no-activate [--defect] --result <file>",
+          "import_path": "skills/af-spec",
+          "signature": "runs without asking; writes one package under the number given (refused unless above every number in the spec root and under archive/), a lite one-requirement package with --defect; leaves it a draft; commits it as one commit on the checked-out branch and pushes that branch to origin; writes the result file last"
+        },
+        {
+          "name": "af-spec <draft package> --unattended --findings <file> --no-activate --result <file>",
+          "import_path": "skills/af-spec",
+          "signature": "the findings file is a JSON array of {id (unique in the file), source: review|person, text, criterion?, task?}; a finding of source person is always followed; the revised package is validated, committed as one commit and pushed; refuses an empty array or a package that is not a draft"
+        },
+        {
+          "name": "the result file",
+          "import_path": "skills/af-spec",
+          "signature": "one JSON document {skill: \"af-spec\", mode: \"unattended\", outcome (written, invalid, push_failed, refused_input, refused_dirty, refused_already_specified, refused_spec_root, refused_number, refused_findings), reason?, package?: {spec_dir, spec_id, spec_name, title, status, profile}, branch, head, pushed, decisions, escalated, failing_rules?, fault_located?, remaining_scopes?: [{name, summary, text}], replies?: [{id, action: changed|unchanged, text}]}"
+        }
+      ]
+    }
+  ]
+}

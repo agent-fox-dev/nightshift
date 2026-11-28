@@ -1,0 +1,859 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/requirements.v3.json",
+  "spec_id": "03",
+  "spec_name": "work_items_and_inbox",
+  "schema_version": 3,
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "title": "Intake: three ways to create a work item",
+      "rationale": "Work reaches nightshift as a text, an issue or a finished spec package, and each has to become the same thing before one process can drive it.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-1.1",
+          "pattern": "event_driven",
+          "condition": "an authenticated client sends `POST /api/v1/items` with `{\"workspace\", \"text\", \"kind\"?, \"no_plan_approval\"?}`, the workspace is registered, the text has 1 to 20,000 Unicode code points and `kind` is absent, `defect` or `change_request`",
+          "action": "store a work item with the next number (one above the highest number ever given over all workspaces, starting at 1), the kind (`change_request` when absent), the title (the first line of the text, cut to 80 code points), the source `{type: \"text\"}` with the text, the state `new` and `plan_approval` (false when `no_plan_approval` is true, else true); create the item's thread with a first entry of kind `created`; append the event `item.created`; and call every creation hook registered with `OnCreated`",
+          "contract": "status 201 with the item as {number, workspace, kind, title, state, state_since, created_at, plan_approval, source {type, …}, parent, children, thread, waiting_on, markers}, `thread` being `/api/v1/threads/<id>`; items created by concurrent requests get distinct numbers with no gap; the event's data is `{item, workspace, state, thread}`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "an inbox and an item service over a copy of the store template and the event log; the workspaces `demo` and `other` are known through the service's workspace source (the Get and List of package 02's workspace.Service), a stub in the tests of this package that need no removal",
+              "one creation hook registered that records its argument"
+            ],
+            "pseudocode": "new file internal/item/routes_test.go, through the router, a table over {text only -> kind change_request, plan_approval true; kind defect; no_plan_approval true -> plan_approval false; a text of 3 lines -> title is line 1; a first line of 200 code points -> title has 80; a text of exactly 20,000 code points -> 201}: r = post('/api/v1/items', body); assert r.status == 201; assert r.json fields; assert get('/api/v1/threads/' + id).json.entries[0].kind == 'created'; assert the event log's last event type == 'item.created'; assert the creation hook saw the item. Then 20 concurrent posts over two workspaces: assert the numbers are 1 more than before .. 20 more, each once"
+          }
+        },
+        {
+          "id": "REQ-1.2",
+          "pattern": "unwanted",
+          "condition": "a request to `POST /api/v1/items` has a body that is not a JSON object, names no workspace, carries a text that is empty or longer than 20,000 Unicode code points or a `kind` other than `defect` and `change_request`, or names a workspace that is not registered",
+          "action": "refuse the request and store nothing",
+          "contract": "status 400 with `error_type: invalid_request` and a message naming the member, or status 404 with `error_type: not_found` for the unregistered workspace; no item, no thread and no event is written, and the next item created gets the number it would have got",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/item/routes_test.go, a table over {'not json', {} , text '', text of 20,001 code points, a text of 20,000 two-byte characters -> 201 (counted in code points, not bytes), kind 'spec', kind 'bogus' -> 400 invalid_request; workspace 'nope' -> 404 not_found}: r = post('/api/v1/items', body); assert r.status and r.json.error_type; assert count(items) and count(threads) unchanged; then a valid post gets number previous+1"
+          }
+        },
+        {
+          "id": "REQ-1.3",
+          "pattern": "event_driven",
+          "condition": "an authenticated client sends `POST /api/v1/items/import` with `{\"workspace\", \"issue\": N, \"no_plan_approval\"?}` for a registered workspace, and the hub answers `GET /api/v1/workspaces/{slug}/issues/{N}` with an issue that is not a pull request and whose comments it could read",
+          "action": "read the issue with the worker token, read the further comments from `GET …/issues/{N}/comments` with `cursor` set to each `next_cursor` until it is null or 1,000 comments are read, and store a work item in the state `new` whose kind is `defect` when the issue's labels hold `af:defect` or `bug`, compared ignoring case, and `change_request` otherwise, whose title is the issue's title and whose source is `{type: \"issue\", issue, url, title, body, labels, comments: [{author, body, created_at}], comments_truncated}`; then create the thread, append the event and call the creation hooks as for a text",
+          "contract": "status 201 with the item; `GET /api/v1/items/{number}` answers the source with every comment read, oldest first; `comments_truncated` is true only when the hub had more than 1,000 comments; the hub saw requests bearing the worker token only",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "internal/hubtest extended with scriptable issues: an issue thread per workspace and number, its comments paged 100 a page, a `comments_error`, `is_pr` and a forge error to answer with",
+              "the item service's hub client pointed at the fake hub"
+            ],
+            "pseudocode": "new file internal/item/import_test.go, through the router, a table over the fake hub's issue 7 {labels ['bug'] -> defect; ['af:defect'] -> defect; ['Bug','ui'] -> defect; ['ui'] -> change_request; [] -> change_request; 250 comments over 3 pages -> source.comments has 250 in order; 1,100 comments -> 1,000 and comments_truncated true; no_plan_approval true -> plan_approval false}: r = post('/api/v1/items/import', {workspace: 'demo', issue: 7}); assert r.status == 201; assert kind, title, source; assert every hub request bore the worker token"
+          }
+        },
+        {
+          "id": "REQ-1.4",
+          "pattern": "unwanted",
+          "condition": "an issue import names an issue that an item of the workspace was already created from, or the hub is not available to the worker token, or the hub answers the issue or a page of its comments with an error, or the issue's answer carries a `comments_error`, or the issue has `is_pr: true`",
+          "action": "refuse the import and store nothing, checking for the existing item before any request to the hub",
+          "contract": "status 409 `conflict` with the message `issue #<N> is already item <M>` (also when item M is `abandoned`), sending no hub request; status 503 `hub_unavailable` while `Available(worker)` is false; status 502 `hub_error` with the message `<hub error_type>: <hub message>` for a hub error and for a `comments_error`; status 409 `conflict` with `#<N> is a pull request`; status 400 `invalid_request` for an `issue` that is not a positive integer or a body carrying both `issue` and `spec` or neither; status 404 `not_found` for a workspace that is not registered; in every case no item, thread or event is written",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/item/import_test.go, a table over {issue 7 imported before -> 409 'issue #7 is already item 1' and hub request count unchanged; the same after item 1 was abandoned -> 409; fake hub stopped and the monitor unreachable -> 503 hub_unavailable; issue answers 404 forge_not_found -> 502 'forge_not_found: the forge answered 404: 404 Not Found'; comments page 2 answers 502 forge_unreachable -> 502 hub_error; comments_error {forge_timeout} -> 502 hub_error 'forge_timeout: …'; is_pr true -> 409 '#7 is a pull request'; issue 0, issue 'x', both issue and spec, neither -> 400; workspace 'nope' -> 404}: assert r.status, r.json.error_type, r.json.message; assert count(items) unchanged"
+          }
+        },
+        {
+          "id": "REQ-1.5",
+          "pattern": "event_driven",
+          "condition": "an authenticated client sends `POST /api/v1/items/import` with `{\"workspace\", \"spec\": \"NN\"}` for a registered workspace, and the package with that number in `.specs/` at the tip of the workspace's default branch loads, validates with no error, has the status `active` and has at least one open task",
+          "action": "read the workspace's `head_sha` from the hub, bring a clone of the workspace to that commit with `gitclone.Sync` of package 02, find the package directory with `afspec.DiscoverSpecs`, load it with `afspec.LoadSpec`, validate it with `afspec.ValidateInRoot` and read its open tasks with `OpenTasks`, and store a work item in the state `new` with the kind `spec`, the package's title, `plan_approval` true and the source `{type: \"spec\", spec_id, spec_name, dir}`; then create the thread, append the event and call the creation hooks as for a text",
+          "contract": "status 201 with the item; `source.dir` is the package's directory relative to the repository root (`.specs/04_greeting`); the item's state is `new`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the function that yields a checkout of the default branch's tip is a parameter of the item service; production passes the one built on the hub client's Workspace and gitclone.Sync",
+              "internal/hubtest's workspace object carries `head_sha`, the head of its repository fixture"
+            ],
+            "pseudocode": "in internal/item/import_test.go: root = a temporary repository tree whose .specs holds package 04, built with afspec (CreateSpec, filled, saved, moved to active through Spec.Transition, its task 1 pending); the item service is given a checkout function returning that tree in place of the gitclone call; r = post('/api/v1/items/import', {workspace: 'demo', spec: '04'}); assert r.status == 201; assert r.json.kind == 'spec'; assert r.json.title == the package's title; assert r.json.source == {type: 'spec', spec_id: '04', spec_name: 'greeting', dir: '.specs/04_greeting'}; assert r.json.state == 'new'. One case with the production checkout function against the fake hub's git endpoint and repository fixture (package 02), the fixture's head commit holding package 04: assert 201 and that the clone directory is <clones_dir>/demo.import at the fixture's head"
+          }
+        },
+        {
+          "id": "REQ-1.6",
+          "pattern": "unwanted",
+          "condition": "a spec import names a number no package on the default branch has, or a package that does not load or has a validation error, is not `active`, has no task `pending` or `in_progress`, or that an item of the workspace was already created from, or the default branch cannot be fetched",
+          "action": "refuse the import and store nothing",
+          "contract": "status 404 `not_found` with `package <NN> not found on the default branch`; status 409 `conflict` with `package <NN> does not load: <the load error, or the first validation error as <check>: <message>>`, `package <NN> is <status>, not active`, `package <NN> has no open task` or `package <NN> is already item <M>`; status 503 `hub_unavailable` while `Available(worker)` is false and 502 `hub_error` with the fetch's error; status 400 `invalid_request` for a `spec` that is not a string of two or more digits or a body with `no_plan_approval` beside `spec`; no item, thread or event is written",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/item/import_test.go, a table over fixture trees {no package 09 -> 404; package 05 with requirements.json cut off -> 409 starting 'package 05 does not load: '; package 06 whose task names an unknown criterion -> 409 'package 06 does not load: C4: …' (the first entry of ValidateInRoot's Errors); package 07 in draft -> 409 'package 07 is draft, not active'; package 08 with every task done -> 409 'package 08 has no open task'; package 04 imported before -> 409 'package 04 is already item 1'; checkout function failing -> 502 hub_error; monitor unreachable -> 503; spec '4', spec 4 (a number), spec with no_plan_approval -> 400}: assert r.status, r.json.error_type and r.json.message; assert count(items) unchanged"
+          }
+        },
+        {
+          "id": "REQ-1.7",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift item new <slug> --text \"<text>\" [--kind defect|change_request] [--no-plan-approval]`, `nightshift item import <slug> --issue <N> [--no-plan-approval]` or `nightshift item import <slug> --spec <NN>`, the flags before or after the slug",
+          "system": "nightshift",
+          "action": "send `POST /api/v1/items` or `POST /api/v1/items/import` with the slug as `workspace` and the flags as the body's members, and print the new item's number and its thread's URL path",
+          "contract": "exit code 0; stdout is the two lines `item <number>` and `thread <path>`; with `--json` stdout is the item as the API answered it; a refusal by the daemon is exit code 1 with the error's message on stderr",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an httptest server standing in for the daemon that records each request and answers 201 with a fixed item"
+            ],
+            "pseudocode": "new file internal/cli/item_test.go, a table over {['item','new','demo','--text','Add x'] -> POST /api/v1/items {workspace:'demo', text:'Add x'}; ['item','new','--kind','defect','--no-plan-approval','--text','t','demo'] -> body has kind 'defect' and no_plan_approval true; ['item','import','demo','--issue','7'] -> POST /api/v1/items/import {workspace:'demo', issue:7}; ['item','import','demo','--spec','04'] -> {workspace:'demo', spec:'04'}}: code, stdout, stderr = cli.Run(args); assert the server saw the route and the body; assert code == 0; assert stdout == 'item 12\\nthread /api/v1/threads/31\\n'; with --json assert stdout parses to the served item; with the server answering 409 {conflict, 'issue #7 is already item 3'} assert code == 1 and stderr == 'issue #7 is already item 3\\n'"
+          }
+        },
+        {
+          "id": "REQ-1.8",
+          "pattern": "unwanted",
+          "condition": "a command of this package is given a command line it cannot send: `item new` without a slug or without `--text`, with a text that is empty or longer than 20,000 Unicode code points, or with a `--kind` other than `defect` and `change_request`; `item import` with both `--issue` and `--spec` or neither, with an `--issue` that is not a positive integer, a `--spec` that is not two or more digits, or `--no-plan-approval` beside `--spec`",
+          "system": "nightshift",
+          "action": "print the usage of the command and send no request",
+          "contract": "exit code 2; the usage on stderr; stdout is empty; the daemon received no request",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "new file internal/cli/usage_test.go, one table for every usage error of the commands this package adds; these rows: {['item','new'], ['item','new','demo'], ['item','new','demo','--text',''], ['item','new','demo','--text', 20,001 code points], ['item','new','demo','--text','t','--kind','spec'], ['item','import','demo'], ['item','import','demo','--issue','7','--spec','04'], ['item','import','demo','--issue','0'], ['item','import','demo','--spec','4'], ['item','import','demo','--spec','04','--no-plan-approval']}: code, stdout, stderr = cli.Run(args); assert code == 2; assert stderr contains 'usage: nightshift item'; assert stdout == ''; assert the httptest server saw no request"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-2",
+      "title": "Item states, queries, abandoning and linked items",
+      "rationale": "Seven later packages move items; one function that knows every allowed move keeps an item from reaching a state by a road the person was never shown.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-2.1",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls the item service's `Transition(ctx, number, to, reason)` with a state the transition table allows from the item's current state (new -> planning, ready, abandoned; planning -> awaiting_approval, ready, abandoned; awaiting_approval -> planning, ready, abandoned; ready -> implementing, abandoned; implementing -> reviewing, abandoned; reviewing -> implementing, landing, abandoned; landing -> implementing, verifying, abandoned; verifying -> publishing, awaiting_approval; publishing -> done; done and abandoned -> none)",
+          "action": "set the item's state and `state_since`, append to the item's thread an entry of kind `state` with the text `<from> -> <to>`, followed by `: <reason>` when a reason is given, marking the thread unread when the new state is `done` or `abandoned`, append the event `item.updated` with the data `{item, workspace, state, thread}`, and then call every hook registered with `OnChange` with the item before and after",
+          "contract": "the call returns the item in its new state; the state, the entry and the event are written in one store transaction; a hook's error is written to the daemon's log and undoes nothing",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an item service over a copy of the store template with an injected clock",
+              "a test helper that puts an item into any state by walking allowed transitions"
+            ],
+            "pseudocode": "new file internal/item/item_test.go, a table with one row per allowed pair of the transition table (22 rows), each on an item put into the from state: it = svc.Transition(ctx, n, to, 'because'); assert it.State == to; assert the thread's last entry == {kind: 'state', text: from + ' -> ' + to + ': because'}; assert thread.unread == (to in {done, abandoned}); assert the event log's last event == item.updated with state to; assert the OnChange hook saw (from, to). One row with an empty reason asserts the text has no colon suffix; one hook returning an error leaves the state at to"
+          }
+        },
+        {
+          "id": "REQ-2.2",
+          "pattern": "unwanted",
+          "condition": "`Transition` is called for a number no item has, with a name that is not one of the eleven states, with the state the item is in, or with a state the transition table does not allow from the item's current state",
+          "action": "refuse the transition and leave the item as it is",
+          "contract": "the call returns `item.ErrNotFound` for the unknown number and otherwise an error that is `item.ErrTransition` and whose text is `item <N>: <from> -> <to> is not allowed`; no state, entry or event is written and no hook is called; of two concurrent calls for the same allowed move exactly one succeeds and the other gets `ErrTransition`",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/item/item_test.go, a table over every ordered pair of the eleven states that the transition table does not hold (99 rows, the 11 same-state pairs among them) plus {unknown number -> ErrNotFound, to 'bogus' -> ErrTransition}: err = svc.Transition(ctx, n, to, ''); assert errors.Is(err, want); assert state, entry count and event count unchanged. Then 8 goroutines call Transition(n, 'planning') on one new item: assert exactly 1 nil error and 7 ErrTransition, and one `state` entry"
+          }
+        },
+        {
+          "id": "REQ-2.3",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/items`, optionally with `workspace=<slug>` and `state=<state>`",
+          "action": "answer every item, or those of the workspace and in the state named, in ascending order of number, each with `waiting_on` as `{id, kind, question}` of the item's oldest open decision or null, and `markers` as the names of the registered marker functions (`RegisterMarker(name, fn)`) that report true for the item, in registration order",
+          "contract": "status 200 with `{\"items\": [<item>, …]}`; an item is {number, workspace, kind, title, state, state_since, created_at, plan_approval, source {type, …}, parent, children, thread, waiting_on, markers} with `source` reduced to `{type}` and, by type, `issue` and `url`, or `spec_id` and `spec_name`, or `item`; no item matching is `{\"items\": []}`",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/item/routes_test.go: 5 items over two workspaces in the states new, new, ready, done, abandoned; item 2 has two open decisions (ids 3 and 5) of a test kind and one answered; a marker 'paused' registered that is true for item 3; a table over {no filter -> numbers [1,2,3,4,5]; workspace=demo -> its items; state=new -> [1,2]; workspace=demo&state=done -> [4]; state=reviewing -> []}: r = get('/api/v1/items' + query); assert numbers; assert item 2 waiting_on.id == 3; assert item 1 waiting_on == null; assert item 3 markers == ['paused']; assert no item carries source.text"
+          }
+        },
+        {
+          "id": "REQ-2.4",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/items/{number}` for an existing item",
+          "action": "answer the item as the list does, with the whole of its source (the `text`; or the issue's `issue`, `url`, `title`, `body`, `labels`, `comments` and `comments_truncated`; or the package's `spec_id`, `spec_name` and `dir`; or the `item` it was created from and the `text`), its `parent` and its `children` in ascending order",
+          "contract": "status 200 with the item; `waiting_on` and `markers` as in the list",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/item/routes_test.go, a table over {a text item -> source.text is the posted text; an item with an open decision -> waiting_on == {id, kind, question}; a parent with two linked items -> children == [n1, n2]; a linked item -> parent == p and source == {type: 'item', item: p, text}}: r = get('/api/v1/items/' + n); assert r.status == 200; assert the members"
+          }
+        },
+        {
+          "id": "REQ-2.5",
+          "pattern": "unwanted",
+          "condition": "a request to `GET /api/v1/items`, `GET /api/v1/items/{number}` or `POST /api/v1/items/{number}/abandon` names a number no item has, a number that is not a positive decimal integer, a `state` that is not one of the eleven states, or a `workspace` that is not registered",
+          "action": "refuse the request and change nothing",
+          "contract": "status 404 `not_found` for the unknown number and the unregistered workspace; status 400 `invalid_request` for the malformed number and the unknown state; the body is `{\"error_type\", \"message\"}`",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/item/routes_test.go, a table over {GET /api/v1/items/999 -> 404; GET /api/v1/items/abc, /api/v1/items/0, /api/v1/items/-1 -> 400; POST /api/v1/items/999/abandon -> 404; GET /api/v1/items?state=bogus -> 400; GET /api/v1/items?workspace=nope -> 404}: assert r.status and r.json.error_type"
+          }
+        },
+        {
+          "id": "REQ-2.6",
+          "pattern": "event_driven",
+          "condition": "an authenticated client sends `POST /api/v1/items/{number}/abandon`, or a part of nightshift calls the item service's `Abandon(ctx, number, reason)`, for an item in the state `new`, `planning`, `awaiting_approval`, `ready`, `implementing`, `reviewing` or `landing`",
+          "action": "call every hook registered with `OnAbandon(name, fn)` with the item, in registration order, writing a hook's error to the item's thread as an entry of kind `abandon_hook_failed` with the text `<name>: <error>` and going on; close every open decision of the item with the reason `item abandoned`; and move the item to `abandoned` through the transition function",
+          "contract": "status 200 with the item, its state `abandoned` and `waiting_on` null (the function returns the same item); the item's thread is unread; every hook was called once, before the state changed; the item's former open decisions have the state `closed`",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/item/item_test.go, a table over the seven states: two hooks 'sessions' and 'change' registered, each recording the state it saw and its call order; one open decision on the item; it = svc.Abandon(ctx, n, 'by the person'); assert it.State == 'abandoned'; assert hook order == ['sessions','change'] and each saw the earlier state; assert the decision's state == 'closed' and closed_reason == 'item abandoned'; assert thread.unread. One case with 'sessions' returning an error 'boom': assert an entry {kind: 'abandon_hook_failed', text: 'sessions: boom'}, 'change' still called, state 'abandoned'. In internal/item/routes_test.go: r = post('/api/v1/items/' + n + '/abandon'); assert r.status == 200 and r.json.state == 'abandoned'"
+          }
+        },
+        {
+          "id": "REQ-2.7",
+          "pattern": "unwanted",
+          "condition": "an abandon is asked for an item that is `verifying`, `publishing`, `done` or `abandoned`",
+          "action": "refuse it, call no hook and leave the item and its decisions as they are",
+          "contract": "status 409 with `error_type: conflict` and the message `item <N> is <state> and cannot be abandoned`, or `item <N> is already abandoned`; `Abandon` returns an error that is `item.ErrTransition`; no entry and no event is written",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/item/routes_test.go, a table over {verifying, publishing, done -> 'item <N> is <state> and cannot be abandoned'; abandoned -> 'item <N> is already abandoned'}: r = post('/api/v1/items/' + n + '/abandon'); assert r.status == 409; assert r.json.error_type == 'conflict'; assert r.json.message; assert the recording hook was not called; assert entry count unchanged"
+          }
+        },
+        {
+          "id": "REQ-2.8",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls the item service's `CreateLinked(ctx, parent, kind, text)` with the number of an existing item, the kind `defect` or `change_request` and a text of 1 to 20,000 Unicode code points",
+          "action": "store a new work item in the parent's workspace with the next number, the kind, the title (the first line of the text, cut to 80 code points), the source `{type: \"item\", item: <parent>}` with the text, the state `new`, `plan_approval` true and `parent` set to the parent's number; create its thread; append to the parent's thread an entry of kind `linked_item` with the text `item <N> created: <title>`, not marking it unread; append the event `item.created`; and call the creation hooks",
+          "contract": "the call returns the new item; the parent's `children` holds its number; an unknown parent returns `item.ErrNotFound`, and a kind `spec` or a text outside the bounds an error that is `item.ErrInvalid`, each creating nothing",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/item/item_test.go: p = a defect item in 'implementing'; it = svc.CreateLinked(ctx, p, 'defect', 'Missing log line\\nmore'); assert it.State == 'new'; assert it.Kind == 'defect'; assert it.Parent == p; assert it.Workspace == p's; assert it.Title == 'Missing log line'; assert svc.Get(p).Children == [it.Number]; assert the parent's thread's last entry == {kind: 'linked_item', text: 'item ' + it.Number + ' created: Missing log line'} and the parent's thread is not unread; assert the creation hook saw an item with a parent. A table over {parent 999 -> ErrNotFound; kind 'spec' -> ErrInvalid; text '' -> ErrInvalid}: assert count(items) unchanged"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-3",
+      "title": "Threads, unread, and a workspace's removal",
+      "rationale": "The person reads what happened in one place per item, and should be shown only what is new since they last looked.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-3.1",
+          "pattern": "ubiquitous",
+          "action": "for any work item, keep exactly one thread of kind `item`, created in the transaction that creates the item; for any registered workspace, return from the inbox's `WorkspaceThread(ctx, slug)` the one thread of kind `workspace` of that slug, and from `BriefThread(ctx)` the one thread of kind `brief` of the installation, each created at the first call and the same thread at every later one",
+          "contract": "a thread has an id (a positive integer, never given twice), a kind, the workspace and the item where it has them, and a title: the item's title, `workspace <slug>` or `daily brief`; concurrent first calls of `WorkspaceThread` for one slug return the same id",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an inbox over a copy of the store template with an injected clock"
+            ],
+            "pseudocode": "new file internal/inbox/thread_test.go: t1 = inbox.CreateItemThread(tx, 'demo', 12, 'Greeting'); assert t1.Kind == 'item'; a second CreateItemThread for item 12 returns an error; 8 goroutines call inbox.WorkspaceThread(ctx, 'demo'): assert one distinct id and count(threads of kind workspace, demo) == 1; inbox.WorkspaceThread(ctx, 'other').ID differs; inbox.BriefThread(ctx).ID == inbox.BriefThread(ctx).ID; assert the titles"
+          }
+        },
+        {
+          "id": "REQ-3.2",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls the inbox's `Append(ctx, threadID, Entry{Kind, Text, Unread})` for an existing thread, with a kind matching `^[a-z][a-z0-9_]*$` and a text that is not empty",
+          "action": "store the entry with the next `seq` of that thread (starting at 1) and the time of the injected clock, set the thread's `last_activity` to that time, mark the thread unread when `Unread` is true and it is not unread already, remembering that entry as the first unread one, and append the event `thread.updated` with the data `{thread, unread}`",
+          "contract": "the call returns the entry with its `seq` and `time`; the entries of a thread read back in `seq` order; an entry with `Unread` false leaves a read thread read; an unknown thread returns `inbox.ErrNotFound` and a malformed kind or an empty text an error that is `inbox.ErrInvalid`, each writing nothing",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/inbox/thread_test.go: append ('state','a',false), ('check','b',false) at T1, T2: assert seqs 1,2; assert thread.unread == false; assert last_activity == T2; append ('decision_opened','c',true) at T3: assert unread == true and first unread seq == 3; append ('x','d',true): first unread seq stays 3; assert Entries(thread) == the four in order; assert 4 thread.updated events with unread [false,false,true,true]. A table over {thread 999 -> ErrNotFound; kind 'Bad Kind' -> ErrInvalid; text '' -> ErrInvalid}: assert entry and event counts unchanged"
+          }
+        },
+        {
+          "id": "REQ-3.3",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/threads`, optionally with `view=all|unread|action`, `workspace=<slug>` and `cursor`",
+          "action": "answer the threads of the view (`all` when absent: every thread; `unread`: the unread ones; `action`: those with at least one open decision), of the workspace when one is named, ordered by `last_activity` newest first and by id descending among equals, 50 to a page",
+          "contract": "status 200 with `{\"items\": [<thread>, …], \"next_cursor\": <string or null>}`; a thread is `{id, path, kind, workspace, item, title, unread, last_activity, open_decisions: [{id, kind, question}]}` with `path` `/api/v1/threads/<id>`; following `next_cursor` until it is null yields every matching thread once; a workspace filter leaves out the brief thread",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "an inbox over a copy of the store template, seeded through its own functions",
+              "a test decision kind 'test' with the options 'yes' and 'no' declared"
+            ],
+            "pseudocode": "new file internal/inbox/routes_test.go, through the router: 120 item threads over workspaces demo and other with activity times T1..T120, a workspace thread for demo and the brief thread; threads 5 and 9 unread; an open decision on thread 9 and an answered one on thread 7; a table over {no query -> 122 threads over 3 pages of 50, 50, 22, newest first; view=unread -> [9, 5]; view=action -> [9] with open_decisions of length 1; workspace=demo -> only demo's, no brief thread; view=unread&workspace=other -> those}: follow next_cursor; assert ids and order; assert the last page's next_cursor == null"
+          }
+        },
+        {
+          "id": "REQ-3.4",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/threads/{id}` for an existing thread",
+          "action": "answer the thread with its entries in `seq` order and every decision of the thread in the order they were opened, and then mark the thread read, appending the event `thread.updated` when it was unread",
+          "contract": "status 200 with the thread as in the list plus `entries: [{seq, time, kind, text, unread}]` and `decisions: [<decision>]`; `unread` of the thread is its value before the request, and `unread` of an entry is true for the first unread entry and every later one; a second request answers `unread: false` for the thread and all entries",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/inbox/routes_test.go: a thread with 3 entries, the third marking it unread, then a fourth; r1 = get('/api/v1/threads/' + id); assert r1.json.unread == true; assert r1.json.entries[*].unread == [false,false,true,true]; assert r1.json.decisions lists the thread's decisions; assert one thread.updated event with unread false was appended; r2 = get(same); assert r2.json.unread == false; assert no further event; assert get('/api/v1/threads?view=unread') no longer lists it"
+          }
+        },
+        {
+          "id": "REQ-3.5",
+          "pattern": "event_driven",
+          "condition": "an authenticated client sends `POST /api/v1/threads/{id}/read` for an existing thread",
+          "action": "mark the thread read, appending the event `thread.updated` only when it was unread",
+          "contract": "status 200 with the thread as the list gives it, `unread` false; the same request again answers the same and appends no event; the entries are unchanged",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/inbox/routes_test.go: an unread thread; r = post('/api/v1/threads/' + id + '/read'); assert r.status == 200; assert r.json.unread == false; assert event count grew by 1; r = post(same); assert r.status == 200; assert event count unchanged"
+          }
+        },
+        {
+          "id": "REQ-3.6",
+          "pattern": "unwanted",
+          "condition": "a request to a thread route names an id no thread has, an id that is not a positive decimal integer, a `view` other than `all`, `unread` and `action`, a `cursor` this API did not give, or a `workspace` that is not registered",
+          "action": "refuse the request and change nothing",
+          "contract": "status 404 `not_found` for the unknown id and the unregistered workspace; status 400 `invalid_request` for the malformed id, the unknown view and the malformed cursor; an unknown thread is not marked read and no event is appended",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/inbox/routes_test.go, a table over {GET /api/v1/threads/999 -> 404; POST /api/v1/threads/999/read -> 404; GET /api/v1/threads/abc -> 400; GET /api/v1/threads?view=bogus -> 400; GET /api/v1/threads?cursor=%%% -> 400; GET /api/v1/threads?workspace=nope -> 404}: assert r.status and r.json.error_type; assert event count unchanged"
+          }
+        },
+        {
+          "id": "REQ-3.7",
+          "pattern": "unwanted",
+          "condition": "`nightshift workspace remove <slug>` is asked for a workspace that has a work item which is neither `done` nor `abandoned`",
+          "action": "refuse the removal through the guard this package registers with `AddRemoveGuard` of package 02's workspace.Service, naming every such item with its state in ascending order of number",
+          "contract": "the guard returns an error with the text `workspace <slug> has open work items: <N> (<state>), <N> (<state>)`, and nil when there is no such item; `DELETE /api/v1/workspaces/{slug}` then answers 409 `conflict` with that message and `nightshift workspace remove` exits with code 1 and the message on stderr; the workspace, its items and its threads are unchanged",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a real workspace.Service of package 02 over the same store with its routes, the workspaces registered against internal/hubtest as that package's own tests register them",
+              "the item service's guard, removed hook and decorator registered with it as daemon.Run registers them"
+            ],
+            "pseudocode": "new file internal/item/workspace_test.go: workspace demo with items 1 (done), 2 (ready), 3 (abandoned), 4 (landing); err = svc.RemoveGuard(ctx, 'demo'); assert err.Error() == 'workspace demo has open work items: 2 (ready), 4 (landing)'; r = delete('/api/v1/workspaces/demo'); assert r.status == 409 and r.json.message == err.Error(); assert workspaces.Get('demo') succeeds and count(items) == 4; with items 2 and 4 abandoned: assert svc.RemoveGuard(ctx, 'demo') == nil"
+          }
+        },
+        {
+          "id": "REQ-3.8",
+          "pattern": "event_driven",
+          "condition": "a workspace is removed whose work items are all `done` or `abandoned`, or which has none",
+          "action": "remove, through the hook this package registers with `OnRemoved` of package 02's workspace.Service, the workspace's items, its item threads and its workspace thread with their entries and their decisions, and append the event `thread.removed` with the data `{thread}` for each removed thread",
+          "contract": "afterwards `GET /api/v1/items?workspace=<slug>` and the thread routes answer 404 for the slug and for each removed id; the items and threads of every other workspace and the brief thread are unchanged; a later item gets a number above every number given before, the removed ones included; nothing is requested of the hub",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/item/workspace_test.go: workspaces demo (items 1 done, 2 abandoned, a workspace thread with an open decision) and other (item 3 ready); r = delete('/api/v1/workspaces/demo'); assert r.status == 204; assert get('/api/v1/items/1').status == 404; assert get('/api/v1/threads/' + each of demo's 3 thread ids).status == 404; assert 3 thread.removed events; assert get('/api/v1/decisions?state=all') lists none of demo's; assert item 3 and its thread are unchanged; assert a new item in other gets number 4; assert the fake hub saw no request after the registrations"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-4",
+      "title": "Decisions: a registry of kinds, answers and their handlers",
+      "rationale": "Eleven kinds of question from seven packages reach the person through one machinery, so that every one of them waits, is answered and takes effect in the same way.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-4.1",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls the inbox's `Open(ctx, OpenRequest{Kind, Thread, Question, Evidence, Recommended, Blocks})` with a kind declared through `RegisterKind(Kind{Name, Options: [{Key, Does, CommentRequired}]})`, an existing thread, a question that is not empty and a `Recommended` that is the key of one of the kind's options",
+          "action": "store a decision in the state `open` with the next id (starting at 1), the thread and its workspace and item, the question, the evidence, what it blocks and a copy of the kind's options as they are at that moment, the options added through `AddOption(kind, Option)` among them and the recommended one marked; append to the thread an entry of kind `decision_opened` with the text `<kind>: <question>`, marking it unread; and append the event `decision.opened` with the data `{decision, kind, thread, workspace, item}`",
+          "contract": "the call returns the decision as {id, kind, state, thread, workspace, item, question, evidence: [{label, url or text}], options: [{key, does, comment_required, recommended}], blocks, opened_at, answer, closed_reason} with `answer` and `closed_reason` null; exactly one option has `recommended: true`; an option added to the kind after the decision was opened does not appear in it; the thread is in the views `unread` and `action`",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an inbox over a copy of the store template with an injected clock, and an item thread t for item 12"
+            ],
+            "pseudocode": "new file internal/inbox/decision_test.go: inbox.RegisterKind({Name: 'test', Options: [{'yes','goes on',false},{'no','sends it back',true}]}); inbox.AddOption('test', {'take_over','hands it to you',false}); d = inbox.Open(ctx, {Kind: 'test', Thread: t, Question: 'Go on?', Evidence: [{Label: 'diff', URL: 'https://x'},{Label: 'verdict', Text: 'agree'}], Recommended: 'yes', Blocks: 'item 12'}); assert d.ID == 1; assert d.State == 'open'; assert d.Options keys == ['yes','no','take_over'] and only 'yes' is recommended; assert d.Item == 12; assert the thread's last entry == {kind: 'decision_opened', text: 'test: Go on?'} and thread.unread; assert the last event type == 'decision.opened'; inbox.AddOption('test', {'later',…}); assert inbox.Decision(1).Options has 3 keys"
+          }
+        },
+        {
+          "id": "REQ-4.2",
+          "pattern": "unwanted",
+          "condition": "`Open` names a kind that is not declared, a thread that does not exist, an empty question or a `Recommended` that is no option of the kind; or `RegisterKind` names a kind already declared, an empty name, no option or two options with one key; or `AddOption` names a kind that is not declared or a key the kind has",
+          "action": "refuse the call and store nothing",
+          "contract": "the call returns `inbox.ErrNotFound` for the unknown thread and otherwise an error that is `inbox.ErrInvalid` and names the kind and what is wrong; no decision, entry or event is written and the registry is unchanged",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/inbox/decision_test.go, a table over {Open kind 'nope'; Open thread 999 -> ErrNotFound; Open question ''; Open Recommended 'maybe'; RegisterKind 'test' twice; RegisterKind name ''; RegisterKind with no options; RegisterKind options ['a','a']; AddOption on 'nope'; AddOption 'yes' on 'test'}: assert errors.Is(err, want); assert count(decisions), entry count and event count unchanged; assert inbox.Kind('test') has its 2 options"
+          }
+        },
+        {
+          "id": "REQ-4.3",
+          "pattern": "event_driven",
+          "condition": "an authenticated client requests `GET /api/v1/decisions`, optionally with `state=all` and `cursor`, or `GET /api/v1/decisions/{id}` for an existing decision",
+          "action": "answer, for the list, the open decisions, or with `state=all` every decision, ordered by the time they were opened, oldest first, 50 to a page; and for the id, that decision",
+          "contract": "status 200 with `{\"items\": [<decision>, …], \"next_cursor\": <string or null>}`, or with the decision; a decision is {id, kind, state, thread, workspace, item, question, evidence: [{label, url or text}], options: [{key, does, comment_required, recommended}], blocks, opened_at, answer, closed_reason}; `state` is `open`, `answered` or `closed`; `answer` is null or `{option, comment, record, time}`; a `state` other than `all` is status 400 `invalid_request`, and an id no decision has is status 404 `not_found`",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/inbox/routes_test.go: decisions 1 (answered), 2 (open), 3 (closed), 4 (open) opened at T1..T4; a table over {GET /api/v1/decisions -> ids [2,4]; ?state=all -> [1,2,3,4]; ?state=open -> 400 invalid_request; GET /api/v1/decisions/1 -> state 'answered' and answer.option set; /api/v1/decisions/3 -> state 'closed' and closed_reason set; /api/v1/decisions/999 -> 404; /api/v1/decisions/abc -> 400}: assert r.status and the members; with 60 open decisions assert two pages of 50 and 10"
+          }
+        },
+        {
+          "id": "REQ-4.4",
+          "pattern": "event_driven",
+          "condition": "an authenticated client sends `POST /api/v1/decisions/{id}/answer` with `{\"option\", \"comment\"?, \"record\"?}` for an open decision, the option being one of the decision's own and the comment present where that option requires one",
+          "action": "store the answer (the option, the comment, `record` as given or false, and the time) and the state `answered` in one store transaction, append to the decision's thread an entry of kind `decision_answered` with the text `<kind>: <option>`, followed by `: <comment>` when there is a comment, and append the event `decision.answered` with the data `{decision, kind, option, thread, workspace, item}`",
+          "contract": "status 200 with the decision, `state: \"answered\"` and `answer: {option, comment, record, time}`; the thread leaves the view `action` when it has no other open decision; of two concurrent answers to one decision exactly one is stored and answered 200, and the other is answered 409 `already_answered`",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/inbox/routes_test.go, a table over {{option:'yes'} -> answer {yes, '', false}; {option:'no', comment:'too wide'} -> entry text 'test: no: too wide'; {option:'yes', record:true} -> answer.record == true}: r = post('/api/v1/decisions/' + id + '/answer', body); assert r.status == 200; assert r.json.state == 'answered'; assert the thread's last entry kind == 'decision_answered'; assert the last event type == 'decision.answered'; assert get('/api/v1/threads?view=action') no longer lists the thread. Then 8 concurrent posts with different options on one open decision: assert one 200 and seven 409 already_answered whose body's answer equals the stored one"
+          }
+        },
+        {
+          "id": "REQ-4.5",
+          "pattern": "unwanted",
+          "condition": "an answer names an option the decision does not have or names none, lacks a comment for an option that requires one (absent, or white space only), is sent to a decision that is already answered or was closed, is sent to an id no decision has, or has a body that is not a JSON object",
+          "action": "refuse the answer, leave the decision as it is and call no handler",
+          "contract": "status 400 with `error_type: unknown_option`; status 400 with `error_type: comment_required`; status 409 with `error_type: already_answered` and, beside `message`, the member `answer` holding the first answer `{option, comment, record, time}`; status 409 with `error_type: conflict` and the message `decision <id> was closed: <reason>`; status 404 `not_found`; status 400 `invalid_request`; an answered decision is checked first, so a second answer is `already_answered` whatever it names; no entry and no event is written",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "the kind 'test' with the option 'no' requiring a comment, and a recording handler registered for each option"
+            ],
+            "pseudocode": "in internal/inbox/routes_test.go, a table over {open decision, {option:'maybe'} -> 400 unknown_option; {} -> 400 unknown_option; {option:'no'} -> 400 comment_required; {option:'no', comment:'   '} -> 400 comment_required; answered decision, {option:'no', comment:'x'} -> 409 already_answered with answer.option == the first; answered decision, {option:'maybe'} -> 409 already_answered; closed decision -> 409 conflict 'decision 3 was closed: superseded by a note'; id 999 -> 404; body 'x' -> 400 invalid_request}: assert r.status, r.json.error_type and the body; assert the decision, the entry count and the event count unchanged; assert the recording handler was not called"
+          }
+        },
+        {
+          "id": "REQ-4.6",
+          "pattern": "event_driven",
+          "condition": "an answer to a decision has been stored",
+          "action": "call the handler registered with `OnAnswer(kind, option, fn)` for the decision's kind and the answered option, with the decision and its answer, `record` included, within 5 seconds of the answer and without the answering request waiting for it; mark the answer carried out when the handler returns nil or none is registered; and at every start of nightshiftd call the handlers of the answers stored and not yet marked carried out",
+          "contract": "the handler is called with the decision's id, thread, item and the answer `{option, comment, record}`; after it returned nil it is not called again for that answer; an answer stored by a process that stopped before the handler returned is handled by the next process; a handler may so be called twice for one answer and has to allow for it",
+          "check": {
+            "kind": "integration",
+            "pseudocode": "in internal/inbox/decision_test.go: a handler for ('test','yes') that records its argument and appends an entry ('test_effect','went on',false); inbox.Answer(ctx, id, {Option:'yes', Record:true}); assert within 5 seconds (the test waits on the handler's channel) the handler saw {id, thread, item 12, option 'yes', record true}; assert the thread's last entry kind == 'test_effect'; assert inbox.Pending() == 0; assert a later dispatch pass does not call it again. Restart case: an inbox without handlers stores an answer; close; a new inbox over the same store with the handler registered runs its start pass: assert the handler was called once with that answer. An answer to an option with no handler: assert inbox.Pending() == 0"
+          }
+        },
+        {
+          "id": "REQ-4.7",
+          "pattern": "unwanted",
+          "condition": "the handler of an answer returns an error",
+          "action": "keep the answer as not carried out, append once to the decision's thread an entry of kind `decision_effect_failed` with the text `<kind>: <option> could not be carried out: <error>`, marking it unread, and call the handler again every 30 seconds until it returns nil",
+          "contract": "the decision stays `answered` with its answer; the entry is written at the first failure only; the handler is called again at each interval and no more often; after it returned nil it is not called again; other answers are carried out meanwhile",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "the retry interval is a parameter and the inbox's clock is injected; the test drives the dispatch pass itself"
+            ],
+            "pseudocode": "in internal/inbox/decision_test.go: a handler failing twice with 'hub unavailable' and then returning nil; answer; run the dispatch pass: assert 1 call and an entry {kind: 'decision_effect_failed', text: 'test: yes could not be carried out: hub unavailable'}; pass again before the interval: assert still 1 call; advance the clock by the interval, pass: assert 2 calls and still one such entry; advance, pass: 3 calls, inbox.Pending() == 0; advance, pass: 3 calls. Meanwhile a second decision's answer with a working handler is carried out at the first pass; assert the default interval is 30 seconds"
+          }
+        },
+        {
+          "id": "REQ-4.8",
+          "pattern": "event_driven",
+          "condition": "a part of nightshift calls the inbox's `Close(ctx, id, reason)` for an open decision with a reason that is not empty",
+          "action": "set the decision's state to `closed` with the reason, append to its thread an entry of kind `decision_closed` with the text `<kind>: closed: <reason>`, append the event `decision.closed` with the data `{decision, kind, thread, workspace, item, reason}`, and call no handler",
+          "contract": "the call returns the decision with `state: \"closed\"` and `closed_reason`; it is no longer among the open decisions and its thread leaves the view `action` when it has no other; a decision that is answered or closed returns `inbox.ErrNotOpen`, an unknown id `inbox.ErrNotFound`, an empty reason an error that is `inbox.ErrInvalid`, each changing nothing",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/inbox/decision_test.go: d = inbox.Close(ctx, id, 'superseded by a note'); assert d.State == 'closed'; assert d.ClosedReason == 'superseded by a note'; assert the thread's last entry == {kind: 'decision_closed', text: 'test: closed: superseded by a note'}; assert the last event type == 'decision.closed'; assert inbox.OpenDecisions() does not hold it; assert the recording handler was not called. A table over {Close again -> ErrNotOpen; an answered decision -> ErrNotOpen; id 999 -> ErrNotFound; reason '' -> ErrInvalid}: assert entry and event counts unchanged"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-5",
+      "title": "Waiting, reminding and telling the person",
+      "rationale": "A decision that waits in silence waits for days; the person has to learn that they are needed without watching the inbox, and nothing may be lost while they are away.",
+      "system": "nightshiftd",
+      "criteria": [
+        {
+          "id": "REQ-5.1",
+          "pattern": "state_driven",
+          "condition": "a decision is open",
+          "action": "take no option for it, however long it is open, and append to its thread an entry of kind `decision_reminder` with the text `<kind>: open since <opened_at>: <question>`, marking the thread unread, each time 24 hours have passed since the later of its opening and its last reminder, one entry also when several such periods have passed at once",
+          "contract": "a decision open for 23 hours 59 minutes has no reminder; one open for 24 hours has one; after 48 hours it has two; a daemon whose clock moved 7 days between two passes writes one reminder at that pass and the next one 24 hours later; the decision is still `open` with `answer` null; an answered or closed decision gets none",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an inbox over a copy of the store template with an injected clock; the reminder period and the pass interval are parameters"
+            ],
+            "pseudocode": "new file internal/inbox/reminder_test.go: decisions A (open), B (answered), C (closed) opened at T0; clock = T0+23h59m, inbox.RemindDue(ctx): assert no decision_reminder entry; clock = T0+24h, RemindDue: assert A's thread has 1 and is unread, B's and C's none; RemindDue again at the same time: still 1; clock = T0+48h: 2; clock = T0+48h+7d, RemindDue: 3; clock += 23h: 3; clock += 1h: 4; assert A.State == 'open' and A.Answer == nil; assert the default period is 24 hours and the pass runs once a minute from a goroutine that stops with the daemon"
+          }
+        },
+        {
+          "id": "REQ-5.2",
+          "pattern": "optional",
+          "condition": "`[notify].command` is configured",
+          "action": "run that command with `sh -c` as the daemon's user each time a decision opens (`decision_opened`), a reminder entry is written (`decision_reminder`), the hub's outage is noted (`hub_unreachable`) or another package calls `Notify` of `internal/notify` with its event (`workspace_red`, `workspace_held`, `brief`), writing one JSON document to its standard input and closing it, and return to the caller without waiting for the command",
+          "contract": "the document has `event` and `time` (RFC 3339 UTC) and, where there are any, `workspace`, `item` and `thread` (the thread's URL path), absent otherwise; for the two decision events it has `decision: {id, kind, question, options: [<key>, …]}`; the command is started once per event; `Notify` returns before the command ends; without the key no process is started, and an unknown key under `[notify]` fails the `config` check",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the notifier is an interface the inbox is given; internal/notify has a Wait for tests that returns when no command runs"
+            ],
+            "pseudocode": "new file internal/notify/notify_test.go: command = a shell script the test writes that copies its standard input to a file named by a counter; n = notify.New(command, logger); a table over {Event{decision_opened, workspace 'demo', item 12, thread '/api/v1/threads/31', decision {5,'plan','Approve?',['approve','revise']}} -> the file parses to exactly those members; Event{hub_unreachable} -> the document has only event and time; Event{workspace_red, workspace 'demo', thread} -> no item and no decision member}: n.Notify(ev); n.Wait(); assert the file. A command 'sleep 2': assert Notify returns within 100 ms. notify.New('', logger).Notify(ev): assert no process was started. In internal/inbox/decision_test.go with a recording notifier: Open -> one decision_opened with the option keys; RemindDue at +24h -> one decision_reminder"
+          }
+        },
+        {
+          "id": "REQ-5.3",
+          "pattern": "unwanted",
+          "condition": "the notification command exits with a code other than 0, cannot be started, or is still running 30 seconds after it was started",
+          "action": "end a command that is still running together with the processes it started, write one line to the daemon's log, and not run the command again for that event",
+          "contract": "the log line is `notify: <event>: exit <code>: <first line of the command's error output>`, `notify: <event>: timed out after 30s: <first line>` or `notify: <event>: <the start error>`; the caller of `Notify`, the opening of the decision and its thread entry are neither delayed nor failed; no process of the command is left running; a later event runs the command again; commands still running when the daemon shuts down are ended by a shutdown step named `notify`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the timeout is a parameter with the default 30 seconds; the logger writes to a buffer"
+            ],
+            "pseudocode": "in internal/notify/notify_test.go, a table over {'echo boom >&2; echo more >&2; exit 3' -> log 'notify: decision_opened: exit 3: boom'; 'echo slow >&2; sleep 60 & sleep 60' with the timeout 100 ms -> log 'notify: decision_opened: timed out after 100ms: slow' and no process of the group alive afterwards; '/nonexistent/x' -> a log line starting 'notify: decision_opened: exit 127'}: n.Notify(ev); n.Wait(); assert the log has exactly one line; assert the command ran once. Then n.Notify(ev2) with a working command runs. n.Stop() with a 'sleep 60' running: assert it returns within 1 second and the process is gone. In internal/inbox/decision_test.go: Open with a notifier whose command fails returns the decision with no error"
+          }
+        },
+        {
+          "id": "REQ-5.4",
+          "pattern": "event_driven",
+          "condition": "the hub has been unreachable for 15 minutes without a break, by the hub monitor's `Since()`",
+          "action": "append to the thread of every registered workspace an entry of kind `hub_outage` with the text `hub unreachable since <the time of the first failure, RFC 3339 UTC>`, marking it unread, and send the notification `hub_unreachable` once, with no workspace and no thread; and write nothing more for that outage",
+          "contract": "at 14 minutes 59 seconds nothing is written; from 15 minutes on each workspace thread has exactly one such entry however long the outage lasts; after the hub was reachable and is unreachable for 15 minutes again, a second entry and a second notification follow; with no workspace registered no entry is written and the notification is still sent",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "the hub monitor and the list of registered workspaces are interfaces the watch is given; the threshold and the check interval are parameters"
+            ],
+            "pseudocode": "new file internal/inbox/outage_test.go: w = inbox.NewHubWatch(monitor stub, workspace lister ['demo','other'], inbox, recording notifier, clock); stub unreachable since T0; clock = T0+14m59s, w.Check(ctx): assert no entry; clock = T0+15m, Check: assert each of the 2 workspace threads has one entry {kind: 'hub_outage', text: 'hub unreachable since ' + T0} and is unread; assert 1 notification {event: hub_unreachable} without workspace and thread; Check at T0+40m: still 1 each; stub reachable, Check; stub unreachable since T1, clock = T1+15m, Check: 2 entries each, 2 notifications. With an empty lister: 0 entries, 1 notification; assert the default threshold is 15 minutes and the check runs every 30 seconds from a goroutine that stops with the daemon"
+          }
+        },
+        {
+          "id": "REQ-5.5",
+          "pattern": "event_driven",
+          "condition": "the hub monitor reports a credential error for the worker token or the approver token that it did not report at the check before",
+          "action": "append to the thread of every registered workspace an entry of kind `credential` whose text is the credential error as the status reports it (`worker token: 401 unauthenticated`), marking it unread, and send no notification",
+          "contract": "each workspace thread gets one entry per token for as long as the error lasts; after the error was cleared (the token replaced at `SIGHUP`) and is reported again, a second entry follows; an error of the approver token is written beside one of the worker token",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/inbox/outage_test.go: stub with credential error 'worker token: 401 unauthenticated'; w.Check: assert each workspace thread has one entry {kind: 'credential', text: 'worker token: 401 unauthenticated'} and is unread; assert 0 notifications; Check again: still one; stub adds 'approver token: 401 unauthenticated', Check: a second entry with that text; stub clears the worker's error, Check; stub reports it again, Check: a third entry"
+          }
+        },
+        {
+          "id": "REQ-5.6",
+          "pattern": "ubiquitous",
+          "action": "for any stop of nightshiftd, by a signal or by the death of the process, keep every work item with its state, every thread with its entries and its unread mark, and every decision with its evidence, its options and its answer, and at the next start carry out the stored answers not yet carried out and write the reminders that fell due, one for a decision",
+          "contract": "after a restart the item, thread and decision routes answer what they answered before the stop; item, thread and decision numbers go on from the highest ever given; an open decision is still in the view `action`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "a store file in a temporary directory, opened twice; the same injected clock for both"
+            ],
+            "pseudocode": "in internal/item/item_test.go: over one store file: create 2 items, move one to 'ready', open a decision with evidence on the other, mark one thread read; record the JSON of GET /api/v1/items, /api/v1/threads, /api/v1/threads/{id} for each and /api/v1/decisions?state=all; close the store without any shutdown step; open it again with a new inbox, item service and router; assert the five answers are equal to the recorded ones, the read-marking of the thread GETs aside; assert a new item gets number 3 and a new decision id 2; advance the clock 25 hours and run the start pass: assert the open decision's thread has one decision_reminder"
+          }
+        }
+      ]
+    },
+    {
+      "id": "REQ-6",
+      "title": "The client's item and inbox commands",
+      "rationale": "The command line is the only client of version 1, so what the API can do and the person cannot type does not exist for them.",
+      "system": "nightshift",
+      "criteria": [
+        {
+          "id": "REQ-6.1",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift item list [<slug>] [--state <s>]`, `nightshift item show <N>` or `nightshift item abandon <N>`",
+          "action": "request `GET /api/v1/items` with the slug and the state as `workspace` and `state`, `GET /api/v1/items/<N>` or `POST /api/v1/items/<N>/abandon`, and print: for the list, one line per item, `#<number> <workspace> <state>`, then ` [<marker>, …]` when it has markers, then ` waiting on <kind> decision <id>` when it waits, then the title; for `show`, the lines `item <number> (<kind>) <title>`, `workspace: <slug>`, `state: <state> since <state_since>` with the markers, `waiting on: <kind> decision <id>: <question>` or `waiting on: nothing`, `source: text`, `source: issue #<n> <url>`, `source: package <spec_id>_<spec_name>` or `source: item <n>`, `parent: item <n>` and `children: item <n>, …` where there are any, and `thread: <path>`; for `abandon`, `item <N> abandoned`",
+          "contract": "exit code 0; the lines on stdout, nothing for an empty list; with `--json` stdout is the API's answer; a refusal by the daemon is exit code 1 with the error's message on stderr",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an httptest server standing in for the daemon, answering fixed items"
+            ],
+            "pseudocode": "in internal/cli/item_test.go, a table over {['item','list'] -> GET /api/v1/items and the lines '#1 demo new Add x' and '#2 demo ready [paused] waiting on plan decision 5 Fix y'; ['item','list','demo','--state','ready'] -> query workspace=demo&state=ready; ['item','show','2'] -> the lines in order, 'waiting on: plan decision 5: Approve?' among them; a served item without waiting_on -> 'waiting on: nothing'; ['item','abandon','2'] -> POST /api/v1/items/2/abandon and 'item 2 abandoned'; --json on each -> stdout parses to the served body; the server answering 409 {conflict, 'item 2 is done and cannot be abandoned'} -> code 1 and that message on stderr}: code, stdout, stderr = cli.Run(args); assert"
+          }
+        },
+        {
+          "id": "REQ-6.2",
+          "pattern": "event_driven",
+          "condition": "a workspace object is answered by a route of package 02 (`GET /api/v1/workspaces`, `GET /api/v1/workspaces/{slug}`)",
+          "system": "nightshiftd",
+          "action": "add to the object, through a function registered with `Decorate` of package 02's workspace.Service, the member `items`: an object with one member for each state other than `done` and `abandoned` in which the workspace has at least one work item, its value their count; and have `nightshift workspace list` print it in a column `items`, added with `AddWorkspaceListColumn` of internal/cli, as `<total> open (<count> <state>, …)` in the order of the state table, or `0 open`",
+          "contract": "a workspace with items 1 (ready), 2 (ready), 3 (landing), 4 (done) answers `\"items\": {\"ready\": 2, \"landing\": 1}` and prints `3 open (2 ready, 1 landing)`; one with only finished items or none answers `\"items\": {}` and prints `0 open`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the workspace.Service fixture of the removal test"
+            ],
+            "pseudocode": "in internal/item/workspace_test.go: workspaces demo with items in ready, ready, landing, done and other with one abandoned item; counts = svc.OpenCounts('demo'); assert counts == {ready: 2, landing: 1}; assert svc.OpenCounts('other') == {}; r = get('/api/v1/workspaces'); assert the entry of demo in r.json.workspaces has items == {ready: 2, landing: 1} and the entry of other items == {}. In internal/cli/item_test.go: cli.Run(['workspace','list']) against a server answering those two workspaces prints a line for demo containing '3 open (2 ready, 1 landing)' and one for other containing '0 open'"
+          }
+        },
+        {
+          "id": "REQ-6.3",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift inbox`, `nightshift inbox --action` or `nightshift inbox --unread`",
+          "action": "request `GET /api/v1/decisions` and `GET /api/v1/threads?view=unread`, only the first with `--action` and only the second with `--unread`, following `next_cursor` to the last page, and print the section `Action` first, one line per open decision, oldest first, `<id> <kind> <workspace>`, then ` item <n>` where it has one, then the question; and then the section `Unread`, one line per unread thread, newest activity first, `<thread id> <workspace>`, then ` item <n>` where it has one, then the title and the time of the last activity",
+          "contract": "exit code 0; each printed section starts with the line `Action` or `Unread`; an empty section is the line `Action: nothing waits for you` or `Unread: nothing new`; the brief thread's line has `brief` in place of a workspace; with `--json` stdout is one object with the members `action` and `unread`, each the `items` the API answered, only the requested ones present",
+          "check": {
+            "kind": "unit",
+            "setup": [
+              "an httptest server standing in for the daemon, answering fixed lists and recording requests"
+            ],
+            "pseudocode": "new file internal/cli/inbox_test.go, a table over {['inbox'] -> both requests and stdout 'Action\\n5 plan demo item 12 Approve the plan?\\n9 origin demo Push again?\\nUnread\\n31 demo item 12 Greeting 2026-11-28T10:05:00Z\\n40 brief daily brief 2026-11-28T08:00:00Z\\n'; ['inbox','--action'] -> only GET /api/v1/decisions and only the Action section; ['inbox','--unread'] -> only the threads request; both lists empty -> 'Action: nothing waits for you\\nUnread: nothing new\\n'; decisions served over two pages -> both pages' lines, and the second request carries the cursor; --json -> {action: […], unread: […]}}: code, stdout, _ = cli.Run(args); assert code == 0; assert stdout; assert the requests the server saw"
+          }
+        },
+        {
+          "id": "REQ-6.4",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift thread show <id>`",
+          "action": "request `GET /api/v1/threads/<id>`, which marks the thread read, and print the line `thread <id>: <title>`, then one line per entry in order, `<time> <kind> <text>`, prefixed with `* ` when the entry is unread and with two spaces otherwise, then for each open decision of the thread the line `decision <id> (<kind>) waits: nightshift decision show <id>`",
+          "contract": "exit code 0; with `--json` stdout is the API's answer; a thread the daemon does not know is exit code 1 with the error's message on stderr",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/inbox_test.go: the server answers a thread with 3 entries, the last unread, and one open and one answered decision; code, stdout, _ = cli.Run(['thread','show','31']); assert the server saw GET /api/v1/threads/31; assert stdout == 'thread 31: Greeting\\n  T1 created item 12 created\\n  T2 state new -> planning\\n* T3 decision_opened plan: Approve?\\ndecision 5 (plan) waits: nightshift decision show 5\\n'; --json parses to the served body; a 404 answer -> code 1 and the message on stderr"
+          }
+        },
+        {
+          "id": "REQ-6.5",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift decision show <id>`",
+          "action": "request `GET /api/v1/decisions/<id>` and print the line `decision <id> (<kind>) <state>`, the question, `thread: <path>` with ` item <n>` where it has one, `blocks: <blocks>`, one line per piece of evidence, `evidence: <label>: <url or text>`, one line per option, `option <key>: <does>` followed by ` (recommended)` and ` (comment required)` where they apply, and, for an answered decision, `answered <time>: <option>` followed by `: <comment>` where there is one and ` (recorded)` when `record` is true, or for a closed one `closed: <reason>`",
+          "contract": "exit code 0; with `--json` stdout is the API's answer; an unknown decision is exit code 1 with the error's message on stderr",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/inbox_test.go, a table over served decisions {open with 2 pieces of evidence and the options approve (recommended), revise (comment required) -> the lines 'decision 5 (plan) open', the question, 'thread: /api/v1/threads/31 item 12', 'blocks: item 12', 'evidence: draft change: https://x', 'evidence: verdict: agree', 'option approve: activates the package (recommended)', 'option revise: plans once more (comment required)'; answered with a comment and record -> last line 'answered T: revise: too wide (recorded)'; closed -> last line 'closed: superseded by a note'}: code, stdout, _ = cli.Run(['decision','show','5']); assert stdout"
+          }
+        },
+        {
+          "id": "REQ-6.6",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift decide <id> --option <key> [--comment \"<text>\"] [--record]`",
+          "action": "send `POST /api/v1/decisions/<id>/answer` with `option`, with `comment` when the flag is given and with `record: true` when `--record` is given, and print `decision <id> answered: <option>`",
+          "contract": "exit code 0; with `--json` stdout is the decision as the API answered it; a refusal (`unknown_option`, `comment_required`, `already_answered`, `conflict`, `not_found`) is exit code 1 with the error's message on stderr and, with `--json`, the error body on stdout, the first answer of `already_answered` in it",
+          "check": {
+            "kind": "unit",
+            "pseudocode": "in internal/cli/inbox_test.go, a table over {['decide','5','--option','approve'] -> body {option:'approve'}; ['decide','--option','revise','--comment','too wide','--record','5'] -> body {option:'revise', comment:'too wide', record:true}}: assert the server saw POST /api/v1/decisions/5/answer with the body; assert code == 0 and stdout == 'decision 5 answered: approve\\n'. A table over served refusals {400 unknown_option, 400 comment_required, 409 already_answered with answer}: assert code == 1; assert stderr == the message + '\\n'; with --json assert stdout parses to the error body and holds answer for already_answered"
+          }
+        },
+        {
+          "id": "REQ-6.7",
+          "pattern": "event_driven",
+          "condition": "the person runs `nightshift watch`",
+          "action": "open `GET /api/v1/events` and print one line per event as it arrives, `<seq> <time> <type> <the event's data as compact JSON>`, until the command is interrupted; when the stream ends without an interrupt, connect again with `Last-Event-ID` set to the last `seq` printed",
+          "contract": "on `SIGINT` exit code 0; with `--json` each line is the event as JSON `{seq, time, type, data}`; no event is printed twice and none is left out across a reconnect; exit code 1 with `cannot reach nightshiftd at <address>` on stderr when a connection attempt fails, and with the error's message when the daemon answers `410 cursor_expired`",
+          "check": {
+            "kind": "integration",
+            "setup": [
+              "the interrupt is a channel the command's run function is given, fed by the signal handler in production"
+            ],
+            "pseudocode": "new file internal/cli/watch_test.go: an API server (internal/api) over a real event log; run cli.Run(['watch', …]) in a goroutine with an interrupt channel in place of the signal; append item.created {item: 1} and decision.opened {decision: 1}: assert stdout lines == ['1 T1 item.created {\"item\":1}', '2 T2 decision.opened {\"decision\":1}']; drop the subscriber on the server side, append a third event: assert line 3 arrives once and the second request carried Last-Event-ID 2; interrupt: assert code == 0. With --json assert each line parses to {seq, time, type, data}. A table over {address of a closed listener -> code 1, 'cannot reach nightshiftd at <addr>'; a server answering 410 cursor_expired -> code 1 and its message}"
+          }
+        },
+        {
+          "id": "REQ-6.8",
+          "pattern": "unwanted",
+          "condition": "one of these commands is given a command line it cannot send: `item list` with a `--state` that is not one of the eleven states or with two slugs; `item show`, `item abandon`, `thread show` or `decision show` without an id, with one that is not a positive integer, or with a further argument; `inbox` with both `--unread` and `--action` or with an argument; `decide` without an id or without `--option`; `watch` with an argument; or `item`, `thread` or `decision` with no subcommand or an unknown one",
+          "action": "print the usage of the command and send no request",
+          "contract": "exit code 2; the usage on stderr; stdout is empty; the daemon received no request",
+          "check": {
+            "same_as": "REQ-1.8"
+          }
+        }
+      ]
+    }
+  ],
+  "execution_paths": [
+    {
+      "id": "PATH-1",
+      "title": "A text becomes an item, and a decision about it is answered across a restart",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift item new demo --text \"Add a greeting endpoint\"`"
+        },
+        {
+          "actor": "nightshift",
+          "action": "sends `POST /api/v1/items` and prints the item's number and its thread's URL path"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "stores the item in `new` with its thread and appends `item.created`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "opens a decision of a declared kind on the item's thread, as a later package does, writes the entry and runs the notification command with `decision_opened`"
+        },
+        {
+          "actor": "person",
+          "action": "stops `nightshiftd` with SIGTERM and starts it again"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift inbox --action`, reads the decision, and runs `nightshift decide <id> --option approve`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "stores the answer and calls the handler registered for the option, which moves the item to `ready`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift thread show <id>` and `nightshift item show <N>` and reads the creation, the decision, its answer and the state `ready`"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with its store on disk, the event log and the HTTP API",
+          "internal/item, internal/inbox and internal/notify as daemon.Run wires them",
+          "the nightshift client's run function",
+          "a real notification command (a shell script)"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) and a workspace `demo` registered through the end-to-end helper of package 02, which gives the fake hub a workspace with a repository",
+          "`[notify].command` set to a script the test writes that appends its standard input to a file",
+          "a decision kind `test` with the options `approve` and `abandon`, and a handler for `approve` that calls the item service's Transition to `ready`, registered through the same RegisterKind and OnAnswer calls a later package uses, by a hook of the end-to-end helper that runs at each start"
+        ],
+        "end_state": [
+          "`nightshift item new` exits 0 and prints `item 1` and `thread /api/v1/threads/<id>`",
+          "the script's file holds one JSON document with `event: decision_opened`, `item: 1` and the option keys",
+          "after the restart `nightshift inbox --action` lists the decision",
+          "within 5 seconds of `nightshift decide` exiting 0, `nightshift item show 1` prints `state: ready` and `waiting on: nothing`",
+          "`nightshift thread show` lists entries of the kinds `created`, `decision_opened`, `decision_answered` and `state`, in that order",
+          "a client of `GET /api/v1/events` that connected before the answer received `decision.answered` and `item.updated`"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go, extending the helper package 01 wrote: d = startDaemon(cfg, register test kind); code, out = cli(['item','new','demo','--text','Add a greeting endpoint']); assert out == 'item 1\\nthread ' + path + '\\n'; dec = d.inbox.Open(kind 'test', thread, 'Approve?', recommended 'approve'); eventually the notify file parses with event 'decision_opened'; d.signal(SIGTERM); d = startDaemon(cfg, register test kind); assert cli(['inbox','--action']) contains '1 test demo item 1 Approve?'; s = stream(d); assert cli(['decide','1','--option','approve']).code == 0; eventually cli(['item','show','1']) contains 'state: ready'; assert the kinds of cli(['thread','show',id]) lines; assert s received decision.answered and item.updated"
+      }
+    },
+    {
+      "id": "PATH-2",
+      "title": "An issue is imported, abandoned, and its workspace removed",
+      "steps": [
+        {
+          "actor": "person",
+          "action": "runs `nightshift item import demo --issue 7`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "requests the issue and the further pages of its comments from the hub with the worker token"
+        },
+        {
+          "actor": "hub",
+          "action": "answers the issue with the label `bug` and its comments"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "stores a `defect` item in `new` with the issue as its source"
+        },
+        {
+          "actor": "person",
+          "action": "runs the import again and `nightshift workspace remove demo`, and is refused both times with the item named"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift item abandon <N>`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "calls the abandon hooks, sets the item `abandoned` and marks its thread unread"
+        },
+        {
+          "actor": "person",
+          "action": "reads the thread in `nightshift inbox --unread` and runs `nightshift workspace remove demo`"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "removes the workspace with its item and its threads"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with internal/item, internal/inbox and package 02's internal/workspace as daemon.Run wires them",
+          "the hub client of internal/hub against the fake hub's issue routes",
+          "the nightshift client's run function, package 02's `workspace remove` and `workspace list` commands among its commands"
+        ],
+        "setup": [
+          "a fake Parley hub (internal/hubtest) holding issue 7 of workspace `demo` with the labels `bug` and `ui` and 150 comments",
+          "the workspace `demo` registered through the end-to-end helper of package 02",
+          "one abandon hook registered by the end-to-end helper that records its call"
+        ],
+        "end_state": [
+          "the import exits 0; `nightshift item show 1` prints `item 1 (defect)` and `source: issue #7`; `GET /api/v1/items/1` holds 150 comments",
+          "`nightshift workspace list` prints `1 open (1 new)` for demo",
+          "the second import exits 1 with `issue #7 is already item 1`",
+          "the first `workspace remove` exits 1 with `workspace demo has open work items: 1 (new)`",
+          "after the abandon the hook was called once and `nightshift inbox --unread` lists the item's thread",
+          "the second `workspace remove` exits 0; `nightshift item show 1` exits 1; `GET /api/v1/threads` lists no thread of demo"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go: d = startDaemon(cfg); assert cli(['item','import','demo','--issue','7']).out starts 'item 1\\n'; assert cli(['item','show','1']) contains 'item 1 (defect)'; assert cli(['workspace','list']) contains '1 open (1 new)'; r = cli(['item','import','demo','--issue','7']); assert r.code == 1 and r.err == 'issue #7 is already item 1\\n'; r = cli(['workspace','remove','demo']); assert r.code == 1 and r.err == 'workspace demo has open work items: 1 (new)\\n'; assert cli(['item','abandon','1']).out == 'item 1 abandoned\\n'; assert the hook ran once; assert cli(['inbox','--unread']) names the thread; assert cli(['workspace','remove','demo']).code == 0; assert cli(['item','show','1']).code == 1"
+      }
+    },
+    {
+      "id": "PATH-3",
+      "title": "The hub is away for 15 minutes, twice",
+      "steps": [
+        {
+          "actor": "hub",
+          "action": "stops answering"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "marks the hub unreachable and, once the outage has lasted the threshold, writes `hub unreachable since <time>` to the thread of workspace `demo` and runs the notification command with `hub_unreachable`"
+        },
+        {
+          "actor": "person",
+          "action": "runs `nightshift inbox --unread` and `nightshift thread show <id>` and reads the entry"
+        },
+        {
+          "actor": "hub",
+          "action": "answers again, and later stops answering again"
+        },
+        {
+          "actor": "nightshiftd",
+          "action": "marks the hub reachable, then unreachable, and after the threshold writes the entry and runs the command a second time"
+        }
+      ],
+      "smoke": {
+        "real_components": [
+          "the nightshiftd run function with the hub client and its monitor, the hub watch, internal/inbox and internal/notify as daemon.Run wires them",
+          "the nightshift client's run function",
+          "a real notification command (a shell script)"
+        ],
+        "setup": [
+          "a fake Parley hub that can be stopped and started on the same address, and the workspace `demo` registered through the end-to-end helper of package 02",
+          "the monitor's probe interval and the hub watch's check interval set to 20 milliseconds and the outage threshold to 200 milliseconds",
+          "`[notify].command` set to a script that appends its standard input to a file"
+        ],
+        "end_state": [
+          "while the fake hub is down, after the threshold, `nightshift inbox --unread` lists the thread `workspace demo` and `nightshift thread show` prints one `hub_outage` entry",
+          "three thresholds later there is still one such entry and one `hub_unreachable` document in the script's file",
+          "after the fake hub was started, reached and stopped again, a second entry and a second document appear",
+          "the daemon process was the same throughout"
+        ],
+        "pseudocode": "in internal/daemon/e2e_test.go, beside the outage flow of package 01: d = startDaemon(cfg, probe 20ms, check 20ms, threshold 200ms); fakeHub.Stop(); d.hub.Do(any request) fails; eventually cli(['inbox','--unread']) contains 'workspace demo'; assert cli(['thread','show',id]) has 1 line with 'hub_outage hub unreachable since '; sleep 3 thresholds; assert still 1 line and 1 document with event 'hub_unreachable'; fakeHub.Start(); eventually cli(['status']) contains 'reachable'; fakeHub.Stop(); d.hub.Do fails; eventually 2 hub_outage lines and 2 documents"
+      }
+    }
+  ],
+  "external_apis": [
+    {
+      "package": "Parley REST API (agent-fox-dev/parley, docs/api.md)",
+      "version": "commit 7eabfb9",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "GET /api/v1/workspaces/{slug}/issues/{number}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/issues/{number}",
+          "signature": "scope forge:read (satisfied by forge:write); 200 {issue: {number, title, body, state, url, author {login}, labels: [string], created_at, updated_at, closed_at, is_pr}, comments: [{id, body, author {login}, created_at, updated_at, url}] (first page, at most 100, oldest first), comments_next_cursor: string|null, comments_error: {error_type, message}|null}; errors as {\"error\": {\"code\", \"message\", \"error_type\"}}: 404 forge_not_found, 422 forge_unknown, 422 forge_rejected, 429 forge_rate_limited, 502 forge_unauthenticated, forge_forbidden, forge_unreachable, forge_error, 504 forge_timeout"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}",
+          "signature": "the workspace object; this package reads its member head_sha, the hub's head of the default branch (null is not excluded by the document)"
+        },
+        {
+          "name": "GET /api/v1/workspaces/{slug}/issues/{number}/comments",
+          "import_path": "<hub.endpoint>/api/v1/workspaces/{slug}/issues/{number}/comments",
+          "signature": "scope forge:read; query cursor (the comments_next_cursor or next_cursor of the page before; no limit beside a cursor); 200 {items: [{id, body, author {login}, created_at, updated_at, url}], next_cursor: string|null}, oldest first; the forge errors of the issue route"
+        }
+      ]
+    },
+    {
+      "package": "github.com/agent-fox-dev/spec/afspec",
+      "version": "commit b456986",
+      "verified": true,
+      "symbols": [
+        {
+          "name": "DiscoverSpecs",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func DiscoverSpecs(root string) ([]SpecMeta, error); SpecMeta{SpecID, SpecName, Status, Dir string}"
+        },
+        {
+          "name": "LoadSpec",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func LoadSpec(dir string) (*Spec, error); Spec has the fields SpecID, SpecName, Title, Status string"
+        },
+        {
+          "name": "ValidateInRoot",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func ValidateInRoot(specsDir string, spec *Spec) (ValidationResult, error); ValidationResult{Valid bool; Errors, Warnings []ValidationEntry}; ValidationEntry has Check and Message string"
+        },
+        {
+          "name": "Spec.OpenTasks",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func (s *Spec) OpenTasks() []PlannedTask (the tasks pending or in progress, the derived integration task included)"
+        },
+        {
+          "name": "Spec.IsFinished",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func (s *Spec) IsFinished() bool"
+        },
+        {
+          "name": "CreateSpec, Spec.Save, Spec.Transition",
+          "import_path": "github.com/agent-fox-dev/spec/afspec",
+          "signature": "func CreateSpec(specID, specName string) *Spec; func (s *Spec) Save(dir string) error; func (s *Spec) Transition(target, dir string) (*Spec, error) (used by the test fixtures only)"
+        }
+      ]
+    }
+  ]
+}

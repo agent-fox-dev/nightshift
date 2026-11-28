@@ -1,0 +1,265 @@
+{
+  "$schema": "https://agent-fox.dev/schemas/tasks.v3.json",
+  "spec_id": "04",
+  "spec_name": "sessions_and_scheduling",
+  "schema_version": 3,
+  "test_commands": {
+    "all_tests": "go test ./... -count=1",
+    "linter": "go vet ./...",
+    "spec_tests": "go test ./internal/session/... ./internal/sched/... ./internal/config/... ./internal/daemon/... ./internal/api/... ./internal/cli/... ./internal/hub/... -count=1"
+  },
+  "dependencies": [
+    {
+      "spec": "01",
+      "reason": "adds configuration keys, the start checks `roles` and `sessions`, routes, commands, the `sessions` status source and the shutdown step `sessions` to the daemon, and uses its store, hub client, event log and fake hub"
+    },
+    {
+      "spec": "02",
+      "reason": "reads each workspace's daily limit, supplies its tokens used today, plugs the session user into `internal/command` and clones forks through `internal/gitclone`"
+    },
+    {
+      "spec": "03",
+      "reason": "drives the work items by their states, registers an abandon hook and the `paused` marker with `internal/item`, and writes thread entries and declares the decision kinds `session_failed` and `session_limit` in `internal/inbox`"
+    }
+  ],
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Check the roles and the session user at start, and run commands as that user",
+      "criteria": [
+        "REQ-1"
+      ],
+      "steps": [
+        "Add the role, range, user-check and run-as behaviours to internal/session/roles_test.go, internal/session/usercheck_test.go, internal/session/runas_test.go, internal/config/config_test.go and internal/daemon/start_test.go and confirm they fail",
+        "Add to the configuration struct of internal/config the tables [roles.planner], [roles.implementer] (each `model`) and [roles.reviewer] (`provider`, `model`), [sessions] (`user`, `unisolated`, `dir`, `stall`, `max_tokens`, `max_parallel`), [items] (`max_sessions`) and [limits] (`daily_tokens`), with the defaults 30m, 10000000, 3, 12 and 50000000 and the two range reasons and the greater-than-zero reason as errors of Load; `sessions.dir` defaults to `nightshift` in the session user's home directory, and to ~/.nightshift/work when no user is set",
+        "Add github.com/agent-fox-dev/agentkit-go v0.11.0 to go.mod and internal/session.CheckRoles: the planner's, implementer's and reviewer's model in that order, then the reviewer's provider, which is trimmed and compared without regard to case with catalog.Providers(); the error's text is the reason alone",
+        "Add the helper mode: daemon.Run, given `session-helper` as its first argument, calls session.HelperMain, which reads one JSON document from standard input (the command's argument list, its directory, its variables), starts the command in a process group of its own with HOME, USER, LOGNAME and PATH from its own environment plus the given variables and nothing else, passes the command's output through and exits with its exit code",
+        "Have the helper end the command when its standard input reaches the end: SIGTERM to the process group, SIGKILL to what remains after a grace that is a parameter with the default 10 seconds, then exit; this is how the daemon ends a process of another user, and how a session ends when the daemon dies",
+        "Add session.UserRunner, built from the session user's name (empty when unisolated), the path of the running executable and the grace: HelperArgv gives `sudo -n -H -u <user> -- <executable> session-helper`, or the executable and `session-helper` alone; Start writes the JSON document to the helper's standard input, keeps that pipe open and returns a process whose output can be read by line and whose Wait gives the exit code or the outcome `ended`; cancelling the context closes the pipe; Run is Start and Wait with the collected output",
+        "Add to UserRunner the three file operations sessions need in directories of the session user, each a command run through the helper: read a file, write a file from bytes sent on the command's standard input, and remove a directory tree",
+        "Add session.CheckUser over an injected user lookup (os/user in production) and an injected run function (UserRunner.Run in production): no user and not unisolated; unknown user; the daemon's own user; a probe command that must exit 0; `test -r` for the configuration file, the token file and the store file in that order, a file that does not exist counting as not readable; `claude --version` within a timeout that is a parameter with the default 30 seconds; with `unisolated` and no user only the `claude` question, asked as the daemon's user; a user wins over `unisolated`",
+        "Append the checks `roles` and then `sessions` to package 01's ordered list of start checks, after `credentials`; print the unisolated warning line to stderr after the checks passed; let tests inject the run function into daemon.Run",
+        "Give package 02's command.Runner an identity with SetIdentity: a function that turns the prepared command into the helper's invocation (the argument list becomes HelperArgv, and the original command, its directory and its variables travel in the JSON document on the helper's standard input), and that closes that pipe when the command is ended, since a signal of the daemon cannot reach a process of another user; from then on the health command, the gate and gitclone.Sync run as the session user. Set workspace.Service.DefaultDailyTokens from `limits.daily_tokens`, and, when a session user is configured and `clones_dir` is not set, put package 02's workspace clones under <sessions.dir>/workspaces, where that user can write",
+        "Add the member `isolation` (`user` or `unisolated`) to the status document in internal/api and the line `sessions: unisolated` to `nightshift status`",
+        "Describe the new keys, the two checks with every reason, the `sudoers` rule the session user needs, the provider variables the reviewer is given, and that the worker token must hold `git:read` for reviews, in docs/configuration.md; add the helper mode and the run-as mechanism to docs/architecture.md"
+      ],
+      "touches": [
+        "go.mod",
+        "go.sum",
+        "internal/config/config.go",
+        "internal/config/config_test.go",
+        "internal/session/roles.go",
+        "internal/session/roles_test.go",
+        "internal/session/usercheck.go",
+        "internal/session/usercheck_test.go",
+        "internal/session/runas.go",
+        "internal/session/helper.go",
+        "internal/session/runas_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/checks.go",
+        "internal/daemon/start_test.go",
+        "internal/api/status.go",
+        "internal/cli/status.go",
+        "internal/cli/cli_test.go",
+        "internal/command",
+        "internal/workspace",
+        "docs/configuration.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Run a planner or implementer session with its token, its hub record and its stream",
+      "criteria": [
+        "REQ-2.1",
+        "REQ-2.2",
+        "REQ-2.4",
+        "REQ-2.5",
+        "REQ-2.6",
+        "REQ-2.7",
+        "REQ-2.8"
+      ],
+      "steps": [
+        "Extend internal/hubtest with POST /api/v1/sessions (an id replayed answers 200), POST …/sessions/{id}/usage (409 session_not_active after the end), POST …/sessions/{id}/complete, POST /api/v1/workspaces/{slug}/tokens (binding to the slug, the subset rule by exact scope name, `expires` in days) and DELETE /api/v1/user/tokens/{token_id}, with accessors for the sessions, usage records and tokens it holds, and with forks that serve git and record each push's bearer and push options",
+        "Add a test helper in internal/session that writes a fake `claude` script into a directory put first on PATH: it records its arguments and working directory and then does what a small script file of the test says (print stream lines, sleep, commit and push, write the result file, exit with a code); add the session behaviours to internal/session/session_test.go and internal/session/stream_test.go and confirm they fail",
+        "Add the session table as a migration of internal/store (id, item, workspace, fork, role, model, step, status `running`, `completed`, `failed` or `interrupted`, reason, the four token counts, the hub token's id, start and end time) and a table of reports the hub has not taken yet; the token's value is never stored",
+        "Add to the hub client of internal/hub, with the worker credential: create a session, report usage, complete a session, mint a workspace-bound token, revoke a token",
+        "Add session.Spec (item number, role, step name, fork, the branch to work on for a planner or implementer, the commit to read for a reviewer, prompt, input files by name, accept function) and session.Result (id, outcome `completed`, `failed` or `interrupted`, reason, tokens, stream path, result file document, verdict), and Service.Run: give the session a UUID from crypto/rand, create it on the hub, mint its token (`git:write`, a reviewer's `git:read`, `expires` 30), write the row, the `session_started` thread entry through the inbox's Append (not marking the thread unread) and the event `session.started`; any of these failing ends the session as failed with the error's first line",
+        "Bring the item's clone at <sessions.dir>/items/<N>/clone to the branch with git run by the UserRunner, so that the clone belongs to the session user: clone the fork when there is no clone and fetch otherwise; check the branch out, creating it at the tip of the fork's default branch when neither side has it; set it to the fork's head when the fork's branch has commits it lacks; leave it otherwise, and never remove untracked files (gitclone.Sync is not used here: it detaches and cleans). Give git the token only through the environment: GIT_CONFIG_COUNT with an http.<hub URL>.extraHeader carrying HTTP Basic and with push.pushOption `parley.session=<id>`, and GIT_TERMINAL_PROMPT=0",
+        "Write the input files to <sessions.dir>/items/<N>/run/<session-id>/, replace `{result}` and `{input:<name>}` in the prompt (an unknown name fails the start), and start `claude -p` with `--model` and the flags of the requirements in the clone, with the git variables and CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS",
+        "Read the process's standard output by line: append each line to <directory of store.path>/streams/<session-id>.jsonl as it arrives, keep standard error as <session-id>.stderr, and from the lines keep the usage of each `assistant` event once per message id and the last `result` event; the session's tokens are the summed input, cache-creation and output tokens, replaced by the `result` event's totals when those are greater, with cache reads kept apart",
+        "Decide the outcome when the process ended: failed with the first line (200 characters at most) of the `result` event's text when it says `is_error`, of standard error or `exit status <N>` for a non-zero exit without a `result` event, `no result` when result.json (read through the UserRunner) is missing or is not one JSON document, the accept function's error; otherwise completed; return the Result with a nil error in every case",
+        "At every end: report one usage record and the complete (`completed`, else `failed` with the reason and the cache-creation tokens), revoke the token, write the `session_ended` entry and the event `session.ended`; a call the hub did not take goes to the reports table, and Service.FlushReports sends what is there once, dropping a report the hub answers `409 session_not_active`",
+        "Serve GET /api/v1/sessions/{id}/log through the API server's Handle (404 not_found for an unknown id, a text that is no UUID, or a removed stream) and register the command `nightshift session log <session-id>`, which prints the body unchanged; add Service.PruneStreams, run at start and once a day with the injected clock, which removes the two files of every session that ended more than 30 days ago",
+        "Describe the route in docs/api.md and the command in docs/cli.md, and name the fake `claude` helper and the new routes of internal/hubtest under Repository Specifics in .specs/steering.md"
+      ],
+      "touches": [
+        "internal/hubtest",
+        "internal/hub/client.go",
+        "internal/hub/client_test.go",
+        "internal/session/session.go",
+        "internal/session/claude.go",
+        "internal/session/stream.go",
+        "internal/session/reports.go",
+        "internal/session/api.go",
+        "internal/session/testing_test.go",
+        "internal/session/session_test.go",
+        "internal/session/stream_test.go",
+        "internal/cli/session.go",
+        "internal/cli/cli_test.go",
+        "docs/api.md",
+        "docs/cli.md",
+        ".specs/steering.md"
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Run a reviewer session in a fresh context, bound every session, and clean up after an item",
+      "criteria": [
+        "REQ-2.3",
+        "REQ-3.1",
+        "REQ-3.2",
+        "REQ-3.8"
+      ],
+      "steps": [
+        "Add the reviewer, bound and clean-up behaviours to internal/session/session_test.go and internal/session/limits_test.go and confirm they fail",
+        "Add a review mode to the helper: when the JSON document on its standard input carries a review (provider, model, prompt, the clone's directory, variables), it opens the directory with agentkit-go's workspace.Open, takes tools.For over it, and builds an agent with agentkit.New from a Config whose Provider and Model are the given ones, whose Toolset holds those tools under a policy naming exactly tools.FileNavigationTools(), and whose Getenv answers from the given variables only",
+        "Have the review mode run Agent.Stream with the prompt and write one JSON line per event to standard output, the usage after each turn among them, and as its last line an event of type `result` with `is_error`, the final text in `result` and the usage, in the shape the reader of task 2 already takes for `claude`; let HelperMain take the provider client as an option, which the test binary's helper sets to a provider/faux client scripted from a file",
+        "In Service.Run, for a reviewer: bring <sessions.dir>/items/<N>/review/<session-id>/ to the commit with gitclone.Sync, given the command.Runner and the session's `git:read` token, start the helper's review mode there through the UserRunner, give it the daemon's environment variables whose names begin with ANTHROPIC_, OPENROUTER_ or OLLAMA_ and no others, and remove the directory when the session ends, whatever its outcome",
+        "Take the verdict from the `result` event's text, from its first `{` to its last `}`: one JSON object with `verdict` `agree` or `object` and `findings`, each with a non-empty `text` and optionally `file`, `line` and `criterion`, at least one for `object`; anything else fails the session with `no verdict`; a reviewer's tokens are InputTokens, CacheWriteTokens and OutputTokens of the usage it reports",
+        "Add the stall bound for every session: a timer of `sessions.stall`, a parameter, that every line of standard output or standard error starts again; when it fires, end the process through the UserRunner and record the session failed with the reason `stalled`",
+        "Add the token bound for every session: after each line that changes the running count, compare it with `sessions.max_tokens`; when it is reached, end the process and record the session failed with the reason `token limit` and the count reached",
+        "Add Service.Interrupt(item): end the item's running sessions, each recorded `interrupted` and reported to the hub as failed with `error_message` `interrupted`, and wait for them; a pause and a shutdown use it later. Add Service.EndItem(item): Interrupt, then remove <sessions.dir>/items/<N> through the UserRunner; register it with the item service's OnAbandon, and with its OnChange for a transition to `done`",
+        "Add to docs/architecture.md how a review session is isolated (its own process, clone, transcript and token) and the verdict object, and run `make doc`"
+      ],
+      "touches": [
+        "internal/session/review.go",
+        "internal/session/helper.go",
+        "internal/session/limits.go",
+        "internal/session/session.go",
+        "internal/session/session_test.go",
+        "internal/session/limits_test.go",
+        "internal/session/testing_test.go",
+        "internal/daemon/run.go",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Schedule the items' steps and their sessions, and ask the person after two failures",
+      "criteria": [
+        "REQ-3.3",
+        "REQ-3.4",
+        "REQ-4.1",
+        "REQ-4.2",
+        "REQ-4.3",
+        "REQ-4.4",
+        "REQ-4.5"
+      ],
+      "steps": [
+        "Add the scheduling and failure behaviours to internal/sched/sched_test.go and internal/sched/failures_test.go, over a fake of the session service's Run that the test scripts and a clock and a pass the test drives, and confirm they fail",
+        "Add internal/sched.Scheduler with RegisterStep(state, StepFunc), where StepFunc is func(ctx, item) error: a pass lists the items whose state has a function, that have no open decision (their `waiting_on` is null) and no step running, read through the item service's List, and calls the function for each in a goroutine of its own, recovering a panic and logging an error with the item's number; run a pass once a second, a parameter, and at once on Wake and on every `item.*`, `decision.*` and `session.*` event of the event log",
+        "Add Scheduler.RunSession(ctx, Request), where Request is a session.Spec and a Class: it queues the request and blocks until the request is started and its session has ended, returning the session's Result, or until the context is cancelled, returning its error and leaving the queue",
+        "Start queued requests at each pass while fewer than `sessions.max_parallel` sessions run, in the order: ClassRepair; items in `implementing` or `reviewing` by the time asked; items in `ready` by the time they became `ready`; every other state by the item's creation time; a request without a Class takes its place from its item's state",
+        "Add RegisterGuard(name, func(ctx, item) (allowed bool, reason string, err error)): before a request starts, every guard is asked in registration order; the first that refuses, or fails, keeps the request waiting without taking a place, and Waiting(item) returns its reason; a request that waits for a place has the reason `a free session`",
+        "Start nothing while the hub client's Available is false for the worker credential, with the reason `the hub`; running sessions are left alone",
+        "Keep, in a migration of internal/store, per item and step the count of failures in a row with each failure's reason and stream path: a `failed` result adds one, a `completed` result of that step sets it to zero, an `interrupted` one changes nothing; add RecordFailure(ctx, item, step, reason, streamPath) for a failure that was not a session's",
+        "Declare the decision kind `session_failed` with the inbox's RegisterKind, with the options `retry` (`start the step again`) and `abandon` (`end the item without landing`), no comment required; at the second failure in a row open one on the item's thread with the inbox's Open, `retry` recommended, with the question naming the item and the step and the evidence holding both reasons and both stream paths; add OpenSessionFailed(ctx, item, step, failures) for a package that opens one itself",
+        "Build the session service and the scheduler in daemon.Run after the store is open, start the scheduler when the API listens, call Service.FlushReports at each pass, and give both to the packages that register with them and to the e2e helper of internal/daemon/e2e_test.go",
+        "Add to docs/architecture.md the scheduler and the extension points later packages use: RegisterStep, RunSession with its classes, RegisterGuard, Waiting, RecordFailure and OpenSessionFailed"
+      ],
+      "touches": [
+        "internal/sched/sched.go",
+        "internal/sched/queue.go",
+        "internal/sched/failures.go",
+        "internal/sched/sched_test.go",
+        "internal/sched/failures_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/e2e_test.go",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Carry out the two decisions' answers and enforce the limit per item and the daily limit",
+      "criteria": [
+        "REQ-3.5",
+        "REQ-3.6",
+        "REQ-3.7",
+        "REQ-4.6",
+        "REQ-4.7",
+        "REQ-4.8"
+      ],
+      "steps": [
+        "Add the answer, limit and daily-limit behaviours to internal/sched/decisions_test.go, internal/sched/limit_test.go and internal/sched/daily_test.go and confirm they fail",
+        "Register with the inbox's OnAnswer the handlers of `session_failed`: `retry` sets the step's failures to zero and wakes the scheduler, `abandon` calls the item service's Abandon; each has the same effect when it is called twice for one answer",
+        "Count, when an implementer or reviewer session is asked for, the implementer and reviewer sessions of the item in the session table that started after the later of the time the item became `ready` and the time of the last answer to a decision of the item, the first from the item's `state_since` kept at its move to `ready` (recorded through the item service's OnChange), the second from the inbox's decisions of the item's thread; planner sessions are not counted",
+        "When that count has reached `items.max_sessions`, return sched.ErrNotStarted from RunSession and open, unless one is open already, a decision of the kind `session_limit`, declared in the registry with the options `continue` (`allow the item as many sessions again`) and `abandon`, `continue` recommended, its evidence listing each counted session with its role, outcome and tokens; `continue` needs no bookkeeping of its own, since the answer's time moves the start of the count, and wakes the scheduler; `abandon` is the handler of step 2",
+        "Have the session service hand every change of a session's running count to an observer the scheduler sets; add the count per workspace and day as a migration of internal/store, the day taken from the injected clock in the daemon's time zone at the moment of the observation",
+        "Register Scheduler.TokensToday with workspace.Service.SetTokensUsed, so that the status, `workspace show` and `workspace list` report it",
+        "Before a request starts, read the workspace's daily limit with workspace.Service.Get and keep the request waiting, with the reason `the daily limit`, while the current day's count is at or above it, unless its class is ClassRepair; nothing else of the workspace is held",
+        "When an observation takes a workspace's count of the day to or past its limit and the day is not marked yet, write the entry `daily limit reached: <count> of <limit> tokens` to the thread the inbox's WorkspaceThread gives, with Append and the unread mark, and mark the day in the store",
+        "Describe both limits and the two decision kinds with their options in docs/configuration.md and docs/architecture.md"
+      ],
+      "touches": [
+        "internal/sched/decisions.go",
+        "internal/sched/limit.go",
+        "internal/sched/daily.go",
+        "internal/sched/decisions_test.go",
+        "internal/sched/limit_test.go",
+        "internal/sched/daily_test.go",
+        "internal/session/session.go",
+        "internal/daemon/run.go",
+        "docs/configuration.md",
+        "docs/architecture.md"
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Pause and resume, stop and recover, and report the running sessions",
+      "criteria": [
+        "REQ-5",
+        "REQ-6"
+      ],
+      "steps": [
+        "Add the pause behaviours to internal/sched/pause_test.go and internal/sched/decisions_test.go, the interruption table to internal/sched/failures_test.go, the recovery case to internal/session/session_test.go, the shutdown case to internal/daemon/lifecycle_test.go and the status and command cases to internal/api/server_test.go and internal/cli/cli_test.go, and confirm they fail",
+        "Keep a pause flag per item and one per workspace in a migration of internal/store; Scheduler.Paused(item) is true while either is set; a pass calls no step function for a paused item, and a request of a paused item, of any class, is not started",
+        "Pause an item: set its flag, cancel the context of its running step, end its running session with the session service's Interrupt, call the functions registered with OnPause, append `item.updated`; resume: clear the flag, call the functions registered with OnResume, append `item.updated`, wake the scheduler",
+        "Pause and resume a workspace the same way for every item of it, with the event `workspace.updated`; a workspace's resume leaves an item whose own flag is set paused",
+        "Register the marker `paused` with the item service's RegisterMarker, add the member `paused` to every workspace object with workspace.Service.Decorate, and add the `paused` column to `nightshift workspace list` with AddWorkspaceListColumn of internal/cli",
+        "Serve the four routes POST /api/v1/items/{number}/pause and /resume and POST /api/v1/workspaces/{slug}/pause and /resume with the refusals of the requirements (409 conflict, 404 not_found), and register the commands `nightshift item pause`, `item resume`, `workspace pause` and `workspace resume` with their one-line outputs",
+        "For a paused item, have the handlers of `session_failed` and `session_limit` store the answered decision's id in the store and return; at the item's resume, and at the workspace's, carry out the stored answers of the item in the order they were given, reading each decision's answer from the inbox",
+        "Register the shutdown step `sessions` with package 01: stop the scheduler's passes and its queue, end every running session with the session service's Interrupt, and return when their processes are gone or the step's context is cancelled",
+        "Add Service.Recover, called at start before the scheduler runs: every session the store holds as `running` becomes `interrupted`, its token is revoked and it is completed on the hub as failed with `error_message` `interrupted`, through the reports table when the hub is not available",
+        "Register the status source `sessions` (each running session with id, item, workspace, role, model, started_at and tokens, oldest first) and print one line per running session in `nightshift status`",
+        "Add the five flows of the execution paths to internal/daemon/e2e_test.go with the fake `claude` helper, a faux provider for the reviewer and step functions the tests register",
+        "Add the routes to docs/api.md, the commands and the signals' effect on sessions to docs/cli.md, pausing and recovery to docs/architecture.md, and run `make doc`"
+      ],
+      "touches": [
+        "internal/sched/pause.go",
+        "internal/sched/api.go",
+        "internal/sched/pause_test.go",
+        "internal/sched/decisions.go",
+        "internal/sched/decisions_test.go",
+        "internal/sched/failures_test.go",
+        "internal/session/recover.go",
+        "internal/session/session_test.go",
+        "internal/daemon/run.go",
+        "internal/daemon/lifecycle_test.go",
+        "internal/daemon/e2e_test.go",
+        "internal/api/server_test.go",
+        "internal/cli/pause.go",
+        "internal/cli/status.go",
+        "internal/cli/cli_test.go",
+        "internal/item",
+        "internal/workspace",
+        "docs/api.md",
+        "docs/cli.md",
+        "docs/architecture.md"
+      ],
+      "done_when": [
+        "`make check` passes on the whole tree"
+      ]
+    }
+  ]
+}
