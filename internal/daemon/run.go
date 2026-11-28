@@ -25,7 +25,8 @@ import (
 )
 
 // pruneInterval is how often the event log drops the events older than
-// its retention, after the prune at start.
+// its retention, after the prune at start, unless Env.PruneInterval says
+// otherwise.
 const pruneInterval = time.Hour
 
 // Env is what Run takes from the process, so that tests run the daemon in
@@ -51,6 +52,9 @@ type Env struct {
 	// ProbeInterval is how often /readyz is asked while the hub is
 	// unreachable; zero means 30 seconds.
 	ProbeInterval time.Duration
+	// PruneInterval is how often the event log is pruned after the prune
+	// at start; zero means an hour.
+	PruneInterval time.Duration
 	// StepDeadline is how long after a stop signal the shutdown steps'
 	// context is cancelled; zero means 25 seconds.
 	StepDeadline time.Duration
@@ -109,7 +113,7 @@ func Run(args []string, env Env) int {
 	d.prune(context.Background())
 	loops, stopLoops := context.WithCancel(context.Background())
 	var background sync.WaitGroup
-	background.Go(func() { d.pruneLoop(loops, pruneInterval) })
+	background.Go(func() { d.pruneLoop(loops, orDefault(env.PruneInterval, pruneInterval)) })
 	background.Go(func() { d.hub.Monitor().Run(loops) })
 
 	streams, stopStreams := context.WithCancel(context.Background())
