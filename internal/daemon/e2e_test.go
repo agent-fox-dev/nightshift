@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -333,6 +334,42 @@ func TestDaemon_StreamResumesAfterARestart(t *testing.T) {
 	if status != http.StatusGone || body.ErrorType != "cursor_expired" || body.OldestSeq != 6 {
 		t.Errorf("a reconnect after the prune answered %d %q oldest_seq %d, want 410 cursor_expired oldest_seq 6",
 			status, body.ErrorType, body.OldestSeq)
+	}
+}
+
+func TestDaemon_PrunesTheEventLogWhileItRuns(t *testing.T) {
+	t.Parallel()
+	h := hubtest.New(t)
+	worker, approver := h.GoodTokens()
+	f := writeConfig(t, hubLines(h.URL(), worker, approver))
+	start := time.Now()
+	var elapsed atomic.Int64
+	clock := func() time.Time { return start.Add(time.Duration(elapsed.Load())) }
+	r := startDaemon(t, f, daemon.Env{Clock: clock, PruneInterval: 20 * time.Millisecond})
+
+	r.appendEvents(t, 2)
+	if status, _ := r.getEvents(t, "1"); status != http.StatusOK {
+		t.Fatalf("before any event expired, a reconnect after id 1 answered %d, want 200", status)
+	}
+
+	// Eight days on, events 1 and 2 are past the retention and event 3,
+	// appended now, is not: the running daemon drops the first two only.
+	elapsed.Store(int64(8 * 24 * time.Hour))
+	r.appendEvents(t, 1)
+	deadline := time.Now().Add(startTimeout)
+	for {
+		status, body := r.getEvents(t, "1")
+		if status == http.StatusGone && body.ErrorType == "cursor_expired" && body.OldestSeq == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%v after the events expired, a reconnect after id 1 answers %d %q oldest_seq %d, want 410 cursor_expired oldest_seq 3",
+				startTimeout, status, body.ErrorType, body.OldestSeq)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.exited() {
+		t.Errorf("the daemon returned %d while it pruned", r.code)
 	}
 }
 
