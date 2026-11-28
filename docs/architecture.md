@@ -98,7 +98,12 @@ twice.
 The runner starts every command with `sh -c` in a process group of its own,
 both output streams through one pipe into a ring of the last lines, each
 cut at 4,096 bytes as it is read. On the timeout or a cancelled context it
-kills the whole group. git runs through the same runner; the token reaches
+kills the whole group, and once the shell has exited it kills the group
+again, so that nothing the command left behind runs on. It waits for the
+shell's exit without reaping it (`waitid` with `WNOWAIT` on Linux, a
+kqueue's `NOTE_EXIT` on macOS and the BSDs) and reaps it only after that
+kill: until then the shell's process id, which is the group's, cannot be
+given to another group. git runs through the same runner; the token reaches
 it only as an `http.extraHeader` in `GIT_CONFIG_*` variables of its
 environment, never on a command line, in the remote's URL or in the clone's
 configuration, and it is stripped from every error text. Every git command

@@ -65,6 +65,9 @@ type Identity func(cmd *exec.Cmd) error
 type Runner struct {
 	mu       sync.Mutex
 	identity Identity
+	// beforeSignal, when set, is called with the group's id each time Run
+	// is about to signal a command's process group; a test watches it.
+	beforeSignal func(pgid int)
 }
 
 // SetIdentity applies id to every process Run starts from now on; nil
@@ -79,8 +82,12 @@ func (r *Runner) SetIdentity(id Identity) {
 // that ran is a Result and a nil error, whatever its exit code. At the
 // timeout the command's process group is killed and the Result says
 // TimedOut; when ctx is cancelled the group is killed too and ctx's error
-// is returned. A spec that cannot run, or a process that cannot start, is
-// an error with the zero Result.
+// is returned. Once the shell has exited, and before it is reaped, the
+// group is killed whatever the way it ended, so that nothing the command
+// left behind runs on. A spec that cannot run, a process that cannot
+// start, or a system where Run cannot wait for the shell without reaping
+// it (other than Linux, macOS and the BSDs) is an error with the zero
+// Result.
 func (r *Runner) Run(ctx context.Context, spec Spec) (Result, error) {
 	if err := validate(spec); err != nil {
 		return Result{}, err
@@ -135,27 +142,30 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Result, error) {
 		defer close(read)
 		readLines(pr, tail)
 	}()
-	waited := make(chan error, 1)
-	go func() { waited <- cmd.Wait() }()
+	// The shell is reaped only once its group has been signalled: until
+	// then its process id, which is the group's, can name no other group.
+	exited := make(chan error, 1)
+	go func() { exited <- awaitExit(cmd.Process.Pid) }()
 
 	timer := time.NewTimer(spec.Timeout)
 	defer timer.Stop()
 	var timedOut bool
-	var waitErr, ctxErr error
+	var awaitErr, ctxErr error
 	select {
-	case waitErr = <-waited:
+	case awaitErr = <-exited:
 	case <-timer.C:
 		timedOut = true
-		killGroup(cmd)
-		waitErr = <-waited
+		r.killGroup(cmd)
+		awaitErr = <-exited
 	case <-ctx.Done():
 		ctxErr = ctx.Err()
-		killGroup(cmd)
-		waitErr = <-waited
+		r.killGroup(cmd)
+		awaitErr = <-exited
 	}
 	// The processes the command left behind end with it, so that none runs
 	// on in the checkout or holds the pipe.
-	killGroup(cmd)
+	r.killGroup(cmd)
+	waitErr := cmd.Wait()
 	select {
 	case <-read:
 	case <-time.After(waitDelay):
@@ -165,6 +175,9 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Result, error) {
 	}
 	pr.Close()
 
+	if awaitErr != nil {
+		return Result{}, fmt.Errorf("command: cannot wait for sh: %w", awaitErr)
+	}
 	res := Result{TimedOut: timedOut, Tail: tail.lines()}
 	if ctxErr != nil {
 		return res, ctxErr
@@ -198,8 +211,12 @@ func validate(spec Spec) error {
 }
 
 // killGroup kills the command's process group. The group's id is the
-// shell's process id, which stays the group's while any member lives.
-func killGroup(cmd *exec.Cmd) {
+// shell's process id, which no other group can take while the shell is
+// not reaped.
+func (r *Runner) killGroup(cmd *exec.Cmd) {
+	if r.beforeSignal != nil {
+		r.beforeSignal(cmd.Process.Pid)
+	}
 	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
 

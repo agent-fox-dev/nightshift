@@ -64,16 +64,18 @@ func TestRun_KeepsTheTailOfStandardOutputAndError(t *testing.T) {
 	}
 }
 
-func TestRun_KillsTheProcessGroupOnTimeoutOrCancellation(t *testing.T) {
+func TestRun_EndsTheProcessesTheCommandStarted(t *testing.T) {
 	t.Parallel()
-	const line = "echo started; sleep 300 & echo $! > pid; wait"
+	const waits = "echo started; sleep 300 & echo $! > pid; wait"
 	tests := []struct {
 		name    string
+		line    string
 		timeout time.Duration
 		cancel  bool
 	}{
-		{name: "timeout", timeout: 100 * time.Millisecond},
-		{name: "cancelled context", timeout: time.Minute, cancel: true},
+		{name: "timeout", line: waits, timeout: 100 * time.Millisecond},
+		{name: "cancelled context", line: waits, timeout: time.Minute, cancel: true},
+		{name: "exit leaving a child", line: "echo started; sleep 300 & echo $! > pid", timeout: time.Minute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -97,21 +99,22 @@ func TestRun_KillsTheProcessGroupOnTimeoutOrCancellation(t *testing.T) {
 			}
 			var runner command.Runner
 			start := time.Now()
-			res, err := runner.Run(ctx, command.Spec{Dir: dir, Line: line, Timeout: tt.timeout, TailLines: 10})
+			res, err := runner.Run(ctx, command.Spec{Dir: dir, Line: tt.line, Timeout: tt.timeout, TailLines: 10})
 			elapsed := time.Since(start)
-			if tt.cancel {
+			switch {
+			case tt.cancel:
 				if !errors.Is(err, context.Canceled) {
 					t.Errorf("Run: %v, want the context's error", err)
 				}
 				if !slices.Equal(res.Tail, []string{"started"}) {
 					t.Errorf("the tail of a cancelled command = %q, want what it wrote, [started]", res.Tail)
 				}
-			} else {
-				if err != nil {
-					t.Fatalf("Run: %v", err)
-				}
-				if !res.TimedOut || !slices.Equal(res.Tail, []string{"started"}) {
-					t.Errorf("result %+v, want timed out with the tail [started]", res)
+			case err != nil:
+				t.Fatalf("Run: %v", err)
+			default:
+				wantTimedOut := tt.timeout < time.Second
+				if res.TimedOut != wantTimedOut || !slices.Equal(res.Tail, []string{"started"}) {
+					t.Errorf("result %+v, want timed out %v with the tail [started]", res, wantTimedOut)
 				}
 			}
 			if elapsed >= 5*time.Second {
@@ -133,6 +136,43 @@ func TestRun_KillsTheProcessGroupOnTimeoutOrCancellation(t *testing.T) {
 					t.Fatalf("the command's child %d is still running", pid)
 				}
 				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	}
+}
+
+// Once the shell is reaped, its process id, which is the group's, is free
+// for another process, and a signal to the group could reach a stranger.
+func TestRun_SignalsTheGroupOnlyBeforeTheShellIsReaped(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		line    string
+		timeout time.Duration
+	}{
+		{name: "exit", line: "true", timeout: time.Minute},
+		{name: "failure", line: "exit 3", timeout: time.Minute},
+		{name: "exit leaving a child", line: "sleep 300 &", timeout: time.Minute},
+		{name: "timeout", line: "sleep 300", timeout: 100 * time.Millisecond},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var runner command.Runner
+			signals := 0
+			command.OnGroupSignal(&runner, func(pgid int) {
+				signals++
+				// A shell that has exited but is not reaped yet still
+				// answers; a reaped one does not.
+				if err := syscall.Kill(pgid, 0); err != nil {
+					t.Errorf("signal %d to group %d after its shell was reaped: %v", signals, pgid, err)
+				}
+			})
+			if _, err := runner.Run(t.Context(), command.Spec{Dir: t.TempDir(), Line: tt.line, Timeout: tt.timeout, TailLines: 1}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if signals == 0 {
+				t.Errorf("Run never signalled the group, want the processes the command left behind ended")
 			}
 		})
 	}
